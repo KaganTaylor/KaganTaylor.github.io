@@ -2711,6 +2711,7 @@ input, select, textarea {
 		}
 
 		.features.stacked article .inner {
+			display: block;
 			text-align: center;
 			width: 100%;
 		}
