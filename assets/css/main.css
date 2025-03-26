@@ -2686,18 +2686,6 @@ input, select, textarea {
 			}
 
 		
-
-		.features.stacked article {
-  			border-top: solid 3px #f4f4f4;
-  			margin-bottom: 2.25em;
-  			padding-top: 2.25em;
-		}
-
-		.features.stacked article:first-child {
-  			border-top: 0;
-  			padding-top: 0;
-		}
-
 		.features.stacked article .image {
   			display: block;
   			width: 100%;
@@ -2714,10 +2702,6 @@ input, select, textarea {
 			display: block;
 			text-align: center;
 			width: 100%;
-		}
-
-		.features.stacked article .inner > :last-child {
-  			margin-bottom: 0;
 		}
 
 
