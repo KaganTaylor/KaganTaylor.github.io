@@ -2685,6 +2685,40 @@ input, select, textarea {
 				margin-bottom: 0;
 			}
 
+		
+
+		.features.stacked article {
+  			border-top: solid 3px #f4f4f4;
+  			margin-bottom: 2.25em;
+  			padding-top: 2.25em;
+		}
+
+		.features.stacked article:first-child {
+  			border-top: 0;
+  			padding-top: 0;
+		}
+
+		.features.stacked article .image {
+  			display: block;
+  			width: 100%;
+  			margin-bottom: 1.5em;
+		}
+
+		.features.stacked article .image img {
+  			width: 100%;
+  			height: auto;
+  			display: block;
+		}
+
+		.features.stacked article .inner {
+			text-align: center;
+		}
+
+		.features.stacked article .inner > :last-child {
+  			margin-bottom: 0;
+		}
+
+
 /* Header */
 
 	#header {
