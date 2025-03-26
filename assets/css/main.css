@@ -2686,22 +2686,10 @@ input, select, textarea {
 			}
 
 		
-
-		.features.stacked article {
-  			border-top: solid 3px #f4f4f4;
-  			margin-bottom: 2.25em;
-  			padding-top: 2.25em;
-		}
-
-		.features.stacked article:first-child {
-  			border-top: 0;
-  			padding-top: 0;
-		}
-
 		.features.stacked article .image {
   			display: block;
   			width: 100%;
-  			margin-bottom: 1.5em;
+  			margin-bottom: 2.5em;
 		}
 
 		.features.stacked article .image img {
@@ -2711,11 +2699,9 @@ input, select, textarea {
 		}
 
 		.features.stacked article .inner {
+			display: block;
 			text-align: center;
-		}
-
-		.features.stacked article .inner > :last-child {
-  			margin-bottom: 0;
+			width: 100%;
 		}
 
 
