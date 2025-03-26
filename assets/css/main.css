@@ -2701,7 +2701,7 @@ input, select, textarea {
 		.features.stacked article .image {
   			display: block;
   			width: 100%;
-  			margin-bottom: 1.5em;
+  			margin-bottom: 2.5em;
 		}
 
 		.features.stacked article .image img {
@@ -2712,6 +2712,7 @@ input, select, textarea {
 
 		.features.stacked article .inner {
 			text-align: center;
+			width: 100%;
 		}
 
 		.features.stacked article .inner > :last-child {
