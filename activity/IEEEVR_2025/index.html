@@ -22,7 +22,11 @@
 				</header>
 				<nav id="nav">
 					<ul>
+<<<<<<< HEAD
 						<li><a href="/">About</a></li>
+=======
+						<li><a href="/">Home</a></li>
+>>>>>>> test
 						<li><a href="/activity/" class = "active">Activity</a></li>
 						<li><a href="/publications/">Publications</a></li>
 						<!-- <li><a href="#four">Contact</a></li> -->
@@ -32,9 +36,15 @@
 					Contact Me
 					<ul class="icons">
 						<li><a href="mailto:k.taylor11@lancaster.ac.uk" class="icon solid fa-envelope"><span class="label">Email</span></a></li>
+<<<<<<< HEAD
 						<li><a href="https://www.linkedin.com/in/kagantaylor/" class="icon brands fa-linkedin"><span class="label">LinkedIn</span></a></li>
 						<li><a href="https://github.com/KaganTaylor/" class="icon brands fa-github"><span class="label">Github</span></a></li>
 						<li><a href="#" class="icon fa-regular fa-file"><span class="label">CV</span></a></li>
+=======
+						<li><a href="https://www.linkedin.com/in/kagantaylor/" target="_blank" rel="noopener noreferrer" class="icon brands fa-linkedin"><span class="label">LinkedIn</span></a></li>
+						<li><a href="https://github.com/KaganTaylor/" target="_blank" rel="noopener noreferrer" class="icon brands fa-github"><span class="label">Github</span></a></li>
+						<li><a href="#" target="_blank" rel="noopener noreferrer" class="icon fa-regular fa-file"><span class="label">CV</span></a></li>
+>>>>>>> test
 					</ul>
 				</footer>
 			</section>
@@ -54,15 +64,133 @@
 								<div class="container">
 									<header class="major">
 										<h2>IEEE VR 2025 Poster Presentation</h2>
+<<<<<<< HEAD
 									</header>
 									<p>...</p>
+=======
+										<p>12th March 2025</p>
+									</header>
+									<p>
+										This March I had the great pleasure of presenting our poster on the fusion of gaze and micro-gestures at IEEE VR in St.Malo.
+										<br>
+										<br>
+										This poster aims to spark discussion on the combination of expressive micro-gestures with gaze-context, while raising the open questions on user acceptance, capability, and tracking limitations.
+										<br>
+										<br>
+										In this post I give a bullet overview of what's possible with gaze and micro-gestures, then cover the main topics and points of discussion from the conference.
+									</p>
+									<p>
+										The Apple Vision Pro has brought the Gaze + Pinch technique to the public space.
+										<br>
+										Here users pinch their thumb to their fingertip to select what is being looked at.
+										<br>
+										To perform other commands, such as copy and paste, a long-press is often required.
+										<br>
+										Building off of a wealth of existing micro-gesture research, we can extend the gaze + pinch technique.
+										<br>
+										By allowing additional pinches to the other segments of the finger we can now support a full 3 button mouse,
+										with a pinch to the index fingertip representing left-click, pinching the middle segment as a middle-click and pinching the right segment as a right-click.
+										<br>
+										A sliding gesture on the middle finger could support the scroll-wheel.
+										<br>
+										<br>
+										Leveraging the wider gaze context can take this concept a step further.
+										<br>
+										We can change the function of each micro-gesture depending on the application at the gaze point to offer application-specific functionality.
+										<br>
+										This supports some interesting interactions.
+										<br>
+										For example, imagine a user in a multi-window scenario.
+										<br>
+										They have a window open that is playing music and partially hidden by a window in front of it.
+										<br>
+										Normally, to pause the music, the user would need to select the player (bringing it to the foreground),
+										select pause, then send the music player to the background to resume their task.
+										<br>
+										By placing application shortcuts on the finger, the user can now simply look at the partially obscured music player and pinch the finger segment that represents pause.
+										<br>
+										This assumes the user has learnt and remembered this shortcut prior to the interaction.
+									</p>
+									<div class="features stacked">
+										<article>
+											<a href="/publications/IEEEVR_2025/" class="image"><img src="/publications/IEEEVR_2025/thumbnail.JPG" alt=""/></a>
+										</article>
+									<p>
+										The most discussed topic at the conference was about feedback and learnability;
+										how do users discover what the different pinches do?
+										<br>
+										<br>
+										We have considered three options.
+										<br>
+										<br>
+										We could place icons on the finger segments, allowing users to glance at their hand to learn/if they forget a mapping.
+										<br>
+										We have tested this and generally this works well for most cases, except when the gaze passes through a different target when the user looks towards their hand.
+										<br>
+										During the saccadde the functions on the hand will switch to the other target and the user will need to perform hand-eye alignment to read the feedback.
+										<br>
+										<br>
+										We therefore could show feedback on the gaze target. This could be highlighted UI icons to show their relationship to the different micro-gestures,
+										or an image of the hand with icons somewhere on the target.
+										<br>
+										This has potential to disrupt the visual design of applications, and we believe the visual clutter may take away from the convenient experience we hope to offer with gaze and micro-gestures.
+										<br>
+										<br>
+										Finally, we could offer no feedback at all; users remember a large number of gestures across a wide number of contexts and may be able to learn micro-gesture mappings without the need for visual guidance.
+										<br>
+										We expect that users will not remember all mappings if given no visual feedback, but that they will remember the most commonly used mappings,
+										and mappings that borrow from layouts used in contexts the user is already familiar with, such as skip backwards, play/pause, skip forwards.
+									</p>
+									<p>
+										The next most commonly discussed topic was of hand tracking quality.
+										<br>
+										<br>
+										Reliable micro-gesture tracking remains difficult, despite a number of academic publications.
+										<br>
+										Optical tracking offers the most convenience, but suffers with occlusion issues that are prevelent in thumb-to-finger micro-gestures.
+										<br>
+										Commodity optical trackers are often trained to detect thumb-to-finger gestures to the index finger only, and in my experience struggle greatly when touching the thumb anywhere else.
+										<br>
+										We use the MANUS Quantum Metaglove to for reliable detection, but the absolute tracking of fingers is shockingly poor;
+										<br>
+										touching the thumb to the tip of the pinky finger leaves a gap of often over three centimetres in our testing.
+										<br>
+										We are considering using a hardware solution, but gloves and conductive strips of metal are not user-friendly solutions.
+										<br>
+										This emphasises the importance of open-source projects, and developing to produce toolkits that support the research community, not only a user study.
+									</p>
+									<p>
+										Currently our next steps in this project are to explore and focus on user experience with gaze and micro-gestures;
+										<br>
+										if we offer shortcuts to users, do they like and use them?
+										<br>
+										This reminds me of Apple's touchbar for Macbooks, which offerred shortcuts for the application in focus.
+										<br>
+										Even when we offer a faster interaction through shortcuts, users may opt to rely on the consistent and reliable Gaze + Pinch method, avoiding the mental overhead involved with learning mappings and shortcuts.
+										<br>
+										<br>
+										Whether users engage and use our interaction technique currently stands as our next focus.
+									</p>
+									<p>
+										If you have any ideas or thoughts about this post, please feel free to reach out by email; I am always more than happy to discuss this further. <a href="mailto:k.taylor11@lancaster.ac.uk" class="icon solid fa-envelope"><span class="label">Email</span></a>
+										<br>
+										Additionally, you can find the full extended abstract here: <a href="/publications/IEEEVR_2025/ExtendedAbstract.pdf" target="_blank" rel="noopener noreferrer" class="icon fa-regular fa-file"><span class="label">Extended Abstract</span></a>
+									</p>
+
+>>>>>>> test
 								</div>
 							</section>
 
 						<!-- Images -->
+<<<<<<< HEAD
 							<!-- <section id="images">
 								<div class="container">
 									<h3>Images</h3>
+=======
+							<!-- <section id="photos">
+								<div class="container">
+									<h3>Photos</h3>
+>>>>>>> test
 
 									<div class="features stacked">
 										<article>
