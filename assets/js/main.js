@@ -4,6 +4,29 @@
 	Free for personal and commercial use under the CCA 3.0 license (html5up.net/license)
 */
 
+// Load header include
+$(function() {
+	var path = window.location.pathname;
+	
+	// Load dynamic header if NOT on home page
+	if (path !== "/" && path !== "/index.html") {
+		$("#header").load("/includes/header.html", function() {
+			// After header loads, set active nav based on current page
+			var path = window.location.pathname;
+			
+			// Remove any existing active class
+			$("#nav a").removeClass("active");
+			
+			// Set active based on path
+			if (path.includes("/activity/")) {
+				$("#nav a[href='/activity/']").addClass("active");
+			} else if (path.includes("/publications/")) {
+				$("#nav a[href='/publications/']").addClass("active");
+			}
+		});
+	}
+});
+
 (function($) {
 
 	var $window = $(window),
