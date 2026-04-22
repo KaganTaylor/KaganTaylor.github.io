@@ -20,8 +20,8 @@ $(function() {
 			// Set active based on path
 			if (path.includes("/activity/")) {
 				$("#nav a[href='/activity/']").addClass("active");
-			} else if (path.includes("/publications/")) {
-				$("#nav a[href='/publications/']").addClass("active");
+			} else if (path.includes("/research/")) {
+				$("#nav a[href='/research/']").addClass("active");
 			}
 		});
 	}
