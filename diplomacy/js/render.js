@@ -11,8 +11,15 @@
 // Dragging from a non-draggable province pans the (zoomed) board; the mouse
 // wheel zooms, double-click resets.
 
-import { PROVINCES } from './map-data.js';
+import { PROVINCES, ALIASES } from './map-data.js';
 import { prov } from './adjudicator.js';
+
+// the jDip SVG uses a few of its own abbreviations (mid, gol, nat, nrg, tyn);
+// normalize everything that leaves the SVG to the engine's canonical ids
+function canonLoc(s) {
+  const k = s.replace('-', '/');
+  return ALIASES[k] || k;
+}
 
 const SVGNS = 'http://www.w3.org/2000/svg';
 const XLINKNS = 'http://www.w3.org/1999/xlink';
@@ -47,7 +54,7 @@ export class Board {
 
     // unit coordinates from jdipNS metadata
     for (const p of svg.getElementsByTagName('jdipNS:PROVINCE')) {
-      const name = p.getAttribute('name').replace('-', '/');
+      const name = canonLoc(p.getAttribute('name'));
       const unit = p.getElementsByTagName('jdipNS:UNIT')[0];
       const disl = p.getElementsByTagName('jdipNS:DISLODGED_UNIT')[0];
       if (unit) {
@@ -99,7 +106,7 @@ export class Board {
     influence.removeAttribute('class');
     influence.setAttribute('pointer-events', 'none');
     for (const el of influence.querySelectorAll('[id]')) {
-      el.setAttribute('data-prov', el.id.replace('-', '/'));
+      el.setAttribute('data-prov', canonLoc(el.id));
       el.removeAttribute('id');
     }
     for (const p of influence.querySelectorAll('path')) {
@@ -109,7 +116,31 @@ export class Board {
     this.layers.map.after(influence);
     this.layers.influence = influence;
 
+    // label the coasts of split-coast provinces (spa/nc etc.) so it's clear
+    // how to write orders to them
+    const coastLabels = document.createElementNS(SVGNS, 'g');
+    coastLabels.setAttribute('id', 'CoastLabelLayer');
+    coastLabels.setAttribute('pointer-events', 'none');
+    for (const [loc, c] of this.coords) {
+      if (!loc.includes('/')) continue;
+      const t = document.createElementNS(SVGNS, 'text');
+      t.setAttribute('x', c.x + UNIT_W / 2);
+      t.setAttribute('y', c.y + UNIT_H + 20);
+      t.setAttribute('text-anchor', 'middle');
+      t.setAttribute('font-size', 24);
+      t.setAttribute('font-style', 'italic');
+      t.setAttribute('font-weight', 'bold');
+      t.setAttribute('fill', '#1a2a52');
+      t.setAttribute('stroke', 'white');
+      t.setAttribute('stroke-width', 1);
+      t.setAttribute('paint-order', 'stroke');
+      t.textContent = `(${loc.split('/')[1]})`;
+      coastLabels.appendChild(t);
+    }
+    this.layers.sc.before(coastLabels);
+
     this._attachPointer();
+    window.__board = this; // debug/testing handle
     return this;
   }
 
@@ -148,7 +179,7 @@ export class Board {
           (el.parentNode === this.layers.mouse || el.parentNode.parentNode === this.layers.mouse)) {
         // <path id="ank"> or <g id="con"><path> children
         const node = el.parentNode === this.layers.mouse ? el : el.parentNode;
-        return node.id.replace('-', '/');
+        return canonLoc(node.id);
       }
       el = el.parentNode;
     }
@@ -167,6 +198,7 @@ export class Board {
 
     svg.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
+      e.preventDefault(); // no text selection while dragging on the board
       const p = this._provinceAtClient(e.clientX, e.clientY);
       const spec = p && this.handlers.canDrag ? this.handlers.canDrag(p) : null;
       drag = {
@@ -176,6 +208,7 @@ export class Board {
         startY: e.clientY,
         panVB: spec ? null : { ...this.vb },
         moved: false,
+        started: false,
       };
       try {
         svg.setPointerCapture(e.pointerId);
@@ -193,6 +226,11 @@ export class Board {
       }
       if (Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) > 5) drag.moved = true;
       if (!drag.moved) return;
+      if (drag.spec && !drag.started) {
+        drag.started = true;
+        // let the app hide this unit's existing order arrow while dragging
+        if (this.handlers.onDragStart) this.handlers.onDragStart(drag.from);
+      }
       if (drag.spec) {
         const a = this.center(drag.from);
         const b = this.clientToBoard(e.clientX, e.clientY);
@@ -213,15 +251,14 @@ export class Board {
       const d = drag;
       drag = null;
       this._removeGhost();
-      if (!d || cancelled) return;
-      if (!d.moved) {
+      if (!d) return;
+      if (!cancelled && !d.moved) {
         if (d.from && this.handlers.onClick) this.handlers.onClick(d.from, e);
-        return;
-      }
-      if (d.spec) {
+      } else if (!cancelled && d.spec) {
         const to = this._provinceAtClient(e.clientX, e.clientY);
         if (to && this.handlers.onDrop) this.handlers.onDrop(d.from, to, e);
       }
+      if (d.started && this.handlers.onDragEnd) this.handlers.onDragEnd();
     };
     svg.addEventListener('pointerup', (e) => finish(e, false));
     svg.addEventListener('pointercancel', (e) => finish(e, true));
@@ -557,9 +594,22 @@ export class Board {
     } else if (kind === 'disband') {
       g.appendChild(this._text(from.x, from.y + 10, '⤫', 40, '#c40000'));
     } else if (kind === 'build') {
-      g.appendChild(this._text(from.x, from.y - 18, `+${order.unitType || ''}`, 34, '#2e8b57'));
+      // pending unit: real symbol, marked with a dashed green ring + plus
+      const c = this.coords.get(order.loc) || this.coords.get(prov(order.loc));
+      if (c) {
+        const ghost = this._unitNode(
+          order.unitType === 'F' ? 'Fleet' : 'Army',
+          c.x, c.y, order.power, prov(order.loc)
+        );
+        ghost.setAttribute('opacity', '0.9');
+        ghost.setAttribute('pointer-events', 'none');
+        g.appendChild(ghost);
+        g.appendChild(this._ring(c.x + UNIT_W / 2, c.y + UNIT_H / 2, 32, '#2ee06b', true));
+        g.appendChild(this._text(c.x + UNIT_W - 2, c.y - 6, '+', 34, '#2ee06b'));
+      }
     } else if (kind === 'remove') {
-      g.appendChild(this._text(from.x, from.y - 18, '−1', 34, '#c40000'));
+      g.appendChild(this._ring(from.x, from.y, 32, '#e04747', true));
+      g.appendChild(this._text(from.x + UNIT_W / 2 + 8, from.y - 18, '✕', 30, '#e04747'));
     } else {
       // hold
       g.appendChild(this._ring(from.x, from.y, 26, color, false));

@@ -81,6 +81,9 @@ a { color: #7fb4ff; }
 #parse-status { font-size: 0.85em; margin: 6px 0; min-height: 1.2em; white-space: pre-wrap; }
 #parse-status .ok { color: #6fce7f; }
 #parse-status .err { color: #ff8484; }
+#parse-status .warn { color: #ffc46b; }
+#board-pane { user-select: none; -webkit-user-select: none; }
+#board svg { touch-action: none; }
 .btnrow { display: flex; gap: 8px; margin: 8px 0; flex-wrap: wrap; }
 
 .sandbox-row { display: flex; gap: 6px; margin: 6px 0; }

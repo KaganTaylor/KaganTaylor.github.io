@@ -1,7 +1,14 @@
 import { Board, POWER_COLORS } from './render.js';
 import * as S from './state.js';
 import { parseOrders, parseOrderLine, normalizePower } from './parser.js';
-import { prov, armyAdjacent, fleetDestLocs } from './adjudicator.js';
+import {
+  prov,
+  armyAdjacent,
+  fleetDestLocs,
+  adjudicateMovement,
+  adjudicateRetreats,
+  adjudicateAdjustments,
+} from './adjudicator.js';
 import { PROVINCES, POWERS } from './map-data.js';
 
 const $ = (id) => document.getElementById(id);
@@ -219,24 +226,70 @@ function prefillOrders() {
 
 function onOrdersChanged() {
   const { orders, errors } = parseOrders($('orders-text').value, phaseKind());
-  lastParsed = { orders, errors, byProv: new Map() };
+  lastParsed = { orders, errors, byProv: new Map(), illegal: new Map() };
   for (const o of orders) if (o.loc) lastParsed.byProv.set(prov(o.loc), o);
+  const warnings = validateOrders(orders);
   const el = $('parse-status');
+  const parts = [];
   if (errors.length) {
-    el.innerHTML = `<span class="err">${errors.length} problem${errors.length > 1 ? 's' : ''}:\n` +
-      errors.map((e) => '· ' + escapeHtml(e)).join('\n') + '</span>';
-  } else {
-    el.innerHTML = `<span class="ok">${orders.length} order${orders.length === 1 ? '' : 's'} ✓ (everyone else holds)</span>`;
+    parts.push(`<span class="err">` +
+      errors.map((e) => '✕ ' + escapeHtml(e)).join('\n') + '</span>');
   }
+  if (warnings.length) {
+    parts.push(`<span class="warn">` +
+      warnings.map((w) => '⚠ ' + escapeHtml(w)).join('\n') + '</span>');
+  }
+  if (!parts.length) {
+    parts.push(`<span class="ok">${orders.length} order${orders.length === 1 ? '' : 's'} ✓ (everyone else holds)</span>`);
+  }
+  el.innerHTML = parts.join('\n');
   drawLive();
   return { orders, errors };
 }
 
-function drawLive() {
+// Dry-run the current orders through the real engine so problems that will
+// never work (wrong terrain, not adjacent, unreachable support, bad builds)
+// show up while typing, with exactly the resolver's judgement.
+function validateOrders(orders) {
+  const warnings = [];
+  const flag = (o, reason, suffix = '') => {
+    warnings.push(`${cap(o.power)}: ${fmtOrder(o)} — ${reason}${suffix}`);
+    if (o.loc) lastParsed.illegal.set(prov(o.loc), reason);
+  };
+  try {
+    if (game.step === 'movement') {
+      const out = adjudicateMovement(game.units, orders);
+      for (const inv of out.invalid) flag(inv.order, inv.reason);
+      for (const r of out.results) {
+        const o = r.order;
+        if (!o.implicit && o.illegal) flag(o, o.illegal, ' (will hold)');
+      }
+    } else if (game.step === 'retreat') {
+      const out = adjudicateRetreats(game.pending.dislodged, game.units, orders);
+      for (const r of out.results) {
+        if (r.verdict === 'invalid') flag(r.order, r.reason);
+        else if (r.reason === 'illegal retreat') flag(r.order, 'not a legal retreat', ' (will disband)');
+        else if (r.reason && r.reason.startsWith('retreat clash')) flag(r.order, 'another unit retreats there too — both disband');
+      }
+    } else {
+      const out = adjudicateAdjustments(game.scOwners, game.units, orders);
+      for (const r of out.results) {
+        if (!r.order.auto && r.verdict === 'fails') flag(r.order, r.reason);
+      }
+    }
+  } catch (e) {
+    warnings.push('could not validate: ' + e.message);
+  }
+  return warnings;
+}
+
+function drawLive(excludeProv = null) {
   if (playback || !game) return;
   board.clearOrders();
   for (const o of lastParsed.orders) {
-    board.drawOrder(o, POWER_COLORS[o.power] || '#888');
+    if (excludeProv && o.loc && prov(o.loc) === excludeProv) continue;
+    const bad = o.loc && lastParsed.illegal.has(prov(o.loc));
+    board.drawOrder(o, bad ? '#e05252' : POWER_COLORS[o.power] || '#888');
   }
 }
 
@@ -363,7 +416,7 @@ function attachBoardHandlers() {
       if (unitAt(base)) selectOrderLine(base);
     },
     onHover(p) {
-      if (!p || !game) {
+      if (!p || !game || !PROVINCES[prov(p)]) {
         $('hover-info').textContent = '';
         return;
       }
@@ -372,8 +425,15 @@ function attachBoardHandlers() {
       const owner = game.scOwners[base];
       $('hover-info').textContent =
         `${provName(p)}${PROVINCES[base].sc ? ' ⭐' : ''}` +
+        (p.includes('/') ? ` — write "${p}"` : '') +
         (owner ? ` (${cap(owner)})` : '') +
         (u ? ` — ${u.type === 'A' ? 'Army' : 'Fleet'} ${cap(u.power)}` : '');
+    },
+    onDragStart(p) {
+      drawLive(prov(p)); // hide this unit's old arrow while dragging
+    },
+    onDragEnd() {
+      drawLive();
     },
   };
 }
