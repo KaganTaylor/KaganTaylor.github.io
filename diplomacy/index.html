@@ -38,6 +38,7 @@
     <span id="phase-label"></span>
     <span id="hover-info"></span>
     <span class="spacer"></span>
+    <button id="btn-edit" title="Freely place, move and remove units and set supply-center owners">✏ Edit board</button>
     <button id="btn-export">Export</button>
   </header>
 
@@ -45,6 +46,28 @@
     <div id="board-pane"><div id="board"></div></div>
 
     <aside id="sidebar">
+      <!-- board editor (toggled with ✏ Edit board) -->
+      <div id="panel-edit" class="panel" hidden>
+        <h2>Edit board</h2>
+        <div class="btnrow" id="edit-tools">
+          <button class="tool active" data-tool="A" title="Click a province to place an army">Army</button>
+          <button class="tool" data-tool="F" title="Click to place a fleet; click again to switch coast">Fleet</button>
+          <button class="tool" data-tool="sc" title="Click a supply center to give it to the selected power; click again for neutral">SC owner</button>
+          <button class="tool" data-tool="erase" title="Click a unit to remove it">Erase</button>
+        </div>
+        <div class="sandbox-row">
+          <select id="edit-power"></select>
+          <select id="edit-season"><option value="spring">Spring</option><option value="fall">Fall</option></select>
+          <input id="edit-year" type="number" min="1901" max="2100" value="1901">
+          <button id="edit-apply" title="Set the phase (movement)">Set</button>
+        </div>
+        <div class="btnrow">
+          <button id="edit-1901">1901 setup</button>
+          <button id="edit-clear">Clear board</button>
+        </div>
+        <p class="hint">Click to place · drag any unit to reposition it freely · drag on empty space to pan, scroll to zoom, double-click to reset.</p>
+      </div>
+
       <!-- orders entry -->
       <div id="panel-orders" class="panel">
         <h2 id="orders-title">Orders</h2>
@@ -53,27 +76,14 @@
         <div id="parse-status"></div>
         <div class="btnrow">
           <button id="btn-resolve" class="primary">Resolve</button>
-          <button id="btn-preview">Show orders on board</button>
         </div>
-        <details id="sandbox-tools">
-          <summary>Sandbox editor</summary>
-          <div class="sandbox-row">
-            <select id="sb-power"></select>
-            <select id="sb-tool">
-              <option value="A">Place army</option>
-              <option value="F">Place fleet</option>
-              <option value="sc">Set SC owner</option>
-              <option value="erase">Remove unit</option>
-              <option value="unsc">Neutral SC</option>
-            </select>
-          </div>
-          <div class="sandbox-row">
-            <select id="sb-season"><option value="spring">Spring</option><option value="fall">Fall</option></select>
-            <input id="sb-year" type="number" min="1901" max="2100" value="1901">
-            <button id="sb-apply">Set phase</button>
-          </div>
-          <p class="hint">Pick a tool, then click provinces on the map. Clicking a split-coast province again cycles the fleet's coast.</p>
-        </details>
+        <p class="hint" id="drag-hint">Drag a unit to its destination to write the order · drop on itself to hold · <b>⇧-drop</b> on a unit to support it · <b>Ctrl-drop</b> (fleet at sea, onto a moving army) to convoy · unordered units hold.</p>
+      </div>
+
+      <!-- standings -->
+      <div id="panel-standings" class="panel">
+        <h2>Standings</h2>
+        <table id="standings"></table>
       </div>
 
       <!-- playback -->
@@ -89,6 +99,7 @@
         <ol id="pb-order-list"></ol>
         <div class="btnrow">
           <button id="pb-continue" class="primary">Continue ➜</button>
+          <button id="pb-copy" title="Copy a text summary of this phase's results for your group chat">📋 Copy results</button>
           <button id="pb-back-current" hidden>Back to current turn</button>
         </div>
       </div>
@@ -98,12 +109,16 @@
         <h2>History</h2>
         <select id="history-select"></select>
         <div class="btnrow">
-          <button id="btn-replay">Replay</button>
-          <button id="btn-branch" title="Copy the position before this phase into a new practice game">Branch</button>
+          <button id="btn-replay" title="Step through this past phase again">Replay</button>
+          <button id="btn-undo" title="Undo the most recent phase — the board goes back and your orders return to the box">⤺ Undo</button>
+          <button id="btn-branch" title="Copy the current position into a new practice game">Branch</button>
         </div>
       </div>
     </aside>
   </div>
+
+  <div id="coast-picker" hidden></div>
+  <div id="toast" hidden></div>
 </section>
 
 <script type="module" src="js/app.js"></script>

@@ -159,6 +159,20 @@ function stripResult(r) {
   };
 }
 
+// Undo the most recent resolved phase, restoring the position before it.
+// Returns the undone history entry (with .ordersText) or null.
+export function undoLastPhase(g) {
+  const entry = g.history.pop();
+  if (!entry) return null;
+  g.units = structuredClone(entry.unitsBefore);
+  g.scOwners = structuredClone(entry.scOwnersBefore);
+  g.pending = structuredClone(entry.pendingBefore) || null;
+  g.season = entry.season;
+  g.year = entry.year;
+  g.step = entry.step;
+  return entry;
+}
+
 // ---------------------------------------------------------------------------
 // Persistence
 // ---------------------------------------------------------------------------

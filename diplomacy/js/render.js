@@ -2,6 +2,14 @@
 // Layers (from the SVG): MapLayer (terrain), our InfluenceLayer (ownership
 // tint, cloned from MouseLayer shapes), SupplyCenterLayer, OrderLayer
 // (Layer2 under Layer1), UnitLayer, DislodgedUnitLayer, MouseLayer (hit test).
+//
+// Interaction: the host app supplies handlers via board.handlers —
+//   canDrag(prov) -> {color} | null   (may the user start a drag here?)
+//   onDrop(fromProv, toProv, event)
+//   onClick(prov, event)
+//   onHover(prov | null)
+// Dragging from a non-draggable province pans the (zoomed) board; the mouse
+// wheel zooms, double-click resets.
 
 import { PROVINCES } from './map-data.js';
 import { prov } from './adjudicator.js';
@@ -21,14 +29,15 @@ export const POWER_COLORS = {
 
 const UNIT_W = 40;
 const UNIT_H = 26; // symbol viewBox 23x15 scaled to width 40
+const ANIM_MS = 950;
 
 export class Board {
   constructor() {
     this.svg = null;
     this.coords = new Map(); // 'par' / 'stp/sc' -> {x, y, dx, dy}
     this.layers = {};
-    this.onProvinceClick = null;
-    this.onProvinceHover = null;
+    this.handlers = {};
+    this._hovered = null;
   }
 
   async load(container) {
@@ -61,6 +70,12 @@ export class Board {
     container.appendChild(adopted);
     this.svg = adopted;
 
+    const m = /([\d.-]+)[ ,]+([\d.-]+)[ ,]+([\d.-]+)[ ,]+([\d.-]+)/.exec(
+      adopted.getAttribute('viewBox')
+    );
+    this.vb0 = { x: +m[1], y: +m[2], w: +m[3], h: +m[4] };
+    this.vb = { ...this.vb0 };
+
     const byId = (id) => adopted.querySelector(`#${CSS.escape(id)}`);
     this.layers = {
       map: byId('MapLayer'),
@@ -72,6 +87,11 @@ export class Board {
       mouse: byId('MouseLayer'),
       highest: byId('HighestOrderLayer'),
     };
+
+    // thicker unit outlines so armies/fleets stand out
+    for (const r of adopted.querySelectorAll('symbol rect[stroke-width="3%"]')) {
+      r.setAttribute('stroke-width', '1.4');
+    }
 
     // ownership tint layer: clone of the id'd MouseLayer shapes
     const influence = this.layers.mouse.cloneNode(true);
@@ -89,16 +109,179 @@ export class Board {
     this.layers.map.after(influence);
     this.layers.influence = influence;
 
-    // hit-testing + hover
-    this.layers.mouse.addEventListener('click', (e) => {
-      const p = this._provinceOf(e.target);
-      if (p && this.onProvinceClick) this.onProvinceClick(p, e);
-    });
-    this.layers.mouse.addEventListener('mousemove', (e) => {
-      const p = this._provinceOf(e.target);
-      if (this.onProvinceHover) this.onProvinceHover(p, e);
-    });
+    this._attachPointer();
     return this;
+  }
+
+  // ---- geometry -------------------------------------------------------------
+
+  clientToBoard(x, y) {
+    const pt = new DOMPoint(x, y).matrixTransform(this.svg.getScreenCTM().inverse());
+    return { x: pt.x, y: pt.y };
+  }
+
+  center(loc) {
+    const c = this.coords.get(loc) || this.coords.get(prov(loc));
+    if (!c) return { x: 0, y: 0 };
+    return { x: c.x + UNIT_W / 2, y: c.y + UNIT_H / 2 };
+  }
+
+  setViewBox(x, y, w, h) {
+    const { vb0 } = this;
+    w = Math.min(vb0.w, Math.max(vb0.w / 8, w));
+    h = w * (vb0.h / vb0.w);
+    x = Math.min(vb0.x + vb0.w - w, Math.max(vb0.x, x));
+    y = Math.min(vb0.y + vb0.h - h, Math.max(vb0.y, y));
+    this.vb = { x, y, w, h };
+    this.svg.setAttribute('viewBox', `${x} ${y} ${w} ${h}`);
+  }
+
+  resetZoom() {
+    this.setViewBox(this.vb0.x, this.vb0.y, this.vb0.w, this.vb0.h);
+  }
+
+  // ---- pointer interaction ----------------------------------------------------
+
+  _provinceOf(el) {
+    while (el && el !== this.svg) {
+      if (el.id && el.parentNode &&
+          (el.parentNode === this.layers.mouse || el.parentNode.parentNode === this.layers.mouse)) {
+        // <path id="ank"> or <g id="con"><path> children
+        const node = el.parentNode === this.layers.mouse ? el : el.parentNode;
+        return node.id.replace('-', '/');
+      }
+      el = el.parentNode;
+    }
+    return null;
+  }
+
+  _provinceAtClient(x, y) {
+    const el = document.elementFromPoint(x, y);
+    if (!el || !this.layers.mouse.contains(el)) return null;
+    return this._provinceOf(el);
+  }
+
+  _attachPointer() {
+    const svg = this.svg;
+    let drag = null;
+
+    svg.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      const p = this._provinceAtClient(e.clientX, e.clientY);
+      const spec = p && this.handlers.canDrag ? this.handlers.canDrag(p) : null;
+      drag = {
+        from: p,
+        spec,
+        startX: e.clientX,
+        startY: e.clientY,
+        panVB: spec ? null : { ...this.vb },
+        moved: false,
+      };
+      try {
+        svg.setPointerCapture(e.pointerId);
+      } catch {
+        // synthetic events (tests) have no active pointer to capture
+      }
+    });
+
+    svg.addEventListener('pointermove', (e) => {
+      const p = this._provinceAtClient(e.clientX, e.clientY);
+      if (!drag) {
+        this._setHover(p);
+        if (this.handlers.onHover) this.handlers.onHover(p);
+        return;
+      }
+      if (Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) > 5) drag.moved = true;
+      if (!drag.moved) return;
+      if (drag.spec) {
+        const a = this.center(drag.from);
+        const b = this.clientToBoard(e.clientX, e.clientY);
+        this._updateGhost(a, b, drag.spec.color);
+        this._setHover(p);
+      } else if (drag.panVB) {
+        const scale = this.svg.getScreenCTM().a;
+        this.setViewBox(
+          drag.panVB.x - (e.clientX - drag.startX) / scale,
+          drag.panVB.y - (e.clientY - drag.startY) / scale,
+          drag.panVB.w,
+          drag.panVB.h
+        );
+      }
+    });
+
+    const finish = (e, cancelled) => {
+      const d = drag;
+      drag = null;
+      this._removeGhost();
+      if (!d || cancelled) return;
+      if (!d.moved) {
+        if (d.from && this.handlers.onClick) this.handlers.onClick(d.from, e);
+        return;
+      }
+      if (d.spec) {
+        const to = this._provinceAtClient(e.clientX, e.clientY);
+        if (to && this.handlers.onDrop) this.handlers.onDrop(d.from, to, e);
+      }
+    };
+    svg.addEventListener('pointerup', (e) => finish(e, false));
+    svg.addEventListener('pointercancel', (e) => finish(e, true));
+
+    svg.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1 / 1.25 : 1.25;
+      const pt = this.clientToBoard(e.clientX, e.clientY);
+      const w = this.vb.w * factor;
+      const h = this.vb.h * factor;
+      this.setViewBox(
+        pt.x - (pt.x - this.vb.x) * factor,
+        pt.y - (pt.y - this.vb.y) * factor,
+        w,
+        h
+      );
+    }, { passive: false });
+
+    svg.addEventListener('dblclick', () => this.resetZoom());
+  }
+
+  _setHover(p) {
+    if (p === this._hovered) return;
+    const paint = (pv, on) => {
+      for (const el of this.layers.influence.querySelectorAll(`[data-prov]`)) {
+        if (prov(el.getAttribute('data-prov')) !== pv) continue;
+        const paths = el.tagName === 'path' ? [el] : [...el.querySelectorAll('path')];
+        for (const path of paths) {
+          path.setAttribute('stroke', on ? '#ffd479' : 'none');
+          path.setAttribute('stroke-width', on ? 4 : 0);
+        }
+      }
+    };
+    if (this._hovered) paint(prov(this._hovered), false);
+    this._hovered = p;
+    if (p) paint(prov(p), true);
+  }
+
+  _updateGhost(a, b, color) {
+    if (!this._ghost) {
+      const g = document.createElementNS(SVGNS, 'line');
+      g.setAttribute('stroke-width', 7);
+      g.setAttribute('stroke-linecap', 'round');
+      g.setAttribute('pointer-events', 'none');
+      g.setAttribute('opacity', '0.8');
+      this.layers.highest.appendChild(g);
+      this._ghost = g;
+    }
+    const g = this._ghost;
+    g.setAttribute('x1', a.x);
+    g.setAttribute('y1', a.y);
+    g.setAttribute('x2', b.x);
+    g.setAttribute('y2', b.y);
+    g.setAttribute('stroke', color || '#ffd479');
+    g.setAttribute('marker-end', this._marker(color || '#ffd479'));
+  }
+
+  _removeGhost() {
+    if (this._ghost) this._ghost.remove();
+    this._ghost = null;
   }
 
   setPhaseText(s) {
@@ -108,20 +291,6 @@ export class Board {
       t.setAttribute('x', '1810');
       t.setAttribute('text-anchor', 'end');
     }
-  }
-
-  _provinceOf(el) {
-    while (el && el !== this.layers.mouse) {
-      if (el.id) return el.id.replace('-', '/');
-      el = el.parentNode;
-    }
-    return null;
-  }
-
-  center(loc) {
-    const c = this.coords.get(loc) || this.coords.get(prov(loc));
-    if (!c) return { x: 0, y: 0 };
-    return { x: c.x + UNIT_W / 2, y: c.y + UNIT_H / 2 };
   }
 
   // ---- state rendering ----------------------------------------------------
@@ -180,12 +349,138 @@ export class Board {
     return use;
   }
 
+  // ---- resolution animation --------------------------------------------------
+  //
+  // Called with the board showing the pre-movement units (and dislodged
+  // markers). Successful moves slide to their destination, bounced moves
+  // lunge toward it and fall back, failed retreats and removals fade out.
+  // Resolves when all animations finish.
+  animateFinal(entry) {
+    const anims = [];
+    const findUnit = (layer, p) =>
+      layer.querySelector(`use[data-prov="${prov(p)}"]`);
+    const delta = (fromLoc, toLoc) => {
+      const a = this.coords.get(fromLoc) || this.coords.get(prov(fromLoc));
+      const b = this.coords.get(toLoc) || this.coords.get(prov(toLoc));
+      if (!a || !b) return null;
+      return { x: b.x - a.x, y: b.y - a.y };
+    };
+    const ease = 'cubic-bezier(0.45, 0.05, 0.35, 1)';
+
+    for (const r of entry.results || []) {
+      const o = r.order;
+      if (o.kind === 'move' && entry.step === 'movement') {
+        const node = findUnit(this.layers.units, o.loc);
+        if (!node) continue;
+        const d = delta(o.loc, o.destLoc || o.dest);
+        if (!d) continue;
+        if (r.verdict === 'succeeds') {
+          anims.push(
+            node.animate(
+              [
+                { transform: 'translate(0px, 0px)' },
+                { transform: `translate(${d.x}px, ${d.y}px)` },
+              ],
+              { duration: ANIM_MS, easing: ease, fill: 'forwards' }
+            )
+          );
+        } else if (r.verdict === 'fails' && !o.illegal) {
+          // bounce: advance a third of the way, then fall back
+          anims.push(
+            node.animate(
+              [
+                { transform: 'translate(0px, 0px)', easing: 'ease-out' },
+                {
+                  transform: `translate(${d.x * 0.33}px, ${d.y * 0.33}px)`,
+                  offset: 0.5,
+                  easing: 'ease-in-out',
+                },
+                { transform: 'translate(0px, 0px)' },
+              ],
+              { duration: ANIM_MS, easing: 'linear' }
+            )
+          );
+        }
+      } else if ((o.kind === 'retreat' || o.kind === 'disband') && entry.step === 'retreat') {
+        const node = findUnit(this.layers.dislodged, o.loc);
+        if (!node) continue;
+        if (o.kind === 'retreat' && r.verdict === 'succeeds') {
+          const d = delta(prov(o.loc), o.destLoc || o.dest);
+          if (!d) continue;
+          anims.push(
+            node.animate(
+              [
+                { transform: 'translate(0px, 0px)' },
+                { transform: `translate(${d.x}px, ${d.y}px)` },
+              ],
+              { duration: ANIM_MS, easing: ease, fill: 'forwards' }
+            )
+          );
+        } else {
+          anims.push(
+            node.animate([{ opacity: 1 }, { opacity: 0 }], {
+              duration: ANIM_MS * 0.7,
+              easing: 'ease-in',
+              fill: 'forwards',
+            })
+          );
+        }
+      } else if (o.kind === 'remove' && r.verdict === 'succeeds') {
+        const node = findUnit(this.layers.units, o.loc);
+        if (node)
+          anims.push(
+            node.animate([{ opacity: 1 }, { opacity: 0 }], {
+              duration: ANIM_MS * 0.7,
+              easing: 'ease-in',
+              fill: 'forwards',
+            })
+          );
+      }
+    }
+    // dislodged units with no legal retreat are destroyed outright (fade)
+    if (entry.step === 'movement') {
+      for (const d of entry.dislodged || []) {
+        if (d.retreatOptions && d.retreatOptions.length) continue;
+        const node = findUnit(this.layers.dislodged, d.from);
+        if (node)
+          anims.push(
+            node.animate([{ opacity: 1 }, { opacity: 0 }], {
+              duration: ANIM_MS * 0.7,
+              easing: 'ease-in',
+              fill: 'forwards',
+            })
+          );
+      }
+    }
+    // unordered dislodged units in a retreat phase also disband (fade)
+    if (entry.step === 'retreat') {
+      const ordered = new Set(
+        (entry.results || []).map((r) => prov(r.order.loc))
+      );
+      for (const d of entry.dislodged || []) {
+        if (ordered.has(prov(d.from))) continue;
+        const node = findUnit(this.layers.dislodged, d.from);
+        if (node)
+          anims.push(
+            node.animate([{ opacity: 1 }, { opacity: 0 }], {
+              duration: ANIM_MS * 0.7,
+              easing: 'ease-in',
+              fill: 'forwards',
+            })
+          );
+      }
+    }
+    if (!anims.length) return Promise.resolve();
+    return Promise.allSettled(anims.map((a) => a.finished));
+  }
+
   // ---- order overlays -------------------------------------------------------
 
   clearOrders() {
     this.layers.orders1.replaceChildren();
     this.layers.orders2.replaceChildren();
     this.layers.highest.replaceChildren();
+    this._ghost = null;
   }
 
   // colored arrowhead markers, created on demand per color
@@ -239,7 +534,7 @@ export class Board {
       const el = this._line(this.layers.orders1, from.x, from.y, to.x, to.y, 'varwidthorder', color, { arrow: true, width: 6 });
       el.querySelector('line:last-child').setAttribute('fill', color);
       g.appendChild(el);
-      if (order.isConvoyMove) {
+      if (order.isConvoyMove || order.viaConvoy) {
         const badge = this._text(from.x + 14, from.y - 14, '⚓', 20);
         g.appendChild(badge);
       }
@@ -259,6 +554,12 @@ export class Board {
       const destC = this.center(order.dest);
       const mid = { x: (target.x + destC.x) / 2, y: (target.y + destC.y) / 2 };
       g.appendChild(this._line(this.layers.orders2, from.x, from.y, mid.x, mid.y, 'convoyorder', color));
+    } else if (kind === 'disband') {
+      g.appendChild(this._text(from.x, from.y + 10, '⤫', 40, '#c40000'));
+    } else if (kind === 'build') {
+      g.appendChild(this._text(from.x, from.y - 18, `+${order.unitType || ''}`, 34, '#2e8b57'));
+    } else if (kind === 'remove') {
+      g.appendChild(this._text(from.x, from.y - 18, '−1', 34, '#c40000'));
     } else {
       // hold
       g.appendChild(this._ring(from.x, from.y, 26, color, false));
@@ -289,6 +590,7 @@ export class Board {
     t.setAttribute('stroke', 'white');
     t.setAttribute('stroke-width', 0.8);
     t.setAttribute('text-anchor', 'middle');
+    t.setAttribute('pointer-events', 'none');
     t.textContent = s;
     return t;
   }
@@ -306,8 +608,6 @@ export class Board {
       const mid = { x: (from.x + target.x) / 2, y: (from.y + target.y) / 2 };
       g.appendChild(this._text(mid.x, mid.y + 8, '∕', 46));
       g.appendChild(this._text(mid.x, mid.y - 18, 'cut', 20));
-    } else if (order.kind === 'convoy' || order.kind === 'hold') {
-      g.appendChild(this._text(from.x + 18, from.y - 12, '✕', 36));
     } else {
       g.appendChild(this._text(from.x + 18, from.y - 12, '✕', 36));
     }

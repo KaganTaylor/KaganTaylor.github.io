@@ -5,7 +5,10 @@ A dependency-free web app for playing and practicing [Diplomacy](https://en.wiki
 ## Features
 
 - **DATC-validated rules engine** — all 167 [Diplomacy Adjudicator Test Cases](https://webdiplomacy.net/doc/DATC_v3_0.html) pass, including convoy paradoxes (Szykman rule), circular movement, coast edge cases, retreat and build rules. Open `test/datc.html` to run the suite in your browser.
-- **Step-through visualization** — click forward/back through each order (or skip to the end), exactly like resolving on a physical board.
+- **Step-through visualization** — click forward/back through each order (or skip to the end), exactly like resolving on a physical board, then watch every unit glide simultaneously to its final position (bounced units lunge and fall back).
+- **Drag to order** — drag a unit to its destination, drop it on itself to hold, ⇧-drop on a unit to support it, Ctrl-drop (a fleet at sea, onto a moving army) to convoy. A coast picker pops up when a fleet move is ambiguous. Everything is written into the plain-text order box, which stays the source of truth.
+- **Board editor** — toggle ✏ Edit board to place/remove armies and fleets, drag units anywhere, and set supply-center owners; scroll to zoom, drag empty space to pan.
+- **Undo** — step back through resolved phases; your order text comes back with each undo.
 - **Tolerant order parsing** — `A Par - Bur`, `F ENG S A Bre - Pic`, `via convoy`, full names or abbreviations, all coast notations (`spa/sc`, `Spa(sc)`).
 - **Full game loop** — spring/fall movement, retreats, supply-center capture, winter builds & civil-disorder disbands.
 - **History & branching** — replay any past turn's step-through; branch a practice copy from any point to test future moves.
