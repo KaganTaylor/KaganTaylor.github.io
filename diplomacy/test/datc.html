@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>DATC — running…</title>
+<style>
+  body { font-family: ui-monospace, Consolas, monospace; margin: 2rem; background: #14171c; color: #d8dee6; }
+  .pass { color: #6fce7f; }
+  .fail { color: #ff7676; }
+  h1 { font-size: 1.2rem; }
+  pre { white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1 id="headline">Running DATC…</h1>
+<pre id="out"></pre>
+<script type="module">
+import { runAll } from './datc-runner.js';
+
+const out = document.getElementById('out');
+const headline = document.getElementById('headline');
+try {
+  const { bySection, failures, totalPass, total } = await runAll();
+  const lines = [];
+  for (const [sec, s] of Object.entries(bySection)) {
+    lines.push(`${sec}: ${s.pass}/${s.total}${s.pass === s.total ? '' : '  ◄ failures'}`);
+  }
+  lines.push('');
+  for (const f of failures) {
+    lines.push(`FAIL ${f.id} [${f.phase}]`);
+    for (const n of f.notes) lines.push(`   ${n}`);
+  }
+  headline.textContent = `DATC: ${totalPass}/${total} passed`;
+  headline.className = totalPass === total ? 'pass' : 'fail';
+  out.textContent = lines.join('\n');
+  document.title = `DATC ${totalPass}/${total}`;
+} catch (e) {
+  headline.textContent = 'RUNNER ERROR';
+  headline.className = 'fail';
+  out.textContent = e.stack || String(e);
+  document.title = 'DATC ERROR';
+}
+document.body.dataset.done = '1';
+</script>
+</body>
+</html>

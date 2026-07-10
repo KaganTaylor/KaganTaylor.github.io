@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diplomacy Simulator</title>
+<link rel="stylesheet" href="css/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚓</text></svg>">
+</head>
+<body>
+
+<section id="home-screen" class="screen">
+  <div class="home-card">
+    <h1>Diplomacy Simulator</h1>
+    <p class="subtitle">Load a turn's orders, step through them one by one, and see the board resolve — movement, retreats and builds, exactly by the rulebook (DATC-validated).</p>
+
+    <div class="home-actions">
+      <div class="home-group">
+        <h2>New</h2>
+        <input id="new-name" type="text" placeholder="Game name" value="Our game">
+        <button id="btn-new" class="primary">New game (1901)</button>
+        <button id="btn-sandbox">Sandbox (empty board)</button>
+      </div>
+      <div class="home-group">
+        <h2>Continue</h2>
+        <ul id="game-list"></ul>
+        <label class="filebtn">Import game JSON<input id="import-file" type="file" accept=".json,application/json"></label>
+      </div>
+    </div>
+    <p class="credits">Map: jDip (GPL) · Rules engine validated against the 167 Diplomacy Adjudicator Test Cases · <a href="test/datc.html">run the tests</a></p>
+  </div>
+</section>
+
+<section id="game-screen" class="screen" hidden>
+  <header id="topbar">
+    <button id="btn-home" title="Back to menu">☰</button>
+    <span id="game-name"></span>
+    <span id="phase-label"></span>
+    <span id="hover-info"></span>
+    <span class="spacer"></span>
+    <button id="btn-export">Export</button>
+  </header>
+
+  <div id="main">
+    <div id="board-pane"><div id="board"></div></div>
+
+    <aside id="sidebar">
+      <!-- orders entry -->
+      <div id="panel-orders" class="panel">
+        <h2 id="orders-title">Orders</h2>
+        <div id="phase-info"></div>
+        <textarea id="orders-text" spellcheck="false" placeholder="FRANCE&#10;A Par - Bur&#10;F Bre - MAO&#10;A Mar S A Par - Bur"></textarea>
+        <div id="parse-status"></div>
+        <div class="btnrow">
+          <button id="btn-resolve" class="primary">Resolve</button>
+          <button id="btn-preview">Show orders on board</button>
+        </div>
+        <details id="sandbox-tools">
+          <summary>Sandbox editor</summary>
+          <div class="sandbox-row">
+            <select id="sb-power"></select>
+            <select id="sb-tool">
+              <option value="A">Place army</option>
+              <option value="F">Place fleet</option>
+              <option value="sc">Set SC owner</option>
+              <option value="erase">Remove unit</option>
+              <option value="unsc">Neutral SC</option>
+            </select>
+          </div>
+          <div class="sandbox-row">
+            <select id="sb-season"><option value="spring">Spring</option><option value="fall">Fall</option></select>
+            <input id="sb-year" type="number" min="1901" max="2100" value="1901">
+            <button id="sb-apply">Set phase</button>
+          </div>
+          <p class="hint">Pick a tool, then click provinces on the map. Clicking a split-coast province again cycles the fleet's coast.</p>
+        </details>
+      </div>
+
+      <!-- playback -->
+      <div id="panel-playback" class="panel" hidden>
+        <h2 id="playback-title"></h2>
+        <div id="playback-controls" class="btnrow">
+          <button id="pb-start" title="To start">⏮</button>
+          <button id="pb-prev" title="Previous order (←)">◀</button>
+          <button id="pb-next" class="primary" title="Next order (→)">▶</button>
+          <button id="pb-end" title="Skip to final state">⏭</button>
+        </div>
+        <div id="pb-step-label"></div>
+        <ol id="pb-order-list"></ol>
+        <div class="btnrow">
+          <button id="pb-continue" class="primary">Continue ➜</button>
+          <button id="pb-back-current" hidden>Back to current turn</button>
+        </div>
+      </div>
+
+      <!-- history -->
+      <div id="panel-history" class="panel">
+        <h2>History</h2>
+        <select id="history-select"></select>
+        <div class="btnrow">
+          <button id="btn-replay">Replay</button>
+          <button id="btn-branch" title="Copy the position before this phase into a new practice game">Branch</button>
+        </div>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
