@@ -34,6 +34,14 @@ export const POWER_COLORS = {
   turkey: '#957e00',
 };
 
+// distinguishes the two halves of a split-coast province (spa, stp, bul);
+// keyed by the coast suffix used in canonical location ids
+const COAST_COLORS = {
+  nc: '#3b6ea5',
+  ec: '#3b6ea5',
+  sc: '#a5673b',
+};
+
 const UNIT_W = 40;
 const UNIT_H = 26; // symbol viewBox 23x15 scaled to width 40
 const ANIM_MS = 950;
@@ -116,28 +124,48 @@ export class Board {
     this.layers.map.after(influence);
     this.layers.influence = influence;
 
-    // label the coasts of split-coast provinces (spa/nc etc.) so it's clear
-    // how to write orders to them
-    const coastLabels = document.createElementNS(SVGNS, 'g');
-    coastLabels.setAttribute('id', 'CoastLabelLayer');
-    coastLabels.setAttribute('pointer-events', 'none');
-    for (const [loc, c] of this.coords) {
-      if (!loc.includes('/')) continue;
-      const t = document.createElementNS(SVGNS, 'text');
-      t.setAttribute('x', c.x + UNIT_W / 2);
-      t.setAttribute('y', c.y + UNIT_H + 20);
-      t.setAttribute('text-anchor', 'middle');
-      t.setAttribute('font-size', 24);
-      t.setAttribute('font-style', 'italic');
-      t.setAttribute('font-weight', 'bold');
-      t.setAttribute('fill', '#1a2a52');
-      t.setAttribute('stroke', 'white');
-      t.setAttribute('stroke-width', 1);
-      t.setAttribute('paint-order', 'stroke');
-      t.textContent = `(${loc.split('/')[1]})`;
-      coastLabels.appendChild(t);
+    // tint the individual coastlines of split-coast provinces (spa, stp,
+    // bul) so it's visually clear they're separate landing spots, instead
+    // of a text label. Rather than the (oddly-shaped, oversized) hit-test
+    // polygon, draw a soft semicircular patch centered on each coast's own
+    // unit marker, bulging away from the province center — i.e. out to sea.
+    // Colors are keyed off the coast suffix so "north"/"east" coasts always
+    // read as one hue and "south" coasts as the other.
+    const coastTint = document.createElementNS(SVGNS, 'g');
+    coastTint.setAttribute('id', 'CoastTintLayer');
+    coastTint.setAttribute('pointer-events', 'none');
+    const splitBases = new Set();
+    for (const loc of this.coords.keys()) {
+      if (loc.includes('/')) splitBases.add(loc.split('/')[0]);
     }
-    this.layers.sc.before(coastLabels);
+    for (const base of splitBases) {
+      const baseC = this.center(base);
+      for (const suffix of ['nc', 'ec', 'sc']) {
+        const loc = `${base}/${suffix}`;
+        const color = COAST_COLORS[suffix];
+        if (!this.coords.has(loc) || !color) continue;
+        const coastC = this.center(loc);
+        const dx = coastC.x - baseC.x, dy = coastC.y - baseC.y;
+        const dist = Math.hypot(dx, dy) || 1;
+        const dirX = dx / dist, dirY = dy / dist;
+        const perpX = -dirY, perpY = dirX;
+        const r = Math.min(75, Math.max(30, dist * 0.55));
+        const p1 = { x: coastC.x - r * perpX, y: coastC.y - r * perpY };
+        const p2 = { x: coastC.x + r * perpX, y: coastC.y + r * perpY };
+        const mid = { x: coastC.x + r * dirX, y: coastC.y + r * dirY };
+        const path = document.createElementNS(SVGNS, 'path');
+        path.setAttribute('d',
+          `M ${p1.x} ${p1.y} A ${r} ${r} 0 0 1 ${mid.x} ${mid.y} A ${r} ${r} 0 0 1 ${p2.x} ${p2.y} Z`);
+        path.setAttribute('fill', color);
+        path.setAttribute('fill-opacity', '0.3');
+        path.setAttribute('stroke', color);
+        path.setAttribute('stroke-width', 2.5);
+        path.setAttribute('stroke-opacity', '0.8');
+        coastTint.appendChild(path);
+      }
+    }
+    influence.after(coastTint);
+    this.layers.coastTint = coastTint;
 
     this._attachPointer();
     window.__board = this; // debug/testing handle
@@ -192,23 +220,78 @@ export class Board {
     return this._provinceOf(el);
   }
 
+  // The MouseLayer sits on top of everything for accurate province hit
+  // testing, so units never receive pointer events directly — instead we
+  // test the pointer's board-space position against each rendered unit's
+  // bounding box. Used only to decide whether a drag may start (dragging
+  // must begin exactly on a unit), not for province hit testing in general.
+  _unitAtClient(x, y) {
+    const pt = this.clientToBoard(x, y);
+    const hit = (layer) => {
+      for (const use of layer.children) {
+        const ux = parseFloat(use.getAttribute('x'));
+        const uy = parseFloat(use.getAttribute('y'));
+        const uw = parseFloat(use.getAttribute('width'));
+        const uh = parseFloat(use.getAttribute('height'));
+        if (pt.x >= ux && pt.x <= ux + uw && pt.y >= uy && pt.y <= uy + uh) {
+          return use.getAttribute('data-prov');
+        }
+      }
+      return null;
+    };
+    return hit(this.layers.dislodged) || hit(this.layers.units);
+  }
+
   _attachPointer() {
     const svg = this.svg;
     let drag = null;
+    // multi-touch: a second finger landing cancels any single-finger drag/pan
+    // in progress and starts a pinch-to-zoom gesture instead
+    const activePointers = new Map(); // pointerId -> {x, y}
+    let pinch = null; // {dist}
+    let lastTap = null; // {time, x, y} — touch double-tap-to-reset-zoom
+    const ptDist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+    const ptMid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
 
     svg.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
       e.preventDefault(); // no text selection while dragging on the board
-      const p = this._provinceAtClient(e.clientX, e.clientY);
-      const spec = p && this.handlers.canDrag ? this.handlers.canDrag(p) : null;
+      activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+      if (activePointers.size === 2) {
+        if (drag) {
+          if (drag.started && this.handlers.onDragEnd) this.handlers.onDragEnd();
+          this._removeGhost();
+          drag = null;
+        }
+        const [a, b] = [...activePointers.values()];
+        pinch = { dist: ptDist(a, b) || 1 };
+        return;
+      }
+      if (activePointers.size > 2) return; // ignore extra fingers
+
+      if (e.pointerType === 'touch') {
+        const now = Date.now();
+        if (lastTap && now - lastTap.time < 300 && ptDist(lastTap, { x: e.clientX, y: e.clientY }) < 30) {
+          lastTap = null;
+          this.resetZoom();
+          return;
+        }
+        lastTap = { time: now, x: e.clientX, y: e.clientY };
+      }
+
+      const clickProv = this._provinceAtClient(e.clientX, e.clientY);
+      const unitProv = this._unitAtClient(e.clientX, e.clientY);
+      const spec = unitProv && this.handlers.canDrag ? this.handlers.canDrag(unitProv) : null;
       drag = {
-        from: p,
+        from: spec ? unitProv : clickProv,
         spec,
         startX: e.clientX,
         startY: e.clientY,
         panVB: spec ? null : { ...this.vb },
         moved: false,
         started: false,
+        threshold: e.pointerType === 'touch' ? 10 : 5,
       };
       try {
         svg.setPointerCapture(e.pointerId);
@@ -218,13 +301,31 @@ export class Board {
     });
 
     svg.addEventListener('pointermove', (e) => {
+      if (activePointers.has(e.pointerId)) activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+      if (pinch && activePointers.size === 2) {
+        const [a, b] = [...activePointers.values()];
+        const newDist = ptDist(a, b) || 1;
+        const factor = pinch.dist / newDist;
+        const mid = ptMid(a, b);
+        const pt = this.clientToBoard(mid.x, mid.y);
+        this.setViewBox(
+          pt.x - (pt.x - this.vb.x) * factor,
+          pt.y - (pt.y - this.vb.y) * factor,
+          this.vb.w * factor,
+          this.vb.h * factor
+        );
+        pinch.dist = newDist;
+        return;
+      }
+
       const p = this._provinceAtClient(e.clientX, e.clientY);
       if (!drag) {
         this._setHover(p);
         if (this.handlers.onHover) this.handlers.onHover(p);
         return;
       }
-      if (Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) > 5) drag.moved = true;
+      if (Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) > drag.threshold) drag.moved = true;
       if (!drag.moved) return;
       if (drag.spec && !drag.started) {
         drag.started = true;
@@ -248,6 +349,8 @@ export class Board {
     });
 
     const finish = (e, cancelled) => {
+      activePointers.delete(e.pointerId);
+      if (pinch && activePointers.size < 2) pinch = null;
       const d = drag;
       drag = null;
       this._removeGhost();

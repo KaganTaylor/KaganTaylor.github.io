@@ -34,7 +34,6 @@ function tokenize(line) {
     .toLowerCase()
     .replace(/\bvia\s+convoy\b/g, ' §via§ ')
     .replace(/->|—|–/g, '-')
-    .replace(/\s*\(\s*/g, '(')
     .replace(/\s*\)\s*/g, ') ')
     .replace(/-/g, ' - ')
     .split(/[\s,]+/)
@@ -43,12 +42,14 @@ function tokenize(line) {
 
 // Greedily match a location starting at tokens[i]; returns [loc, nextIndex]
 // or null. Tries the longest span first so "north atlantic ocean" wins over
-// province "north".
+// province "north", and multi-word coast phrases ("spain (north coast)")
+// win over the bare province name.
 function matchLocation(tokens, i) {
-  for (let span = Math.min(4, tokens.length - i); span >= 1; span--) {
+  for (let span = Math.min(5, tokens.length - i); span >= 1; span--) {
     const candidate = tokens.slice(i, i + span).join(' ').replace(/\)$/, ')');
     const cleaned = candidate.replace(/[.]+$/, '');
-    for (const key of [candidate, cleaned, cleaned.replace(/\((\w+)\)/, '/$1')]) {
+    const compact = cleaned.replace(/\s*\(\s*/g, '(').replace(/\s*\)\s*/g, ')');
+    for (const key of [candidate, cleaned, compact, compact.replace(/\((\w+)\)/, '/$1')]) {
       if (ALIASES[key]) return [ALIASES[key], i + span];
     }
   }

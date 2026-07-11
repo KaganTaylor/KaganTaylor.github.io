@@ -10,6 +10,7 @@ import {
   adjudicateAdjustments,
 } from './adjudicator.js';
 import { PROVINCES, POWERS } from './map-data.js';
+import { getToken, setToken, publishGame, updatePublished, fetchPublished, extractGistId } from './publish.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -19,6 +20,7 @@ let playback = null; // {entry, step, orders, readonly, animating}
 let editMode = false;
 let editTool = 'A';
 let lastParsed = { orders: [], errors: [], byProv: new Map() };
+let mobileSheet = null; // null | 'edit' | 'orders' | 'standings' — mobile bottom-sheet state
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -125,9 +127,11 @@ function renderHome() {
   for (const name of names) {
     const g = games[name];
     const li = document.createElement('li');
+    if (g.published) li.className = 'published';
     const load = document.createElement('button');
     load.className = 'load';
-    load.innerHTML = `${name} <span class="meta">· ${S.phaseLabel(g)}</span>`;
+    const badge = g.published ? ` <span class="badge published">${g.isOwner ? 'Published' : 'Read only'}</span>` : '';
+    load.innerHTML = `${name} <span class="meta">· ${S.phaseLabel(g)}</span>${badge}`;
     load.onclick = () => openGame(g);
     const del = document.createElement('button');
     del.className = 'del';
@@ -155,13 +159,21 @@ function uniqueName(base) {
 // ---------------------------------------------------------------------------
 // game screen
 // ---------------------------------------------------------------------------
+// A published game can only be advanced by the browser that published it
+// (holds the token that created its gist). Everyone else gets a live,
+// branchable, but non-editable view of the position.
+function isReadOnly() {
+  return !!(game && game.published && !game.isOwner);
+}
+
 function openGame(g) {
   game = g;
   playback = null;
   S.saveGame(game);
   showScreen('game-screen');
   $('game-name').textContent = game.name;
-  setEditMode(!!game.sandbox && game.units.length === 0);
+  mobileSheet = null;
+  setEditMode(!isReadOnly() && !!game.sandbox && game.units.length === 0);
   refreshAll();
 }
 
@@ -173,7 +185,16 @@ function refreshAll() {
   board.clearOrders();
   $('panel-playback').hidden = true;
   $('panel-orders').hidden = false;
-  $('btn-undo').disabled = !game.history.length;
+  const ro = isReadOnly();
+  $('readonly-badge').hidden = !ro;
+  $('orders-text').readOnly = ro;
+  $('btn-resolve').disabled = ro;
+  $('btn-resolve-final').disabled = ro;
+  $('btn-edit').hidden = ro;
+  $('btn-undo').disabled = ro || !game.history.length;
+  $('btn-redo').disabled = ro || !(game.redoStack && game.redoStack.length);
+  $('btn-publish').hidden = ro || !!game.published;
+  $('btn-update-published').hidden = !(game.published && game.isOwner);
   prefillOrders();
   renderHistorySelect();
   renderStandings();
@@ -384,7 +405,7 @@ function selectOrderLine(unitProv) {
 function attachBoardHandlers() {
   board.handlers = {
     canDrag(p) {
-      if (playback || !game) return null;
+      if (playback || !game || isReadOnly()) return null;
       const base = prov(p);
       if (editMode || game.step === 'movement') {
         const u = unitAt(base);
@@ -404,7 +425,7 @@ function attachBoardHandlers() {
       if (game.step === 'retreat') return retreatDrop(from, toProv, ev);
     },
     onClick(p, ev) {
-      if (playback || !game) return;
+      if (playback || !game || isReadOnly()) return;
       const base = prov(p);
       if (editMode) return editClick(base, ev);
       if (game.step === 'retreat') {
@@ -541,6 +562,31 @@ function setEditMode(on) {
   editMode = on;
   $('btn-edit').classList.toggle('active', on);
   $('panel-edit').hidden = !on;
+  mobileSheet = on ? 'edit' : (mobileSheet === 'edit' ? null : mobileSheet);
+  applyMobileSheetUI();
+}
+
+function toggleEditMode() {
+  setEditMode(!editMode);
+  if (editMode && playback) endPlayback();
+}
+
+// ---------------------------------------------------------------------------
+// mobile bottom sheet (Edit / Orders+History / Standings tabs)
+// ---------------------------------------------------------------------------
+function applyMobileSheetUI() {
+  const sidebar = $('sidebar');
+  sidebar.dataset.sheet = mobileSheet || '';
+  sidebar.classList.toggle('sheet-open', !!mobileSheet);
+  for (const b of document.querySelectorAll('#mobile-tabbar .mtab')) {
+    b.classList.toggle('active', b.dataset.sheet === mobileSheet);
+  }
+}
+
+function selectMobileSheet(kind) {
+  if (editMode) toggleEditMode(); // reveals orders/standings by leaving edit mode
+  mobileSheet = mobileSheet === kind ? null : kind;
+  applyMobileSheetUI();
 }
 
 function editApply() {
@@ -612,6 +658,36 @@ function resolveCurrent() {
   startPlayback(entry, false);
 }
 
+// Resolves the phase but skips the order-by-order reveal entirely: shows the
+// pre-move position, plays the movement animation straight through, and
+// lands on the next phase's order screen. Lets sandbox users blitz through
+// several turns without clicking through each one's step-through.
+async function resolveAndSkip() {
+  const { orders, errors } = onOrdersChanged();
+  if (errors.length) return toast('Fix the order problems first');
+  const text = $('orders-text').value;
+  const entry = S.resolvePhase(game, orders, text);
+  S.saveGame(game);
+  playback = null;
+  $('panel-orders').hidden = true;
+  $('panel-edit').hidden = true;
+  board.clearOrders();
+  board.setPhaseText(entry.label);
+  board.setInfluence(entry.scOwnersBefore);
+  board.setUnits(entry.unitsBefore, entry.step === 'retreat' ? entry.dislodged : []);
+  await board.animateFinal(entry);
+  refreshAll();
+}
+
+function redoPhase() {
+  const entry = S.redoPhase(game);
+  if (!entry) return toast('Nothing to redo');
+  playback = null;
+  S.saveGame(game);
+  refreshAll();
+  toast(`Redid ${entry.label}`, 'info');
+}
+
 function playbackOrders(entry) {
   const res = entry.results.filter((r) => !r.order.implicit);
   const byPower = new Map();
@@ -620,6 +696,29 @@ function playbackOrders(entry) {
     byPower.get(r.order.power).push(r);
   }
   return [...byPower.values()].flat();
+}
+
+// Re-adjudicates using only the orders revealed so far in the step-through
+// (every other unit implicitly holds), so arrows already on the board can
+// be recolored live as later orders come in — e.g. two moves into the same
+// province both show red (bounce) until a support is revealed that lets one
+// of them through, at which point it turns back to its faction color.
+function partialVerdicts(entry, revealedOrders) {
+  const map = new Map();
+  let out;
+  if (entry.step === 'movement') {
+    out = adjudicateMovement(entry.unitsBefore, revealedOrders);
+  } else if (entry.step === 'retreat') {
+    out = adjudicateRetreats(entry.dislodged, entry.unitsBefore, revealedOrders);
+  } else {
+    out = adjudicateAdjustments(entry.scOwnersBefore, entry.unitsBefore, revealedOrders);
+  }
+  for (const r of out.results) {
+    if (r.order.implicit) continue;
+    map.set(prov(r.order.loc), r.verdict);
+  }
+  for (const inv of out.invalid || []) map.set(prov(inv.order.loc), inv.verdict);
+  return map;
 }
 
 function startPlayback(entry, readonly) {
@@ -670,8 +769,14 @@ function renderPlayback() {
   } else {
     board.setInfluence(entry.scOwnersBefore);
     board.setUnits(entry.unitsBefore, entry.step === 'retreat' ? entry.dislodged : []);
-    for (let i = 0; i < Math.min(step, orders.length); i++) {
-      board.drawOrder(orders[i].order, POWER_COLORS[orders[i].order.power] || '#888');
+    const revealedCount = Math.min(step, orders.length);
+    const revealedOrders = orders.slice(0, revealedCount).map((r) => r.order);
+    const verdictByProv = revealedCount ? partialVerdicts(entry, revealedOrders) : new Map();
+    for (let i = 0; i < revealedCount; i++) {
+      const o = orders[i].order;
+      const v = verdictByProv.get(prov(o.loc));
+      const failed = v === 'fails' || v === 'invalid';
+      board.drawOrder(o, failed ? '#e05252' : POWER_COLORS[o.power] || '#888');
     }
     if (step >= outcomeStep()) {
       for (const r of entry.results) {
@@ -880,6 +985,68 @@ async function importFile(file) {
 }
 
 // ---------------------------------------------------------------------------
+// publishing (read-only shareable links, backed by a GitHub gist)
+// ---------------------------------------------------------------------------
+async function doPublish() {
+  let token = getToken();
+  if (!token) {
+    token = prompt(
+      'Paste a GitHub personal access token with "gist" scope.\n' +
+      'It is stored only in this browser and used to publish/update your games.'
+    );
+    if (!token) return;
+    setToken(token.trim());
+  }
+  try {
+    const { id, url } = await publishGame(game);
+    game.gistId = id;
+    game.gistUrl = url;
+    game.published = true;
+    game.isOwner = true;
+    S.saveGame(game);
+    refreshAll();
+    const shareLink = `${location.origin}${location.pathname}?gist=${id}`;
+    prompt('Published — share this read-only link:', shareLink);
+  } catch (e) {
+    toast('Publish failed: ' + e.message);
+  }
+}
+
+async function doUpdatePublished() {
+  try {
+    await updatePublished(game);
+    toast('Published game updated', 'info');
+  } catch (e) {
+    toast('Update failed: ' + e.message);
+  }
+}
+
+async function loadPublishedGame(idOrUrl) {
+  const id = extractGistId(idOrUrl);
+  if (!id) return toast('Could not parse gist link/ID');
+  const games = S.listGames();
+  const local = Object.values(games).find((g) => g.gistId === id);
+  if (local && local.isOwner) return openGame(local);
+  try {
+    const fetched = await fetchPublished(id);
+    const g = S.importGame(JSON.stringify(fetched));
+    g.gistId = id;
+    g.published = true;
+    g.isOwner = false;
+    g.name = local ? local.name : uniqueName(g.name || 'Published game');
+    openGame(g);
+    toast('Loaded published game (read-only) — Branch to plan ahead', 'info');
+  } catch (e) {
+    if (local) {
+      openGame(local);
+      toast('Offline — showing the last loaded copy', 'info');
+    } else {
+      toast('Could not load: ' + e.message);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // init
 // ---------------------------------------------------------------------------
 async function init() {
@@ -902,13 +1069,31 @@ async function init() {
     showScreen('home-screen');
   };
   $('btn-export').onclick = exportCurrent;
-  $('btn-edit').onclick = () => {
-    setEditMode(!editMode);
-    if (editMode && playback) endPlayback();
+  $('btn-edit').onclick = toggleEditMode;
+
+  for (const b of document.querySelectorAll('#mobile-tabbar .mtab')) {
+    b.onclick = () => {
+      if (b.dataset.sheet === 'edit') toggleEditMode();
+      else selectMobileSheet(b.dataset.sheet);
+    };
+  }
+  $('topbar-more-btn').onclick = (e) => {
+    e.stopPropagation();
+    $('topbar-more-menu').classList.toggle('open');
   };
+  document.addEventListener('pointerdown', (e) => {
+    const menu = $('topbar-more-menu');
+    if (menu.classList.contains('open') && !menu.contains(e.target) && e.target !== $('topbar-more-btn')) {
+      menu.classList.remove('open');
+    }
+  });
 
   $('orders-text').addEventListener('input', onOrdersChanged);
   $('btn-resolve').onclick = resolveCurrent;
+  $('btn-resolve-final').onclick = resolveAndSkip;
+  $('btn-publish').onclick = doPublish;
+  $('btn-update-published').onclick = doUpdatePublished;
+  $('btn-load-gist').onclick = () => loadPublishedGame($('load-gist-input').value);
 
   for (const b of $('edit-tools').querySelectorAll('.tool')) {
     b.onclick = () => {
@@ -958,10 +1143,13 @@ async function init() {
 
   $('btn-replay').onclick = replaySelected;
   $('btn-undo').onclick = undoPhase;
+  $('btn-redo').onclick = redoPhase;
   $('btn-branch').onclick = branchCurrent;
 
   renderHome();
   showScreen('home-screen');
+  const gistParam = new URLSearchParams(location.search).get('gist');
+  if (gistParam) await loadPublishedGame(gistParam);
   autotest();
 }
 

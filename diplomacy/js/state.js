@@ -31,6 +31,7 @@ export function newGame(name) {
     scOwners: { ...START_OWNERS },
     pending: null, // retreat context: {dislodged, standoffs}
     history: [],
+    redoStack: [],
   };
 }
 
@@ -112,7 +113,12 @@ export function resolvePhase(g, orders, ordersText) {
   }
   entry.scOwnersAfter = structuredClone(g.scOwners);
   entry.phaseAfter = phaseLabel(g);
+  entry.seasonAfter = g.season;
+  entry.yearAfter = g.year;
+  entry.stepAfter = g.step;
+  entry.pendingAfter = structuredClone(g.pending);
   g.history.push(entry);
+  g.redoStack = [];
   return entry;
 }
 
@@ -170,6 +176,22 @@ export function undoLastPhase(g) {
   g.season = entry.season;
   g.year = entry.year;
   g.step = entry.step;
+  (g.redoStack || (g.redoStack = [])).push(entry);
+  return entry;
+}
+
+// Redo the most recently undone phase, restoring the position after it.
+// Returns the redone history entry (with .ordersText) or null.
+export function redoPhase(g) {
+  const entry = (g.redoStack || []).pop();
+  if (!entry) return null;
+  g.units = structuredClone(entry.unitsAfter);
+  g.scOwners = structuredClone(entry.scOwnersAfter);
+  g.pending = structuredClone(entry.pendingAfter) || null;
+  g.season = entry.seasonAfter;
+  g.year = entry.yearAfter;
+  g.step = entry.stepAfter;
+  g.history.push(entry);
   return entry;
 }
 
@@ -206,6 +228,7 @@ export function importGame(json) {
     throw new Error('not a Diplomacy game file');
   }
   g.history = g.history || [];
+  g.redoStack = g.redoStack || [];
   return g;
 }
 

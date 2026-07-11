@@ -26,6 +26,14 @@
         <ul id="game-list"></ul>
         <label class="filebtn">Import game JSON<input id="import-file" type="file" accept=".json,application/json"></label>
       </div>
+      <div class="home-group">
+        <h2>Published games</h2>
+        <p class="hint">Paste a shared gist link or ID to view someone's published game (read-only — branch it to plan ahead).</p>
+        <div class="sandbox-row">
+          <input id="load-gist-input" type="text" placeholder="gist link or ID">
+          <button id="btn-load-gist">Load</button>
+        </div>
+      </div>
     </div>
     <p class="credits">Map: jDip (GPL) · Rules engine validated against the 167 Diplomacy Adjudicator Test Cases · <a href="test/datc.html">run the tests</a></p>
   </div>
@@ -36,10 +44,18 @@
     <button id="btn-home" title="Back to menu">☰</button>
     <span id="game-name"></span>
     <span id="phase-label"></span>
+    <span id="readonly-badge" class="badge published" hidden>👁 Published — read only</span>
     <span id="hover-info"></span>
     <span class="spacer"></span>
     <button id="btn-edit" title="Freely place, move and remove units and set supply-center owners">✏ Edit board</button>
-    <button id="btn-export">Export</button>
+    <div id="topbar-more-wrap">
+      <button id="topbar-more-btn" title="More actions">⋮</button>
+      <div id="topbar-more-menu">
+        <button id="btn-publish" title="Publish this game as a read-only, shareable link">📣 Publish</button>
+        <button id="btn-update-published" hidden title="Push the current position to the published link">☁ Update published</button>
+        <button id="btn-export">Export</button>
+      </div>
+    </div>
   </header>
 
   <div id="main">
@@ -76,6 +92,7 @@
         <div id="parse-status"></div>
         <div class="btnrow">
           <button id="btn-resolve" class="primary">Resolve</button>
+          <button id="btn-resolve-final" title="Resolve and jump straight to the final position — animates the moves without stepping through each order first">⏭ Resolve to final</button>
         </div>
         <p class="hint" id="drag-hint">Drag a unit to its destination to write the order · drop on itself to hold · <b>⇧-drop</b> on a unit to support it · <b>Ctrl-drop</b> (fleet at sea, onto a moving army) to convoy · unordered units hold.</p>
       </div>
@@ -111,11 +128,18 @@
         <div class="btnrow">
           <button id="btn-replay" title="Step through this past phase again">Replay</button>
           <button id="btn-undo" title="Undo the most recent phase — the board goes back and your orders return to the box">⤺ Undo</button>
+          <button id="btn-redo" title="Redo the last undone phase">⤻ Redo</button>
           <button id="btn-branch" title="Copy the current position into a new practice game">Branch</button>
         </div>
       </div>
     </aside>
   </div>
+
+  <nav id="mobile-tabbar">
+    <button class="mtab" data-sheet="edit" title="Edit board">✏<span>Edit</span></button>
+    <button class="mtab" data-sheet="orders" title="Orders &amp; history">📝<span>Orders</span></button>
+    <button class="mtab" data-sheet="standings" title="Standings">📊<span>Standings</span></button>
+  </nav>
 
   <div id="coast-picker" hidden></div>
   <div id="toast" hidden></div>
