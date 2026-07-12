@@ -35,11 +35,13 @@ export const POWER_COLORS = {
 };
 
 // distinguishes the two halves of a split-coast province (spa, stp, bul);
-// keyed by the coast suffix used in canonical location ids
+// keyed by the coast suffix used in canonical location ids. Deliberately
+// muted greys — the coastlines are a wayfinding hint, not a highlight, and
+// must not compete with the ownership tints.
 const COAST_COLORS = {
-  nc: '#3b6ea5',
-  ec: '#3b6ea5',
-  sc: '#a5673b',
+  nc: '#6b7280',
+  ec: '#6b7280',
+  sc: '#9aa0a6',
 };
 
 const UNIT_W = 40;
@@ -124,26 +126,11 @@ export class Board {
     this.layers.map.after(influence);
     this.layers.influence = influence;
 
-    // tint the individual coastlines of split-coast provinces (spa, stp,
-    // bul) so it's visually clear they're separate landing spots. A soft
-    // radial patch is centered on each coast's own unit marker and clipped
-    // to the province's hit-test outline, so the color sits only on that
-    // stretch of land — nothing spills into the sea or neighbours. Colors
-    // are keyed off the coast suffix so "north"/"east" coasts always read
-    // as one hue and "south" coasts as the other.
+    // mark the individual coastlines of split-coast provinces (spa, stp,
+    // bul) so it's visually clear they're separate landing spots: the
+    // province outline is stroked near each coast's own unit marker. Only
+    // the line is drawn — the land itself keeps its ownership color.
     const defs = document.createElementNS(SVGNS, 'defs');
-    for (const [suffix, color] of Object.entries(COAST_COLORS)) {
-      const grad = document.createElementNS(SVGNS, 'radialGradient');
-      grad.setAttribute('id', `coastgrad-${suffix}`);
-      for (const [offset, opacity] of [[0, 0.5], [0.55, 0.38], [1, 0]]) {
-        const stop = document.createElementNS(SVGNS, 'stop');
-        stop.setAttribute('offset', offset);
-        stop.setAttribute('stop-color', color);
-        stop.setAttribute('stop-opacity', opacity);
-        grad.appendChild(stop);
-      }
-      defs.appendChild(grad);
-    }
     const coastTint = document.createElementNS(SVGNS, 'g');
     coastTint.setAttribute('id', 'CoastTintLayer');
     coastTint.setAttribute('pointer-events', 'none');
@@ -155,30 +142,10 @@ export class Board {
     for (const base of splitBases) {
       const shape = this.layers.mouse.querySelector(`#${CSS.escape(base)}`);
       if (!shape) continue;
-      const clip = document.createElementNS(SVGNS, 'clipPath');
-      clip.setAttribute('id', `coastclip-${base}`);
       const outlines = shape.tagName === 'path' ? [shape] : [...shape.querySelectorAll('path')];
-      for (const o of outlines) {
-        const c = o.cloneNode(false);
-        c.removeAttribute('id');
-        c.removeAttribute('class');
-        if (mouseTransform) c.setAttribute('transform', mouseTransform);
-        clip.appendChild(c);
-      }
-      defs.appendChild(clip);
       // the outline paths live in MouseLayer's translated coordinate space
       const tm = /translate\(\s*([-\d.]+)[ ,]+([-\d.]+)/.exec(mouseTransform || '');
       const [tx, ty] = tm ? [+tm[1], +tm[2]] : [0, 0];
-      const onLand = (x, y) => {
-        try {
-          const pt = this.svg.createSVGPoint();
-          pt.x = x - tx;
-          pt.y = y - ty;
-          return outlines.some((o) => o.isPointInFill(pt));
-        } catch {
-          return true; // isPointInFill unsupported: keep the raw position
-        }
-      };
       const baseC = this.center(base);
       for (const suffix of ['nc', 'ec', 'sc']) {
         const loc = `${base}/${suffix}`;
@@ -199,17 +166,6 @@ export class Board {
             if (d < bestD) { bestD = d; edge = { x: p.x + tx, y: p.y + ty }; }
           }
         }
-        // soft area patch, its core pulled a touch inland so the province
-        // clip doesn't swallow the strongest part of the gradient
-        const cx = onLand(coastC.x, coastC.y) ? coastC.x : edge.x + (baseC.x - edge.x) * 0.25;
-        const cy = onLand(coastC.x, coastC.y) ? coastC.y : edge.y + (baseC.y - edge.y) * 0.25;
-        const circle = document.createElementNS(SVGNS, 'circle');
-        circle.setAttribute('cx', cx);
-        circle.setAttribute('cy', cy);
-        circle.setAttribute('r', r);
-        circle.setAttribute('fill', `url(#coastgrad-${suffix})`);
-        circle.setAttribute('clip-path', `url(#coastclip-${base})`);
-        coastTint.appendChild(circle);
         // coastline band: the province outline stroked in the coast color,
         // shown only near this coast (clipped to a circle on the coastline)
         const bandClip = document.createElementNS(SVGNS, 'clipPath');

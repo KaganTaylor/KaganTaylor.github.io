@@ -1045,19 +1045,33 @@ async function importFile(file) {
 // ---------------------------------------------------------------------------
 // publishing (read-only shareable links, backed by a GitHub gist)
 // ---------------------------------------------------------------------------
+const TOKEN_HELP =
+  'Publishing stores the game in a public GitHub gist, which needs a personal access token:\n\n' +
+  '1. Open  github.com/settings/tokens/new  (this is a "classic" token — the newer fine-grained tokens cannot access gists)\n' +
+  '2. Give it a name, tick ONLY the "gist" scope, and click Generate token\n' +
+  '3. Paste the token (starts with ghp_) below\n\n' +
+  'It is stored only in this browser and used to publish/update your games.\n' +
+  'Clear the box and press OK to forget the current token.';
+
+// Prompts for the token, pre-filled with whatever is stored so a stale one
+// can be corrected. Returns the token in use, or '' if it was cleared/cancelled.
+function askToken() {
+  const answer = prompt(TOKEN_HELP, getToken());
+  if (answer === null) return getToken();
+  const token = answer.trim();
+  setToken(token); // setToken('') removes it
+  return token;
+}
+
+function doEditToken() {
+  const had = !!getToken();
+  const token = askToken();
+  if (token) toast('GitHub token saved', 'info');
+  else if (had) toast('GitHub token cleared', 'info');
+}
+
 async function doPublish() {
-  let token = getToken();
-  if (!token) {
-    token = prompt(
-      'Publishing stores the game in a public GitHub gist, which needs a personal access token:\n\n' +
-      '1. Open  github.com/settings/tokens/new  (this is a "classic" token — the newer fine-grained tokens cannot access gists)\n' +
-      '2. Give it a name, tick ONLY the "gist" scope, and click Generate token\n' +
-      '3. Paste the token (starts with ghp_) below\n\n' +
-      'It is stored only in this browser and used to publish/update your games.'
-    );
-    if (!token) return;
-    setToken(token.trim());
-  }
+  if (!getToken() && !askToken()) return;
   try {
     const { id, url } = await publishGame(game);
     game.gistId = id;
@@ -1076,6 +1090,7 @@ async function doPublish() {
     );
   } catch (e) {
     toast('Publish failed: ' + e.message);
+    if (isAuthError(e)) askToken(); // stale/incorrect token — let them fix it now
   }
 }
 
@@ -1085,7 +1100,13 @@ async function doUpdatePublished() {
     toast('Published game updated', 'info');
   } catch (e) {
     toast('Update failed: ' + e.message);
+    if (isAuthError(e)) askToken();
   }
+}
+
+// GitHub answers a bad or under-scoped token with 401/403
+function isAuthError(e) {
+  return /\b(401|403)\b/.test(e.message);
 }
 
 async function loadPublishedGame(idOrUrl) {
@@ -1159,6 +1180,7 @@ async function init() {
   $('orders-text').addEventListener('input', onOrdersChanged);
   $('btn-resolve').onclick = resolveCurrent;
   $('btn-resolve-final').onclick = resolveAndSkip;
+  $('btn-token').onclick = doEditToken;
   $('btn-publish').onclick = doPublish;
   $('btn-update-published').onclick = doUpdatePublished;
   $('btn-load-gist').onclick = () => loadPublishedGame($('load-gist-input').value);
