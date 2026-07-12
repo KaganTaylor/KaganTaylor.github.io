@@ -28,7 +28,7 @@
       </div>
       <div class="home-group">
         <h2>Published games</h2>
-        <p class="hint">Paste a shared gist link or ID to view someone's published game (read-only — branch it to plan ahead).</p>
+        <p class="hint">Paste the link your game master shared to see the latest position. Pick your country to write orders and copy them for your email — or branch the game to test future moves. Check back after each deadline for the updated board.</p>
         <div class="sandbox-row">
           <input id="load-gist-input" type="text" placeholder="gist link or ID">
           <button id="btn-load-gist">Load</button>
@@ -87,6 +87,10 @@
       <!-- orders entry -->
       <div id="panel-orders" class="panel">
         <h2 id="orders-title">Orders</h2>
+        <div class="sandbox-row" id="country-row" hidden>
+          <select id="country-select" title="Choose your country to write its orders"></select>
+          <button id="btn-copy-orders" title="Copy the orders below — paste them into your email to the game master">📋 Copy orders</button>
+        </div>
         <div id="phase-info"></div>
         <textarea id="orders-text" spellcheck="false" placeholder="FRANCE&#10;A Par - Bur&#10;F Bre - MAO&#10;A Mar S A Par - Bur"></textarea>
         <div id="parse-status"></div>

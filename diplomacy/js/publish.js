@@ -16,7 +16,7 @@ export function setToken(t) {
 }
 
 function stripForPublish(game) {
-  const { gistId, gistUrl, published, isOwner, ...rest } = game;
+  const { gistId, gistUrl, published, isOwner, myCountry, ...rest } = game;
   return rest;
 }
 

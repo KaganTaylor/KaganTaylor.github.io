@@ -125,12 +125,25 @@ export class Board {
     this.layers.influence = influence;
 
     // tint the individual coastlines of split-coast provinces (spa, stp,
-    // bul) so it's visually clear they're separate landing spots, instead
-    // of a text label. Rather than the (oddly-shaped, oversized) hit-test
-    // polygon, draw a soft semicircular patch centered on each coast's own
-    // unit marker, bulging away from the province center — i.e. out to sea.
-    // Colors are keyed off the coast suffix so "north"/"east" coasts always
-    // read as one hue and "south" coasts as the other.
+    // bul) so it's visually clear they're separate landing spots. A soft
+    // radial patch is centered on each coast's own unit marker and clipped
+    // to the province's hit-test outline, so the color sits only on that
+    // stretch of land — nothing spills into the sea or neighbours. Colors
+    // are keyed off the coast suffix so "north"/"east" coasts always read
+    // as one hue and "south" coasts as the other.
+    const defs = document.createElementNS(SVGNS, 'defs');
+    for (const [suffix, color] of Object.entries(COAST_COLORS)) {
+      const grad = document.createElementNS(SVGNS, 'radialGradient');
+      grad.setAttribute('id', `coastgrad-${suffix}`);
+      for (const [offset, opacity] of [[0, 0.5], [0.55, 0.38], [1, 0]]) {
+        const stop = document.createElementNS(SVGNS, 'stop');
+        stop.setAttribute('offset', offset);
+        stop.setAttribute('stop-color', color);
+        stop.setAttribute('stop-opacity', opacity);
+        grad.appendChild(stop);
+      }
+      defs.appendChild(grad);
+    }
     const coastTint = document.createElementNS(SVGNS, 'g');
     coastTint.setAttribute('id', 'CoastTintLayer');
     coastTint.setAttribute('pointer-events', 'none');
@@ -138,32 +151,93 @@ export class Board {
     for (const loc of this.coords.keys()) {
       if (loc.includes('/')) splitBases.add(loc.split('/')[0]);
     }
+    const mouseTransform = this.layers.mouse.getAttribute('transform');
     for (const base of splitBases) {
+      const shape = this.layers.mouse.querySelector(`#${CSS.escape(base)}`);
+      if (!shape) continue;
+      const clip = document.createElementNS(SVGNS, 'clipPath');
+      clip.setAttribute('id', `coastclip-${base}`);
+      const outlines = shape.tagName === 'path' ? [shape] : [...shape.querySelectorAll('path')];
+      for (const o of outlines) {
+        const c = o.cloneNode(false);
+        c.removeAttribute('id');
+        c.removeAttribute('class');
+        if (mouseTransform) c.setAttribute('transform', mouseTransform);
+        clip.appendChild(c);
+      }
+      defs.appendChild(clip);
+      // the outline paths live in MouseLayer's translated coordinate space
+      const tm = /translate\(\s*([-\d.]+)[ ,]+([-\d.]+)/.exec(mouseTransform || '');
+      const [tx, ty] = tm ? [+tm[1], +tm[2]] : [0, 0];
+      const onLand = (x, y) => {
+        try {
+          const pt = this.svg.createSVGPoint();
+          pt.x = x - tx;
+          pt.y = y - ty;
+          return outlines.some((o) => o.isPointInFill(pt));
+        } catch {
+          return true; // isPointInFill unsupported: keep the raw position
+        }
+      };
       const baseC = this.center(base);
       for (const suffix of ['nc', 'ec', 'sc']) {
         const loc = `${base}/${suffix}`;
+        if (!this.coords.has(loc) || !COAST_COLORS[suffix]) continue;
         const color = COAST_COLORS[suffix];
-        if (!this.coords.has(loc) || !color) continue;
         const coastC = this.center(loc);
-        const dx = coastC.x - baseC.x, dy = coastC.y - baseC.y;
-        const dist = Math.hypot(dx, dy) || 1;
-        const dirX = dx / dist, dirY = dy / dist;
-        const perpX = -dirY, perpY = dirX;
-        const r = Math.min(75, Math.max(30, dist * 0.55));
-        const p1 = { x: coastC.x - r * perpX, y: coastC.y - r * perpY };
-        const p2 = { x: coastC.x + r * perpX, y: coastC.y + r * perpY };
-        const mid = { x: coastC.x + r * dirX, y: coastC.y + r * dirY };
-        const path = document.createElementNS(SVGNS, 'path');
-        path.setAttribute('d',
-          `M ${p1.x} ${p1.y} A ${r} ${r} 0 0 1 ${mid.x} ${mid.y} A ${r} ${r} 0 0 1 ${p2.x} ${p2.y} Z`);
-        path.setAttribute('fill', color);
-        path.setAttribute('fill-opacity', '0.3');
-        path.setAttribute('stroke', color);
-        path.setAttribute('stroke-width', 2.5);
-        path.setAttribute('stroke-opacity', '0.8');
-        coastTint.appendChild(path);
+        const dist = Math.hypot(coastC.x - baseC.x, coastC.y - baseC.y) || 1;
+        const r = Math.min(90, Math.max(55, dist * 0.8));
+        // the point of the province outline nearest the coast's unit marker
+        // — the actual coastline (some markers, e.g. bul's, sit offshore)
+        let edge = coastC, bestD = Infinity;
+        for (const o of outlines) {
+          const len = o.getTotalLength();
+          const step = Math.max(4, len / 250);
+          for (let s = 0; s <= len; s += step) {
+            const p = o.getPointAtLength(s);
+            const d = Math.hypot(p.x + tx - coastC.x, p.y + ty - coastC.y);
+            if (d < bestD) { bestD = d; edge = { x: p.x + tx, y: p.y + ty }; }
+          }
+        }
+        // soft area patch, its core pulled a touch inland so the province
+        // clip doesn't swallow the strongest part of the gradient
+        const cx = onLand(coastC.x, coastC.y) ? coastC.x : edge.x + (baseC.x - edge.x) * 0.25;
+        const cy = onLand(coastC.x, coastC.y) ? coastC.y : edge.y + (baseC.y - edge.y) * 0.25;
+        const circle = document.createElementNS(SVGNS, 'circle');
+        circle.setAttribute('cx', cx);
+        circle.setAttribute('cy', cy);
+        circle.setAttribute('r', r);
+        circle.setAttribute('fill', `url(#coastgrad-${suffix})`);
+        circle.setAttribute('clip-path', `url(#coastclip-${base})`);
+        coastTint.appendChild(circle);
+        // coastline band: the province outline stroked in the coast color,
+        // shown only near this coast (clipped to a circle on the coastline)
+        const bandClip = document.createElementNS(SVGNS, 'clipPath');
+        bandClip.setAttribute('id', `coastband-${base}-${suffix}`);
+        const bc = document.createElementNS(SVGNS, 'circle');
+        bc.setAttribute('cx', edge.x);
+        bc.setAttribute('cy', edge.y);
+        bc.setAttribute('r', r);
+        bandClip.appendChild(bc);
+        defs.appendChild(bandClip);
+        const bandG = document.createElementNS(SVGNS, 'g');
+        bandG.setAttribute('clip-path', `url(#coastband-${base}-${suffix})`);
+        for (const o of outlines) {
+          const stroke = o.cloneNode(false);
+          stroke.removeAttribute('id');
+          stroke.removeAttribute('class');
+          if (mouseTransform) stroke.setAttribute('transform', mouseTransform);
+          stroke.setAttribute('fill', 'none');
+          stroke.setAttribute('stroke', color);
+          stroke.setAttribute('stroke-width', 7);
+          stroke.setAttribute('stroke-opacity', 0.8);
+          stroke.setAttribute('stroke-linecap', 'round');
+          bandG.appendChild(stroke);
+        }
+        coastTint.appendChild(bandG);
       }
     }
+    adopted.appendChild(defs);
     influence.after(coastTint);
     this.layers.coastTint = coastTint;
 
@@ -234,7 +308,9 @@ export class Board {
         const uw = parseFloat(use.getAttribute('width'));
         const uh = parseFloat(use.getAttribute('height'));
         if (pt.x >= ux && pt.x <= ux + uw && pt.y >= uy && pt.y <= uy + uh) {
-          return use.getAttribute('data-prov');
+          // full location (with coast) so a drag from a fleet on stp/nc
+          // starts its ghost arrow at the coast marker, not the province
+          return use.getAttribute('data-loc') || use.getAttribute('data-prov');
         }
       }
       return null;
@@ -458,7 +534,7 @@ export class Board {
       const c = this.coords.get(u.loc) || this.coords.get(prov(u.loc));
       if (!c) continue;
       this.layers.units.appendChild(
-        this._unitNode(u.type === 'A' ? 'Army' : 'Fleet', c.x, c.y, u.power, prov(u.loc))
+        this._unitNode(u.type === 'A' ? 'Army' : 'Fleet', c.x, c.y, u.power, prov(u.loc), u.loc)
       );
     }
     for (const d of dislodged) {
@@ -470,13 +546,14 @@ export class Board {
           c.dx,
           c.dy,
           d.unit.power,
-          prov(d.from)
+          prov(d.from),
+          d.from
         )
       );
     }
   }
 
-  _unitNode(symbol, x, y, power, provId) {
+  _unitNode(symbol, x, y, power, provId, loc) {
     const use = document.createElementNS(SVGNS, 'use');
     use.setAttributeNS(XLINKNS, 'xlink:href', `#${symbol}`);
     use.setAttribute('href', `#${symbol}`);
@@ -486,6 +563,7 @@ export class Board {
     use.setAttribute('height', UNIT_W);
     use.setAttribute('class', `unit${power}`);
     use.setAttribute('data-prov', provId);
+    if (loc) use.setAttribute('data-loc', loc);
     return use;
   }
 

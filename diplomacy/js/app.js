@@ -5,6 +5,7 @@ import {
   prov,
   armyAdjacent,
   fleetDestLocs,
+  convoyPossible,
   adjudicateMovement,
   adjudicateRetreats,
   adjudicateAdjustments,
@@ -81,6 +82,25 @@ function toast(msg, kind = '') {
   t.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (t.hidden = true), 2800);
+}
+
+// Of the candidate locations (e.g. spa/nc vs spa/sc), the one whose marker
+// is closest to where the pointer was released — dropping a fleet on the
+// upper half of Spain lands it on the north coast, no prompt needed.
+function nearestLoc(ev, options) {
+  if (options.length === 1) return options[0];
+  const pt = board.clientToBoard(ev.clientX, ev.clientY);
+  let best = options[0];
+  let bestD = Infinity;
+  for (const o of options) {
+    const c = board.center(o);
+    const d = Math.hypot(c.x - pt.x, c.y - pt.y);
+    if (d < bestD) {
+      bestD = d;
+      best = o;
+    }
+  }
+  return best;
 }
 
 function pickCoast(x, y, options) {
@@ -166,6 +186,14 @@ function isReadOnly() {
   return !!(game && game.published && !game.isOwner);
 }
 
+// Viewers of a published game pick the country they play; order entry
+// (typing and dragging) then works for that power only, and "📋 Copy
+// orders" hands them their order block to email to the game master.
+// Empty string = spectating / no country chosen.
+function myCountry() {
+  return (isReadOnly() && game.myCountry) || '';
+}
+
 function openGame(g) {
   game = g;
   playback = null;
@@ -187,7 +215,9 @@ function refreshAll() {
   $('panel-orders').hidden = false;
   const ro = isReadOnly();
   $('readonly-badge').hidden = !ro;
-  $('orders-text').readOnly = ro;
+  $('country-row').hidden = !ro;
+  if (ro) renderCountrySelect();
+  $('orders-text').readOnly = ro && !myCountry();
   $('btn-resolve').disabled = ro;
   $('btn-resolve-final').disabled = ro;
   $('btn-edit').hidden = ro;
@@ -201,14 +231,30 @@ function refreshAll() {
   onOrdersChanged();
 }
 
+function renderCountrySelect() {
+  const sel = $('country-select');
+  sel.replaceChildren();
+  sel.appendChild(new Option('👁 View all countries', ''));
+  for (const p of POWERS) {
+    if (game.units.some((u) => u.power === p) || Object.values(game.scOwners).includes(p)) {
+      sel.appendChild(new Option(`Play as ${cap(p)}`, p));
+    }
+  }
+  sel.value = game.myCountry || '';
+}
+
 function prefillOrders() {
   const ta = $('orders-text');
   const info = $('phase-info');
+  const myC = myCountry();
   if (game.step === 'movement') {
     $('orders-title').textContent = 'Orders — ' + S.phaseLabel(game);
-    info.textContent = 'Type orders or drag units on the map. Unordered units hold.';
+    info.textContent = myC
+      ? `Write ${cap(myC)}'s orders (type or drag units), then 📋 copy them for your game master. Branch first to test ideas.`
+      : 'Type orders or drag units on the map. Unordered units hold.';
     const lines = [];
     for (const p of POWERS) {
+      if (myC && p !== myC) continue;
       if (game.units.some((u) => u.power === p)) lines.push(p.toUpperCase(), '');
     }
     ta.value = lines.join('\n');
@@ -217,6 +263,7 @@ function prefillOrders() {
     info.textContent = 'Drag a dislodged unit to retreat it, or click it to disband. Unordered units disband.';
     const lines = [];
     for (const d of game.pending.dislodged) {
+      if (myC && d.unit.power !== myC) continue;
       lines.push(d.unit.power.toUpperCase());
       lines.push(`${d.unit.type} ${prov(d.from)} disband   # options: ${d.retreatOptions.join(', ') || 'none'}`);
       lines.push('');
@@ -229,6 +276,7 @@ function prefillOrders() {
     const lines = [];
     const infoLines = [];
     for (const [p, c] of Object.entries(counts)) {
+      if (myC && p !== myC) continue;
       if (c > 0) {
         const free = (S.HOME_CENTERS[p] || []).filter(
           (h) => game.scOwners[h] === p && !occupied.has(h)
@@ -307,10 +355,15 @@ function validateOrders(orders) {
 function drawLive(excludeProv = null) {
   if (playback || !game) return;
   board.clearOrders();
+  const myC = myCountry();
   for (const o of lastParsed.orders) {
     if (excludeProv && o.loc && prov(o.loc) === excludeProv) continue;
-    const bad = o.loc && lastParsed.illegal.has(prov(o.loc));
-    board.drawOrder(o, bad ? '#e05252' : POWER_COLORS[o.power] || '#888');
+    if (myC && o.power !== myC) continue;
+    const reason = o.loc && lastParsed.illegal.get(prov(o.loc));
+    // a convoy that cannot exist is a void order (the unit holds) — no
+    // arrow at all; the warning below the order box explains why
+    if (reason === 'no convoy possible' && o.kind === 'move') continue;
+    board.drawOrder(o, reason ? '#e05252' : POWER_COLORS[o.power] || '#888');
   }
 }
 
@@ -405,15 +458,19 @@ function selectOrderLine(unitProv) {
 function attachBoardHandlers() {
   board.handlers = {
     canDrag(p) {
-      if (playback || !game || isReadOnly()) return null;
+      if (playback || !game) return null;
+      const myC = myCountry();
+      if (isReadOnly() && !myC) return null;
       const base = prov(p);
       if (editMode || game.step === 'movement') {
         const u = unitAt(base);
-        return u ? { color: POWER_COLORS[u.power] } : null;
+        if (!u || (myC && u.power !== myC)) return null;
+        return { color: POWER_COLORS[u.power] };
       }
       if (game.step === 'retreat') {
         const d = dislodgedAt(base);
-        return d ? { color: POWER_COLORS[d.unit.power] } : null;
+        if (!d || (myC && d.unit.power !== myC)) return null;
+        return { color: POWER_COLORS[d.unit.power] };
       }
       return null;
     },
@@ -425,12 +482,14 @@ function attachBoardHandlers() {
       if (game.step === 'retreat') return retreatDrop(from, toProv, ev);
     },
     onClick(p, ev) {
-      if (playback || !game || isReadOnly()) return;
+      if (playback || !game || (isReadOnly() && !myCountry())) return;
       const base = prov(p);
       if (editMode) return editClick(base, ev);
       if (game.step === 'retreat') {
         const d = dislodgedAt(base);
-        if (d) syncOrderLine(d.unit.power, base, orderTextFor(d.unit, { kind: 'disband' }));
+        if (d && !(myCountry() && d.unit.power !== myCountry())) {
+          syncOrderLine(d.unit.power, base, orderTextFor(d.unit, { kind: 'disband' }));
+        }
         return;
       }
       if (game.step === 'adjustment') return adjustmentClick(base, ev);
@@ -503,17 +562,19 @@ function orderDrop(from, to, ev) {
 
   // plain move
   if (u.type === 'A') {
-    if (!armyAdjacent(from, to) &&
-        !(PROVINCES[from].type === 'coast' && PROVINCES[to].type === 'coast'))
-      return toast(`An army cannot reach ${provName(to)}`);
+    if (!armyAdjacent(from, to)) {
+      if (!(PROVINCES[from].type === 'coast' && PROVINCES[to].type === 'coast'))
+        return toast(`An army cannot reach ${provName(to)}`);
+      // only reachable by convoy: reject outright if no chain of fleets
+      // could ever carry it there (same as an unreachable plain move)
+      if (!convoyPossible(game.units, from, to))
+        return toast(`No convoy to ${provName(to)} is possible — no fleet route`);
+    }
     return setOrder(u, { kind: 'move', dest: to });
   }
   const opts = fleetDestLocs(u.loc, to);
   if (!opts.length) return toast(`${provName(to)} is not adjacent for this fleet`);
-  if (opts.length === 1) return setOrder(u, { kind: 'move', dest: opts[0] });
-  pickCoast(ev.clientX, ev.clientY, opts).then((dest) => {
-    if (dest) setOrder(u, { kind: 'move', dest });
-  });
+  setOrder(u, { kind: 'move', dest: nearestLoc(ev, opts) });
 }
 
 function retreatDrop(from, to, ev) {
@@ -521,15 +582,14 @@ function retreatDrop(from, to, ev) {
   if (!d) return;
   const opts = d.retreatOptions.filter((l) => prov(l) === to);
   if (!opts.length) return toast(`Cannot retreat to ${provName(to)}`);
-  const write = (dest) =>
-    syncOrderLine(d.unit.power, from, orderTextFor(d.unit, { kind: 'retreat', dest }));
-  if (opts.length === 1) return write(opts[0]);
-  pickCoast(ev.clientX, ev.clientY, opts).then((dest) => dest && write(dest));
+  syncOrderLine(d.unit.power, from, orderTextFor(d.unit, { kind: 'retreat', dest: nearestLoc(ev, opts) }));
 }
 
 function adjustmentClick(p, ev) {
   const counts = S.adjustmentCounts(game);
+  const myC = myCountry();
   const u = unitAt(p);
+  if (myC && ((u && u.power !== myC) || (!u && game.scOwners[p] !== myC))) return;
   if (u && (counts[u.power] || 0) < 0) {
     // toggle removal
     const existing = lastParsed.orders.find((o) => o.kind === 'remove' && prov(o.loc) === p);
@@ -640,9 +700,7 @@ function editDrop(from, to, ev) {
     editApply();
   };
   if (u.type === 'F' && info.coasts.length) {
-    pickCoast(ev.clientX, ev.clientY, info.coasts.map((c) => `${to}/${c}`)).then(
-      (loc) => loc && place(loc)
-    );
+    place(nearestLoc(ev, info.coasts.map((c) => `${to}/${c}`)));
   } else place(u.type === 'F' ? to : prov(to));
 }
 
@@ -991,7 +1049,10 @@ async function doPublish() {
   let token = getToken();
   if (!token) {
     token = prompt(
-      'Paste a GitHub personal access token with "gist" scope.\n' +
+      'Publishing stores the game in a public GitHub gist, which needs a personal access token:\n\n' +
+      '1. Open  github.com/settings/tokens/new  (this is a "classic" token — the newer fine-grained tokens cannot access gists)\n' +
+      '2. Give it a name, tick ONLY the "gist" scope, and click Generate token\n' +
+      '3. Paste the token (starts with ghp_) below\n\n' +
       'It is stored only in this browser and used to publish/update your games.'
     );
     if (!token) return;
@@ -1006,7 +1067,13 @@ async function doPublish() {
     S.saveGame(game);
     refreshAll();
     const shareLink = `${location.origin}${location.pathname}?gist=${id}`;
-    prompt('Published — share this read-only link:', shareLink);
+    prompt(
+      'Published! Send this link to every player. They can watch the game, ' +
+      'pick their country to write orders and copy them into an email to you, ' +
+      'and branch the position to test ideas. After you resolve a turn, use ' +
+      '"☁ Update published" so everyone sees the latest moves at the same link.',
+      shareLink
+    );
   } catch (e) {
     toast('Publish failed: ' + e.message);
   }
@@ -1034,8 +1101,9 @@ async function loadPublishedGame(idOrUrl) {
     g.published = true;
     g.isOwner = false;
     g.name = local ? local.name : uniqueName(g.name || 'Published game');
+    g.myCountry = local ? local.myCountry : null; // keep the viewer's chosen country
     openGame(g);
-    toast('Loaded published game (read-only) — Branch to plan ahead', 'info');
+    toast('Loaded published game — pick your country to write orders, or Branch to plan ahead', 'info');
   } catch (e) {
     if (local) {
       openGame(local);
@@ -1094,6 +1162,19 @@ async function init() {
   $('btn-publish').onclick = doPublish;
   $('btn-update-published').onclick = doUpdatePublished;
   $('btn-load-gist').onclick = () => loadPublishedGame($('load-gist-input').value);
+  $('country-select').onchange = () => {
+    game.myCountry = $('country-select').value || null;
+    S.saveGame(game);
+    refreshAll();
+  };
+  $('btn-copy-orders').onclick = () => {
+    const text = $('orders-text').value.trim();
+    if (!text) return toast('No orders to copy yet');
+    navigator.clipboard.writeText(text).then(
+      () => toast('Orders copied — paste them into your email to the game master', 'info'),
+      () => toast('Could not copy')
+    );
+  };
 
   for (const b of $('edit-tools').querySelectorAll('.tool')) {
     b.onclick = () => {

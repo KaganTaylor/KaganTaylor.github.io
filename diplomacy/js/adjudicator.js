@@ -69,6 +69,40 @@ function onPossibleWaterRoute(water, from, dest) {
   return false;
 }
 
+// could an army at province `from` be convoyed to province `dest` at all,
+// through water provinces that currently contain a fleet (regardless of
+// orders)? Used to distinguish a failed convoy (real move order) from a
+// void order (treated as hold, DATC 6.D.28-34), and by the UI to reject a
+// drag that could never convoy.
+export function convoyPossible(units, from, dest) {
+  const fleetWaters = new Set();
+  for (const u of units) {
+    if (u.type === 'F' && PROVINCES[prov(u.loc)].type === 'water')
+      fleetWaters.add(prov(u.loc));
+  }
+  const queue = [];
+  const seen = new Set();
+  for (const w of fleetWaters) {
+    if ((FLEET_ADJ[w] || []).some((l) => prov(l) === from)) {
+      queue.push(w);
+      seen.add(w);
+    }
+  }
+  while (queue.length) {
+    const w = queue.shift();
+    const adj = FLEET_ADJ[w] || [];
+    if (adj.some((l) => prov(l) === dest)) return true;
+    for (const l of adj) {
+      const p = prov(l);
+      if (fleetWaters.has(p) && !seen.has(p)) {
+        seen.add(p);
+        queue.push(p);
+      }
+    }
+  }
+  return false;
+}
+
 const SUCCEEDS = true;
 const FAILS = false;
 
@@ -226,34 +260,7 @@ export function adjudicateMovement(units, orders) {
   // could a convoy exist at all, through water provinces that contain a
   // fleet (regardless of orders)? Distinguishes a failed convoy (real move
   // order) from a void order (treated as hold, DATC 6.D.28-34)
-  function potentialConvoyPath(o) {
-    const fleetWaters = new Set();
-    for (const u of units) {
-      if (u.type === 'F' && PROVINCES[prov(u.loc)].type === 'water')
-        fleetWaters.add(prov(u.loc));
-    }
-    const queue = [];
-    const seen = new Set();
-    for (const w of fleetWaters) {
-      if ((FLEET_ADJ[w] || []).some((l) => prov(l) === o.origin)) {
-        queue.push(w);
-        seen.add(w);
-      }
-    }
-    while (queue.length) {
-      const w = queue.shift();
-      const adj = FLEET_ADJ[w] || [];
-      if (adj.some((l) => prov(l) === o.destProv)) return true;
-      for (const l of adj) {
-        const p = prov(l);
-        if (fleetWaters.has(p) && !seen.has(p)) {
-          seen.add(p);
-          queue.push(p);
-        }
-      }
-    }
-    return false;
-  }
+  const potentialConvoyPath = (o) => convoyPossible(units, o.origin, o.destProv);
 
   for (const o of all) {
     if (o.effKind !== 'move') continue;
