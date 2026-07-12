@@ -8,6 +8,8 @@ A dependency-free web app for playing and practicing [Diplomacy](https://en.wiki
 - **Step-through visualization** — click forward/back through each order (or skip to the end), exactly like resolving on a physical board, then watch every unit glide simultaneously to its final position (bounced units lunge and fall back).
 - **Drag to order** — drag a unit to its destination, drop it on itself to hold, ⇧-drop on a unit to support it, Ctrl-drop (a fleet at sea, onto a moving army) to convoy. A coast picker pops up when a fleet move is ambiguous. Everything is written into the plain-text order box, which stays the source of truth.
 - **Board editor** — toggle ✏ Edit board to place/remove armies and fleets, drag units anywhere, and set supply-center owners; scroll to zoom, drag empty space to pan.
+- **Works on a phone** — the map fills the screen, with Edit / Orders / Standings as bottom sheets that shrink the board rather than cover it. Tap any province to outline it, drag to pan, pinch to zoom, double-tap to reset.
+- **Split coasts are drawn** — Spain, St Petersburg and Bulgaria have their individual coastlines marked along the sea, so it's clear a fleet must pick one. Highlighting still outlines the country as a whole. See [Customising the look](#customising-the-look) to change the coastline colour.
 - **Undo** — step back through resolved phases; your order text comes back with each undo.
 - **Tolerant order parsing** — `A Par - Bur`, `F ENG S A Bre - Pic`, `via convoy`, full names or abbreviations, all coast notations (`spa/sc`, `Spa(sc)`).
 - **Full game loop** — spring/fall movement, retreats, supply-center capture, winter builds & civil-disorder disbands.
@@ -47,6 +49,20 @@ Waive
 
 Orders can also be written per-line as `France: A Par - Bur` instead of using power headings.
 
+## Customising the look
+
+Every colour the app draws on the map is a named constant at the top of **`js/render.js`** — that is the only file to edit.
+
+| What | Constant | Default |
+| --- | --- | --- |
+| The seven powers (units, ownership tint, order arrows) | `POWER_COLORS` | one per power |
+| **Coastlines** on split-coast provinces (Spain, St Petersburg, Bulgaria) | **`COAST_COLOR`** | `#6b7280` (grey) |
+| A single coast in a different colour | `COAST_COLORS` | `{}` — empty, so every coast uses `COAST_COLOR`. Add e.g. `{ sc: '#9aa0a6' }` to tint south coasts on their own |
+| Coastline thickness / opacity | `COAST_WIDTH`, `COAST_OPACITY` | `7`, `0.85` |
+| Outline of the province under the pointer (or last tapped) | `HOVER_COLOR`, `HOVER_WIDTH` | `#ffd479`, `4` |
+
+They are all grouped under a `COASTLINE APPEARANCE` comment block in `js/render.js`; changing `COAST_COLOR` there recolours every coastline at once. Panel and button colours are ordinary CSS in `css/style.css`.
+
 ## Rules choices
 
 Where the rulebook is ambiguous the engine follows Kruijswijk's DATC preferences (and the godip test file's choices), notably:
@@ -58,8 +74,12 @@ Where the rulebook is ambiguous the engine follows Kruijswijk's DATC preferences
 
 ## Testing
 
-- `test/datc.html` — full DATC suite in the browser (or headless: `tools/run-datc.ps1`).
-- `tools/e2e.py` — Selenium end-to-end drive of a full game year.
+- `test/datc.html` — the full DATC suite. Serve the folder and open it; the page title reports the score (`DATC 167/167`) and lists any failures by case.
+- `tools/datc_v2.4_06.txt` — the machine-readable test cases the runner parses.
+
+## Design notes
+
+`DECISIONS.md` records why the map is drawn and handled the way it is — the SVG layer stack, how coastlines are found, why highlighting outlines only the province, and the mobile interaction model.
 
 ## Credits & license
 

@@ -34,15 +34,38 @@ export const POWER_COLORS = {
   turkey: '#957e00',
 };
 
-// distinguishes the two halves of a split-coast province (spa, stp, bul);
-// keyed by the coast suffix used in canonical location ids. Deliberately
-// muted greys — the coastlines are a wayfinding hint, not a highlight, and
-// must not compete with the ownership tints.
-const COAST_COLORS = {
-  nc: '#6b7280',
-  ec: '#6b7280',
-  sc: '#9aa0a6',
-};
+// ---------------------------------------------------------------------------
+// COASTLINE APPEARANCE — change the coastline colour HERE
+//
+// The sea-facing edges of the split-coast provinces (Spain, St Petersburg,
+// Bulgaria) are stroked so it is visually clear that each coast is a separate
+// landing spot for a fleet. All of them use one colour:
+//
+//   COAST_COLOR      the colour of every coastline — edit this one value to
+//                    recolour all of them.
+//   COAST_COLORS     optional per-coast overrides, keyed by the coast suffix
+//                    in a canonical location id ('nc', 'ec', 'sc'). Empty by
+//                    default, so every coast uses COAST_COLOR; adding e.g.
+//                    { sc: '#9aa0a6' } would tint south coasts differently.
+//   COAST_SUFFIXES   which coasts get a coastline at all.
+//   COAST_WIDTH      stroke weight, in map units.
+//   COAST_OPACITY    stroke opacity, 0–1.
+//
+// A coastline is a wayfinding hint, not a highlight: keep it muted enough not
+// to compete with the ownership tints (POWER_COLORS above) or the hover
+// outline (HOVER_COLOR below).
+// ---------------------------------------------------------------------------
+export const COAST_COLOR = '#6b7280';
+export const COAST_COLORS = {};
+const COAST_SUFFIXES = ['nc', 'ec', 'sc'];
+const COAST_WIDTH = 7;
+const COAST_OPACITY = 0.85;
+const coastColor = (suffix) => COAST_COLORS[suffix] || COAST_COLOR;
+
+// outline drawn around the province under the pointer — and, on touch, around
+// the province last tapped (there is no hover on a touchscreen)
+const HOVER_COLOR = '#ffd479';
+const HOVER_WIDTH = 4;
 
 const UNIT_W = 40;
 const UNIT_H = 26; // symbol viewBox 23x15 scaled to width 40
@@ -127,75 +150,170 @@ export class Board {
     this.layers.influence = influence;
 
     // mark the individual coastlines of split-coast provinces (spa, stp,
-    // bul) so it's visually clear they're separate landing spots: the
-    // province outline is stroked near each coast's own unit marker. Only
-    // the line is drawn — the land itself keeps its ownership color.
-    const defs = document.createElementNS(SVGNS, 'defs');
+    // bul) so it's visually clear they're separate landing spots. Only the
+    // stretches of the province outline that actually border a sea space are
+    // stroked (never the land borders), in COAST_COLOR — see the COASTLINE
+    // APPEARANCE block at the top of this file. The land keeps its ownership
+    // color.
     const coastTint = document.createElementNS(SVGNS, 'g');
     coastTint.setAttribute('id', 'CoastTintLayer');
     coastTint.setAttribute('pointer-events', 'none');
+    const mouseTransform = this.layers.mouse.getAttribute('transform');
+    if (mouseTransform) coastTint.setAttribute('transform', mouseTransform);
+    const tm = /translate\(\s*([-\d.]+)[ ,]+([-\d.]+)/.exec(mouseTransform || '');
+    const [tx, ty] = tm ? [+tm[1], +tm[2]] : [0, 0];
     const splitBases = new Set();
     for (const loc of this.coords.keys()) {
       if (loc.includes('/')) splitBases.add(loc.split('/')[0]);
     }
-    const mouseTransform = this.layers.mouse.getAttribute('transform');
-    for (const base of splitBases) {
-      const shape = this.layers.mouse.querySelector(`#${CSS.escape(base)}`);
-      if (!shape) continue;
-      const outlines = shape.tagName === 'path' ? [shape] : [...shape.querySelectorAll('path')];
-      // the outline paths live in MouseLayer's translated coordinate space
-      const tm = /translate\(\s*([-\d.]+)[ ,]+([-\d.]+)/.exec(mouseTransform || '');
-      const [tx, ty] = tm ? [+tm[1], +tm[2]] : [0, 0];
-      const baseC = this.center(base);
-      for (const suffix of ['nc', 'ec', 'sc']) {
-        const loc = `${base}/${suffix}`;
-        if (!this.coords.has(loc) || !COAST_COLORS[suffix]) continue;
-        const color = COAST_COLORS[suffix];
-        const coastC = this.center(loc);
-        const dist = Math.hypot(coastC.x - baseC.x, coastC.y - baseC.y) || 1;
-        const r = Math.min(90, Math.max(55, dist * 0.8));
-        // the point of the province outline nearest the coast's unit marker
-        // — the actual coastline (some markers, e.g. bul's, sit offshore)
-        let edge = coastC, bestD = Infinity;
-        for (const o of outlines) {
-          const len = o.getTotalLength();
-          const step = Math.max(4, len / 250);
-          for (let s = 0; s <= len; s += step) {
-            const p = o.getPointAtLength(s);
-            const d = Math.hypot(p.x + tx - coastC.x, p.y + ty - coastC.y);
-            if (d < bestD) { bestD = d; edge = { x: p.x + tx, y: p.y + ty }; }
+    // The MouseLayer hit shapes don't tile exactly, so the water test uses
+    // the visible terrain in MapLayer instead: the sea polygons carry
+    // class="water" and tile precisely with the land — a probe just past
+    // the outline that lands in one is looking at open sea.
+    // Each water path is sampled into polygon rings (subpaths split where
+    // consecutive samples jump) and probed with an even-odd ray cast. Only
+    // sampling APIs are used — the game screen is display:none while the
+    // board loads, which makes getBBox()/isPointInFill() unusable here.
+    const mapLayer = this.layers.map;
+    const seaShapes = [];
+    for (const el of mapLayer.querySelectorAll('path.water')) {
+      const len = el.getTotalLength();
+      const step = Math.max(2.5, len / 600);
+      const rings = [];
+      let ring = null, last = null;
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (let s = 0; s <= len; s += step) {
+        const p = el.getPointAtLength(Math.min(s, len));
+        if (!ring || (last && Math.hypot(p.x - last.x, p.y - last.y) > step * 5)) {
+          ring = [];
+          rings.push(ring);
+        }
+        ring.push(p);
+        last = p;
+        if (p.x < x0) x0 = p.x;
+        if (p.y < y0) y0 = p.y;
+        if (p.x > x1) x1 = p.x;
+        if (p.y > y1) y1 = p.y;
+      }
+      seaShapes.push({ rings, x0: x0 - 2, y0: y0 - 2, x1: x1 + 2, y1: y1 + 2 });
+    }
+    const isSea = (x, y) => {
+      for (const w of seaShapes) {
+        if (x < w.x0 || x > w.x1 || y < w.y0 || y > w.y1) continue;
+        let inside = false;
+        for (const ring of w.rings) {
+          for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+            const a = ring[i], b = ring[j];
+            if ((a.y > y) !== (b.y > y) && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x) {
+              inside = !inside;
+            }
           }
         }
-        // coastline band: the province outline stroked in the coast color,
-        // shown only near this coast (clipped to a circle on the coastline)
-        const bandClip = document.createElementNS(SVGNS, 'clipPath');
-        bandClip.setAttribute('id', `coastband-${base}-${suffix}`);
-        const bc = document.createElementNS(SVGNS, 'circle');
-        bc.setAttribute('cx', edge.x);
-        bc.setAttribute('cy', edge.y);
-        bc.setAttribute('r', r);
-        bandClip.appendChild(bc);
-        defs.appendChild(bandClip);
-        const bandG = document.createElementNS(SVGNS, 'g');
-        bandG.setAttribute('clip-path', `url(#coastband-${base}-${suffix})`);
-        for (const o of outlines) {
-          const stroke = o.cloneNode(false);
-          stroke.removeAttribute('id');
-          stroke.removeAttribute('class');
-          if (mouseTransform) stroke.setAttribute('transform', mouseTransform);
-          stroke.setAttribute('fill', 'none');
-          stroke.setAttribute('stroke', color);
-          stroke.setAttribute('stroke-width', 7);
-          stroke.setAttribute('stroke-opacity', 0.8);
-          stroke.setAttribute('stroke-linecap', 'round');
-          bandG.appendChild(stroke);
+        if (inside) return true;
+      }
+      return false;
+    };
+    for (const base of splitBases) {
+      const outline = mapLayer.querySelector(`#${CSS.escape('_' + base)}`);
+      if (!outline) continue;
+      // this province's coast markers, in the outline's coordinate space
+      const coasts = [];
+      for (const suffix of COAST_SUFFIXES) {
+        if (!this.coords.has(`${base}/${suffix}`)) continue;
+        const c = this.center(`${base}/${suffix}`);
+        coasts.push({ suffix, x: c.x - tx, y: c.y - ty });
+      }
+      if (!coasts.length) continue;
+      // sample the outline, then test each point: does the sea lie just
+      // past it along the outline's normal (either side, two depths)?
+      const len = outline.getTotalLength();
+      const step = Math.min(3.5, Math.max(2, len / 800));
+      const pts = [];
+      for (let s = 0; s <= len; s += step) pts.push(outline.getPointAtLength(Math.min(s, len)));
+      const n = pts.length;
+      const sea = new Array(n).fill(false);
+      for (let i = 0; i < n; i++) {
+        const a = pts[Math.max(0, i - 1)], b = pts[Math.min(n - 1, i + 1)];
+        const tl = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+        const nx = -(b.y - a.y) / tl, ny = (b.x - a.x) / tl;
+        const p = pts[i];
+        for (const d of [2, -2, 4, -4, 8, -8]) {
+          if (isSea(p.x + nx * d, p.y + ny * d)) { sea[i] = true; break; }
         }
-        coastTint.appendChild(bandG);
+      }
+      // smooth: bridge small land gaps inside a coast (probes miss the sea
+      // at the tips of narrow fjords), nudge each stretch one sample
+      // outward, then drop lone specks
+      for (let i = 0; i < n; ) {
+        if (sea[i]) { i++; continue; }
+        let j = i;
+        while (j < n && !sea[j]) j++;
+        if (i > 0 && j < n && j - i <= 3) for (let k = i; k < j; k++) sea[k] = true;
+        i = j;
+      }
+      const seaOrig = sea.slice();
+      for (let i = 0; i < n; i++) {
+        if (!seaOrig[i] && ((i > 0 && seaOrig[i - 1]) || (i + 1 < n && seaOrig[i + 1]))) sea[i] = true;
+      }
+      for (let i = 0; i < n; ) {
+        if (!sea[i]) { i++; continue; }
+        let j = i;
+        while (j < n && sea[j]) j++;
+        if (j - i < 3) for (let k = i; k < j; k++) sea[k] = false;
+        i = j;
+      }
+      // contiguous water-facing stretches become polylines (broken across
+      // subpath jumps). A split province's coasts are always separated by
+      // land borders, so each whole stretch belongs to one coast: the one
+      // whose unit marker comes nearest to it anywhere along its length.
+      // Which coast a stretch belongs to only affects its colour, and every
+      // coast shares COAST_COLOR unless COAST_COLORS overrides it.
+      const runs = [];
+      let run = null;
+      const endRun = () => {
+        if (run && run.length > 2) runs.push(run);
+        run = null;
+      };
+      for (let i = 0; i < n; i++) {
+        if (!sea[i]) { endRun(); continue; }
+        const p = pts[i];
+        const last = run && run[run.length - 1];
+        if (last && Math.hypot(p.x - last.x, p.y - last.y) > step * 4) endRun();
+        if (!run) run = [];
+        run.push(p);
+      }
+      endRun();
+      for (const r of runs) {
+        let best = coasts[0], bd = Infinity;
+        for (const c of coasts) {
+          for (const p of r) {
+            const dd = Math.hypot(c.x - p.x, c.y - p.y);
+            if (dd < bd) { bd = dd; best = c; }
+          }
+        }
+        const pl = document.createElementNS(SVGNS, 'polyline');
+        pl.setAttribute('points', r.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' '));
+        pl.setAttribute('fill', 'none');
+        pl.setAttribute('stroke', coastColor(best.suffix));
+        pl.setAttribute('stroke-width', COAST_WIDTH);
+        pl.setAttribute('stroke-opacity', COAST_OPACITY);
+        pl.setAttribute('stroke-linecap', 'round');
+        pl.setAttribute('stroke-linejoin', 'round');
+        coastTint.appendChild(pl);
       }
     }
-    adopted.appendChild(defs);
     influence.after(coastTint);
     this.layers.coastTint = coastTint;
+
+    // the hovered/tapped province's outline lives in its own layer above the
+    // coastlines — stroked onto the influence shapes it would be buried under
+    // them, and Spain would light up along its land borders only
+    const hover = document.createElementNS(SVGNS, 'g');
+    hover.setAttribute('id', 'HoverLayer');
+    hover.setAttribute('pointer-events', 'none');
+    if (mouseTransform) hover.setAttribute('transform', mouseTransform);
+    coastTint.after(hover);
+    this.layers.hover = hover;
 
     this._attachPointer();
     window.__board = this; // debug/testing handle
@@ -351,6 +469,12 @@ export class Board {
         return;
       }
 
+      // a touchscreen has no hover: a finger sliding across the board is
+      // panning or dragging a unit, never "pointing at" a province. Tracking
+      // it here also left a province highlighted wherever the last finger of
+      // a pinch happened to be — taps do the highlighting instead (see finish).
+      if (e.pointerType === 'touch' && !drag) return;
+
       const p = this._provinceAtClient(e.clientX, e.clientY);
       if (!drag) {
         this._setHover(p);
@@ -388,6 +512,10 @@ export class Board {
       this._removeGhost();
       if (!d) return;
       if (!cancelled && !d.moved) {
+        // a tap/click highlights the province it landed on — on touch this is
+        // the only way to highlight one
+        this._setHover(d.from);
+        if (this.handlers.onHover) this.handlers.onHover(d.from);
         if (d.from && this.handlers.onClick) this.handlers.onClick(d.from, e);
       } else if (!cancelled && d.spec) {
         const to = this._provinceAtClient(e.clientX, e.clientY);
@@ -415,21 +543,32 @@ export class Board {
     svg.addEventListener('dblclick', () => this.resetZoom());
   }
 
+  // Outlines the whole province and nothing else. Only the base shape is
+  // traced: the MouseLayer also carries a hit shape per coast of a split-coast
+  // province (spa-nc, spa-sc, …), and those bulge out into the sea — outlining
+  // them too made Spain, St Petersburg and Bulgaria look like three cut-out
+  // regions instead of one country. The coastlines already show where each
+  // coast lies.
   _setHover(p) {
     if (p === this._hovered) return;
-    const paint = (pv, on) => {
-      for (const el of this.layers.influence.querySelectorAll(`[data-prov]`)) {
-        if (prov(el.getAttribute('data-prov')) !== pv) continue;
-        const paths = el.tagName === 'path' ? [el] : [...el.querySelectorAll('path')];
-        for (const path of paths) {
-          path.setAttribute('stroke', on ? '#ffd479' : 'none');
-          path.setAttribute('stroke-width', on ? 4 : 0);
-        }
-      }
-    };
-    if (this._hovered) paint(prov(this._hovered), false);
     this._hovered = p;
-    if (p) paint(prov(p), true);
+    this.layers.hover.replaceChildren();
+    if (!p) return;
+    const pv = prov(p);
+    for (const el of this.layers.influence.querySelectorAll('[data-prov]')) {
+      const loc = el.getAttribute('data-prov');
+      if (loc.includes('/') || prov(loc) !== pv) continue;
+      const paths = el.tagName === 'path' ? [el] : [...el.querySelectorAll('path')];
+      for (const path of paths) {
+        const outline = path.cloneNode(false);
+        outline.removeAttribute('data-prov');
+        outline.setAttribute('fill', 'none');
+        outline.setAttribute('fill-opacity', '0');
+        outline.setAttribute('stroke', HOVER_COLOR);
+        outline.setAttribute('stroke-width', HOVER_WIDTH);
+        this.layers.hover.appendChild(outline);
+      }
+    }
   }
 
   _updateGhost(a, b, color) {
@@ -469,6 +608,10 @@ export class Board {
 
   setInfluence(scOwners) {
     for (const el of this.layers.influence.querySelectorAll('[data-prov]')) {
+      // skip the coast sub-shapes of split provinces (stp/nc, spa/sc, …) —
+      // they overlap the base shape, and stacking the translucent fill
+      // would render that part of the land darker than the rest
+      if (el.getAttribute('data-prov').includes('/')) continue;
       const p = prov(el.getAttribute('data-prov'));
       const owner = scOwners[p];
       const paths = el.tagName === 'path' ? [el] : [...el.querySelectorAll('path')];

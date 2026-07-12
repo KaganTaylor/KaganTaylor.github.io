@@ -35,13 +35,13 @@
         </div>
       </div>
     </div>
-    <p class="credits">Map: jDip (GPL) · Rules engine validated against the 167 Diplomacy Adjudicator Test Cases · <a href="test/datc.html">run the tests</a></p>
+    <p class="credits">Map: jDip (GPL) · Rules engine validated against the 167 Diplomacy Adjudicator Test Cases · <a href="test/datc.html">run the tests</a> · <button id="btn-token" class="linklike" title="Change or clear the GitHub personal access token used for publishing">🔑 GitHub token</button></p>
   </div>
 </section>
 
 <section id="game-screen" class="screen" hidden>
   <header id="topbar">
-    <button id="btn-home" title="Back to menu">☰</button>
+    <button id="btn-home" title="Home — back to the game menu" aria-label="Home">🏠</button>
     <span id="game-name"></span>
     <span id="phase-label"></span>
     <span id="readonly-badge" class="badge published" hidden>👁 Published — read only</span>
@@ -53,7 +53,6 @@
       <div id="topbar-more-menu">
         <button id="btn-publish" title="Publish this game as a read-only, shareable link">📣 Publish</button>
         <button id="btn-update-published" hidden title="Push the current position to the published link">☁ Update published</button>
-        <button id="btn-token" title="Change or clear the GitHub personal access token used for publishing">🔑 GitHub token</button>
         <button id="btn-export">Export</button>
       </div>
     </div>
@@ -82,7 +81,7 @@
           <button id="edit-1901">1901 setup</button>
           <button id="edit-clear">Clear board</button>
         </div>
-        <p class="hint">Click to place · drag any unit to reposition it freely · drag on empty space to pan, scroll to zoom, double-click to reset.</p>
+        <p class="hint">Tap or click the map to place · drag any unit to reposition it freely · drag empty space to pan, scroll or pinch to zoom, double-click/double-tap to reset. Switch to the 📝 Orders tab when you're done.</p>
       </div>
 
       <!-- orders entry -->

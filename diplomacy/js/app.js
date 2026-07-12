@@ -641,6 +641,17 @@ function applyMobileSheetUI() {
   for (const b of document.querySelectorAll('#mobile-tabbar .mtab')) {
     b.classList.toggle('active', b.dataset.sheet === mobileSheet);
   }
+  updateSheetInset();
+}
+
+// Reserve the open sheet's height at the bottom of the board pane so the map
+// shrinks to the space above it instead of hiding behind it — on mobile the
+// board must stay usable while a sheet is open (that's the whole point of the
+// Edit sheet). The stylesheet reads this as --sheet-h, and ignores it on
+// desktop, where the sidebar sits beside the board.
+function updateSheetInset() {
+  const h = mobileSheet ? $('sidebar').offsetHeight : 0;
+  $('main').style.setProperty('--sheet-h', h + 'px');
 }
 
 function selectMobileSheet(kind) {
@@ -1166,10 +1177,19 @@ async function init() {
       else selectMobileSheet(b.dataset.sheet);
     };
   }
+  // the sheet grows and shrinks with its contents (playback list, warnings…),
+  // and the board pane's inset has to follow it
+  new ResizeObserver(updateSheetInset).observe($('sidebar'));
+  addEventListener('resize', updateSheetInset);
   $('topbar-more-btn').onclick = (e) => {
     e.stopPropagation();
     $('topbar-more-menu').classList.toggle('open');
   };
+  // picking an action closes the menu (on desktop the menu is always open —
+  // its buttons sit inline in the topbar — and the class is simply unused)
+  for (const b of $('topbar-more-menu').querySelectorAll('button')) {
+    b.addEventListener('click', () => $('topbar-more-menu').classList.remove('open'));
+  }
   document.addEventListener('pointerdown', (e) => {
     const menu = $('topbar-more-menu');
     if (menu.classList.contains('open') && !menu.contains(e.target) && e.target !== $('topbar-more-btn')) {
