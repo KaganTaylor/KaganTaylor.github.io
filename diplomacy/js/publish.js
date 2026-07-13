@@ -60,12 +60,35 @@ export async function updatePublished(game) {
 }
 
 // Reads a published game by gist id. No auth needed — gists are public.
+// Returns {game, ownerLogin} so callers can tell whether their own token
+// belongs to the account that published it.
 export async function fetchPublished(gistId) {
   const json = await ghFetch(`${API}/gists/${gistId}`);
   const file = json.files && json.files['game.json'];
   if (!file) throw new Error('gist has no game.json file');
   const content = file.truncated ? await (await fetch(file.raw_url)).text() : file.content;
-  return JSON.parse(content);
+  return { game: JSON.parse(content), ownerLogin: json.owner && json.owner.login };
+}
+
+// Resolves the GitHub login a token belongs to, so it can be compared
+// against a gist's owner — any browser holding the publisher's token
+// should be recognized as able to publish, not just the one that first
+// created the gist. Cached per-token since it's called on every load.
+let cachedToken = null;
+let cachedLogin = null;
+export async function getAuthenticatedLogin(token) {
+  if (!token) return null;
+  if (token === cachedToken) return cachedLogin;
+  try {
+    const json = await ghFetch(`${API}/user`, {
+      headers: { Authorization: `token ${token}`, Accept: 'application/vnd.github+json' },
+    });
+    cachedToken = token;
+    cachedLogin = json.login;
+    return cachedLogin;
+  } catch {
+    return null;
+  }
 }
 
 // Accepts a bare gist id or a full gist URL and returns the id, or null.

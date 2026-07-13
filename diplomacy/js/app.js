@@ -11,7 +11,7 @@ import {
   adjudicateAdjustments,
 } from './adjudicator.js';
 import { PROVINCES, POWERS } from './map-data.js';
-import { getToken, setToken, publishGame, updatePublished, fetchPublished, extractGistId } from './publish.js';
+import { getToken, setToken, publishGame, updatePublished, fetchPublished, getAuthenticatedLogin, extractGistId } from './publish.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -156,7 +156,9 @@ function renderHome() {
     if (g.published) li.className = 'published';
     const load = document.createElement('button');
     load.className = 'load';
-    const badge = g.published ? ` <span class="badge published">${g.isOwner ? 'Published' : 'Read only'}</span>` : '';
+    const badge = g.published
+      ? ` <span class="badge published">${g.isOwner ? 'Published' : 'Read only'}</span>`
+      : g.sandbox ? ' <span class="badge sandbox">Sandbox</span>' : '';
     load.innerHTML = `${name} <span class="meta">· ${S.phaseLabel(g)}</span>${badge}`;
     load.onclick = () => openGame(g);
     const del = document.createElement('button');
@@ -223,7 +225,7 @@ function refreshAll() {
   $('readonly-badge').hidden = !ro;
   $('country-row').hidden = !ro;
   if (ro) renderCountrySelect();
-  $('orders-text').readOnly = ro && !myCountry();
+  $('orders-text').readOnly = false;
   $('btn-resolve').hidden = ro;
   $('btn-resolve-final').hidden = ro;
   $('btn-edit').hidden = ro || !game.sandbox;
@@ -477,8 +479,6 @@ function attachBoardHandlers() {
   board.handlers = {
     canDrag(p) {
       if (playback || !game) return null;
-      const myC = myCountry();
-      if (isReadOnly() && !myC) return null;
       const base = prov(p);
       if (editMode || game.step === 'movement') {
         const u = unitAt(base);
@@ -500,7 +500,7 @@ function attachBoardHandlers() {
       if (game.step === 'retreat') return retreatDrop(from, toProv, ev);
     },
     onClick(p, ev) {
-      if (playback || !game || (isReadOnly() && !myCountry())) return;
+      if (playback || !game) return;
       const base = prov(p);
       if (editMode) return editClick(base, ev);
       if (game.step === 'retreat') {
@@ -754,6 +754,8 @@ async function resolveAndSkip() {
   playback = null;
   $('panel-orders').hidden = true;
   $('panel-edit').hidden = true;
+  mobileSheet = null;
+  applyMobileSheetUI();
   board.clearOrders();
   board.setPhaseText(entry.label);
   board.setInfluence(entry.scOwnersBefore);
@@ -1141,15 +1143,30 @@ async function loadPublishedGame(idOrUrl) {
   const local = Object.values(games).find((g) => g.gistId === id);
   if (local && local.isOwner) return openGame(local);
   try {
-    const fetched = await fetchPublished(id);
+    const { game: fetched, ownerLogin } = await fetchPublished(id);
+    const token = getToken();
+    const myLogin = token ? await getAuthenticatedLogin(token) : null;
+    // Any browser holding the publisher's token counts as the owner — not
+    // just the one that originally ran "Publish".
+    const isOwner = !!(myLogin && ownerLogin && myLogin === ownerLogin);
+    if (isOwner && local) {
+      local.isOwner = true;
+      S.saveGame(local);
+      return openGame(local);
+    }
     const g = S.importGame(JSON.stringify(fetched));
     g.gistId = id;
     g.published = true;
-    g.isOwner = false;
+    g.isOwner = isOwner;
     g.name = local ? local.name : uniqueName(g.name || 'Published game');
     g.myCountry = local ? local.myCountry : null; // keep the viewer's chosen country
     openGame(g);
-    toast('Loaded published game — pick your country to write orders, or Branch to plan ahead', 'info');
+    toast(
+      isOwner
+        ? 'Loaded published game — you can publish updates from this browser too'
+        : 'Loaded published game — pick your country to write orders, or Branch to plan ahead',
+      'info'
+    );
   } catch (e) {
     if (local) {
       openGame(local);

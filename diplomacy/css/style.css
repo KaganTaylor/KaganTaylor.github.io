@@ -49,6 +49,7 @@ a { color: #7fb4ff; }
 #game-list li.published .load:hover { background: #253355; }
 .badge { font-size: 0.8em; padding: 2px 8px; border-radius: 10px; }
 .badge.published { background: #1f2b40; color: #8fb4ea; border: 1px solid #3f5c8f; }
+.badge.sandbox { background: #2b2010; color: #e0b070; border: 1px solid #8f6a3f; }
 .filebtn {
   display: inline-block; text-align: center;
   background: #2c313a; border: 1px solid #454c58; border-radius: 6px;
