@@ -224,8 +224,8 @@ function refreshAll() {
   $('country-row').hidden = !ro;
   if (ro) renderCountrySelect();
   $('orders-text').readOnly = ro && !myCountry();
-  $('btn-resolve').disabled = ro;
-  $('btn-resolve-final').disabled = ro;
+  $('btn-resolve').hidden = ro;
+  $('btn-resolve-final').hidden = ro;
   $('btn-edit').hidden = ro || !game.sandbox;
   const editTab = document.querySelector('#mobile-tabbar .mtab[data-sheet="edit"]');
   if (editTab) editTab.hidden = ro || !game.sandbox;
