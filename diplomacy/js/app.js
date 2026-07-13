@@ -23,6 +23,12 @@ let editTool = 'A';
 let lastParsed = { orders: [], errors: [], byProv: new Map() };
 let mobileSheet = null; // null | 'edit' | 'orders' | 'standings' — mobile bottom-sheet state
 
+// Gist viewers drag/click units for ANY power to sketch out what opponents
+// might do, but the orders textarea only ever shows the power they're
+// playing as. Those other powers' order lines live here instead — a second
+// text buffer in the same line format, just never rendered into the box.
+let hiddenOrdersText = '';
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
@@ -220,7 +226,9 @@ function refreshAll() {
   $('orders-text').readOnly = ro && !myCountry();
   $('btn-resolve').disabled = ro;
   $('btn-resolve-final').disabled = ro;
-  $('btn-edit').hidden = ro;
+  $('btn-edit').hidden = ro || !game.sandbox;
+  const editTab = document.querySelector('#mobile-tabbar .mtab[data-sheet="edit"]');
+  if (editTab) editTab.hidden = ro || !game.sandbox;
   $('btn-undo').disabled = ro || !game.history.length;
   $('btn-redo').disabled = ro || !(game.redoStack && game.redoStack.length);
   $('btn-publish').hidden = ro || !!game.published;
@@ -244,6 +252,7 @@ function renderCountrySelect() {
 }
 
 function prefillOrders() {
+  hiddenOrdersText = '';
   const ta = $('orders-text');
   const info = $('phase-info');
   const myC = myCountry();
@@ -294,26 +303,29 @@ function prefillOrders() {
 }
 
 function onOrdersChanged() {
-  const { orders, errors } = parseOrders($('orders-text').value, phaseKind());
-  lastParsed = { orders, errors, byProv: new Map(), illegal: new Map() };
-  for (const o of orders) if (o.loc) lastParsed.byProv.set(prov(o.loc), o);
-  const warnings = validateOrders(orders);
+  const own = parseOrders($('orders-text').value, phaseKind());
+  const all = hiddenOrdersText
+    ? parseOrders($('orders-text').value + '\n' + hiddenOrdersText, phaseKind())
+    : own;
+  lastParsed = { orders: all.orders, errors: own.errors, byProv: new Map(), illegal: new Map() };
+  for (const o of lastParsed.orders) if (o.loc) lastParsed.byProv.set(prov(o.loc), o);
+  const warnings = validateOrders(lastParsed.orders);
   const el = $('parse-status');
   const parts = [];
-  if (errors.length) {
+  if (own.errors.length) {
     parts.push(`<span class="err">` +
-      errors.map((e) => '✕ ' + escapeHtml(e)).join('\n') + '</span>');
+      own.errors.map((e) => '✕ ' + escapeHtml(e)).join('\n') + '</span>');
   }
   if (warnings.length) {
     parts.push(`<span class="warn">` +
       warnings.map((w) => '⚠ ' + escapeHtml(w)).join('\n') + '</span>');
   }
   if (!parts.length) {
-    parts.push(`<span class="ok">${orders.length} order${orders.length === 1 ? '' : 's'} ✓ (everyone else holds)</span>`);
+    parts.push(`<span class="ok">${own.orders.length} order${own.orders.length === 1 ? '' : 's'} ✓ (everyone else holds)</span>`);
   }
   el.innerHTML = parts.join('\n');
   drawLive();
-  return { orders, errors };
+  return { orders: own.orders, errors: own.errors };
 }
 
 // Dry-run the current orders through the real engine so problems that will
@@ -355,10 +367,8 @@ function validateOrders(orders) {
 function drawLive(excludeProv = null) {
   if (playback || !game) return;
   board.clearOrders();
-  const myC = myCountry();
   for (const o of lastParsed.orders) {
     if (excludeProv && o.loc && prov(o.loc) === excludeProv) continue;
-    if (myC && o.power !== myC) continue;
     const reason = o.loc && lastParsed.illegal.get(prov(o.loc));
     // a convoy that cannot exist is a void order (the unit holds) — no
     // arrow at all; the warning below the order box explains why
@@ -393,8 +403,8 @@ function orderTextFor(u, spec) {
 
 // Scan the textarea for the line holding `power`'s order for the unit in
 // `unitProv`. Returns {lines, foundIdx, headerIdx, lastOfSection}.
-function locateOrderLine(power, unitProv) {
-  const lines = $('orders-text').value.split('\n');
+function locateOrderLine(power, unitProv, sourceText) {
+  const lines = sourceText.split('\n');
   let current = null;
   let headerIdx = -1, lastOfSection = -1, foundIdx = -1;
   for (let i = 0; i < lines.length; i++) {
@@ -422,9 +432,14 @@ function locateOrderLine(power, unitProv) {
   return { lines, foundIdx, headerIdx, lastOfSection };
 }
 
-// newText === null removes the unit's order line
+// newText === null removes the unit's order line. Orders for a power other
+// than the one the viewer is playing as go into the hidden buffer instead of
+// the visible textarea — see hiddenOrdersText above.
 function syncOrderLine(power, unitProv, newText) {
-  const { lines, foundIdx, headerIdx, lastOfSection } = locateOrderLine(power, unitProv);
+  const myC = myCountry();
+  const foreign = myC && power !== myC;
+  const source = foreign ? hiddenOrdersText : $('orders-text').value;
+  const { lines, foundIdx, headerIdx, lastOfSection } = locateOrderLine(power, unitProv, source);
   if (foundIdx >= 0) {
     if (newText === null) lines.splice(foundIdx, 1);
     else lines[foundIdx] = newText;
@@ -432,7 +447,8 @@ function syncOrderLine(power, unitProv, newText) {
     if (headerIdx >= 0) lines.splice(lastOfSection + 1, 0, newText);
     else lines.push('', power.toUpperCase(), newText);
   }
-  $('orders-text').value = lines.join('\n');
+  if (foreign) hiddenOrdersText = lines.join('\n');
+  else $('orders-text').value = lines.join('\n');
   onOrdersChanged();
 }
 
@@ -443,7 +459,9 @@ function setOrder(u, spec) {
 function selectOrderLine(unitProv) {
   const u = unitAt(unitProv);
   if (!u) return;
-  const { lines, foundIdx } = locateOrderLine(u.power, unitProv);
+  const myC = myCountry();
+  if (myC && u.power !== myC) return; // foreign order lives in the hidden buffer — nothing to select
+  const { lines, foundIdx } = locateOrderLine(u.power, unitProv, $('orders-text').value);
   if (foundIdx < 0) return;
   const ta = $('orders-text');
   let start = 0;
@@ -464,12 +482,12 @@ function attachBoardHandlers() {
       const base = prov(p);
       if (editMode || game.step === 'movement') {
         const u = unitAt(base);
-        if (!u || (myC && u.power !== myC)) return null;
+        if (!u) return null;
         return { color: POWER_COLORS[u.power] };
       }
       if (game.step === 'retreat') {
         const d = dislodgedAt(base);
-        if (!d || (myC && d.unit.power !== myC)) return null;
+        if (!d) return null;
         return { color: POWER_COLORS[d.unit.power] };
       }
       return null;
@@ -487,9 +505,7 @@ function attachBoardHandlers() {
       if (editMode) return editClick(base, ev);
       if (game.step === 'retreat') {
         const d = dislodgedAt(base);
-        if (d && !(myCountry() && d.unit.power !== myCountry())) {
-          syncOrderLine(d.unit.power, base, orderTextFor(d.unit, { kind: 'disband' }));
-        }
+        if (d) syncOrderLine(d.unit.power, base, orderTextFor(d.unit, { kind: 'disband' }));
         return;
       }
       if (game.step === 'adjustment') return adjustmentClick(base, ev);
@@ -587,9 +603,7 @@ function retreatDrop(from, to, ev) {
 
 function adjustmentClick(p, ev) {
   const counts = S.adjustmentCounts(game);
-  const myC = myCountry();
   const u = unitAt(p);
-  if (myC && ((u && u.power !== myC) || (!u && game.scOwners[p] !== myC))) return;
   if (u && (counts[u.power] || 0) < 0) {
     // toggle removal
     const existing = lastParsed.orders.find((o) => o.kind === 'remove' && prov(o.loc) === p);
