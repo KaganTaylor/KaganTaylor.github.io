@@ -100,11 +100,12 @@ export async function getAuthenticatedLogin(token) {
 // so each player instead maintains ONE gist comment, posted with their own
 // token and edited in place on every resubmit. Comments are separate API
 // objects, so simultaneous submissions from different players can never
-// conflict; GitHub stamps each comment with the author's login, so a
-// submission cannot be forged. At the deadline (a scheduled GitHub Action,
-// or the GM's publish buttons) the latest valid comment per assigned power is
-// copied into a per-power file — moves-<power>.json — written with the GM's
-// token, the file's only writer.
+// conflict; GitHub stamps each comment with the author's login (identity)
+// and updated_at (late-edit detection), so a submission cannot be forged or
+// quietly changed after the deadline. Once the deadline passes the game
+// either reveals the comments to everyone directly (auto publish) or waits
+// for the GM to review and copy them into per-power files —
+// moves-<power>.json — written with the GM's token, the files' only writer.
 // ---------------------------------------------------------------------------
 
 export const ORDERS_MARKER = 'DIPLOMACY-ORDERS v1';
@@ -137,13 +138,14 @@ export function parseSubmission(body) {
 }
 
 // The one submission comment a given GitHub account holds on this gist.
-// Returns {commentId, submission} or null.
+// Returns {commentId, submission, updatedAt} or null — updatedAt is GitHub's
+// own edit stamp, the arbiter of whether a submission beat the deadline.
 export function findSubmission(comments, login) {
   if (!login) return null;
   for (const c of comments) {
     if (c.user && c.user.login.toLowerCase() === login.toLowerCase()) {
       const sub = parseSubmission(c.body);
-      if (sub) return { commentId: c.id, submission: sub };
+      if (sub) return { commentId: c.id, submission: sub, updatedAt: c.updated_at || c.created_at || null };
     }
   }
   return null;

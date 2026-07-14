@@ -121,17 +121,26 @@
         <div id="players-rows"></div>
         <div class="btnrow">
           <button id="players-save" title="Save the assignments to the published game">💾 Save assignments</button>
-          <button id="players-publish-all" class="primary" title="Publish every power's submitted moves for the current phase (skips powers already published)">📣 Publish all submitted</button>
+          <button id="players-review" title="Fill the order box with every submission — for your eyes only, nothing is published">🔍 Review submissions</button>
+          <button id="players-publish-all" class="primary" title="Reveal every power's submitted moves to all players (skips powers already published and late edits)">📣 Publish results</button>
         </div>
+        <h3 class="subhead">⚙ Settings</h3>
+        <div class="sandbox-row">
+          <select id="publish-mode" title="What happens when the deadline passes">
+            <option value="manual">📋 Manual publish — review first</option>
+            <option value="auto">⚡ Auto publish at the deadline</option>
+          </select>
+        </div>
+        <p class="hint" id="publish-mode-hint"></p>
         <h3 class="subhead">⏰ Deadline</h3>
-        <p class="hint">Submitted moves publish automatically (checked hourly) once the deadline you
-          confirm here passes — no deadline, no auto-publish. Movement phases usually get a week;
-          retreats and builds a day or two.</p>
+        <p class="hint">Submissions close when the deadline passes. Confirm a new one each phase —
+          a week for movement, a day or two for retreats and builds. Confirming a new deadline
+          re-opens submissions.</p>
         <div class="btnrow">
           <button id="deadline-plus-week" title="Previous deadline + 1 week (from now if none is set)">+1 week</button>
           <button id="deadline-plus-2day" title="Previous deadline + 48 hours (from now if none is set)">+48 h</button>
           <button id="deadline-plus-day" title="Previous deadline + 24 hours (from now if none is set)">+24 h</button>
-          <button id="deadline-clear" title="Remove the deadline — nothing publishes until you set a new one">✖ Clear</button>
+          <button id="deadline-clear" title="Remove the deadline — submissions stay open until you confirm a new one">✖ Clear</button>
         </div>
         <div class="sandbox-row">
           <input id="deadline-input" type="datetime-local" title="Pick a custom deadline (your local time)">

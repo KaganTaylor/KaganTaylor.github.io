@@ -252,12 +252,16 @@ function refreshAll() {
   $('country-row').hidden = !ro;
   if (ro) renderCountrySelect();
   $('orders-text').readOnly = false;
-  $('btn-resolve').hidden = ro;
-  $('btn-resolve-final').hidden = ro;
+  // auto-publish games open up local resolution once the deadline reveals
+  // everyone's moves — a preview only; the GM's published update stays
+  // authoritative and reloads over it
+  const localResolve = ro && publishMode() === 'auto' && deadlinePassed();
+  $('btn-resolve').hidden = ro && !localResolve;
+  $('btn-resolve-final').hidden = ro && !localResolve;
   $('btn-edit').hidden = ro || !game.sandbox;
   const editTab = document.querySelector('#mobile-tabbar .mtab[data-sheet="edit"]');
   if (editTab) editTab.hidden = ro || !game.sandbox;
-  $('btn-undo').disabled = ro || !game.history.length;
+  $('btn-undo').disabled = (ro && !localResolve) || !game.history.length;
   $('btn-redo').disabled = ro || !(game.redoStack && game.redoStack.length);
   $('btn-publish').hidden = ro || !!game.published;
   $('btn-update-published').hidden = !(game.published && game.isOwner);
@@ -915,6 +919,7 @@ function resolveCurrent() {
   const entry = S.resolvePhase(game, orders, text);
   S.saveGame(game);
   startPlayback(entry, false);
+  if (isReadOnly()) toast('Local preview — the game master’s published update stays the official position', 'info');
 }
 
 // Resolves the phase but skips the order-by-order reveal entirely: shows the
@@ -938,6 +943,7 @@ async function resolveAndSkip() {
   board.setUnits(entry.unitsBefore, entry.step === 'retreat' ? entry.dislodged : []);
   await board.animateFinal(entry);
   refreshAll();
+  if (isReadOnly()) toast('Local preview — the game master’s published update stays the official position', 'info');
 }
 
 function redoPhase() {
@@ -1246,8 +1252,9 @@ async function importFile(file) {
 }
 
 // ---------------------------------------------------------------------------
-// online play (players submit moves as gist comments; the GM / a scheduled
-// GitHub Action publishes them into per-power moves-<power>.json files)
+// online play (players submit moves as gist comments; at the deadline the
+// game either reveals them to everyone directly — auto publish — or waits
+// for the GM to review and publish per-power moves-<power>.json files)
 // ---------------------------------------------------------------------------
 function activePowers() {
   return POWERS.filter(
@@ -1255,23 +1262,68 @@ function activePowers() {
   );
 }
 
+// How the deadline is handled — the GM picks this in ⚙ Settings.
+// 'manual' (default): after the deadline only the GM sees submissions, until
+// they review and 📣 Publish results (or re-open with a new deadline).
+// 'auto': the moment the deadline passes, every viewer reveals all
+// submissions straight from the comments — no publish step needed.
+function publishMode() {
+  return game && game.publishMode === 'auto' ? 'auto' : 'manual';
+}
+
+function deadlinePassed() {
+  const d = deadlineDate();
+  return !!d && d.getTime() <= Date.now();
+}
+
+// In auto mode a comment edited after the deadline is void — judged by
+// GitHub's own updated_at stamp, never the client-claimed submittedAt.
+function submissionOnTime(found) {
+  const d = deadlineDate();
+  return !d || !found.updatedAt || new Date(found.updatedAt) <= d;
+}
+
+// The power's valid submission comment for the current phase, or null.
+function phaseSubmission(p) {
+  const login = (game.players || {})[p];
+  const found = login && online.comments && findSubmission(online.comments, login);
+  if (found && matchesPhase(found.submission) && found.submission.power === p) return found;
+  return null;
+}
+
+// What everyone may see for a power this phase: its published file entry, or
+// — in auto mode once the deadline has passed — the on-time submission
+// comment itself (the files are then just a durable record).
+function revealedEntry(p) {
+  const doc = online.moves && online.moves[p];
+  const entry = doc && doc.history.find(matchesPhase);
+  if (entry) return entry;
+  if (publishMode() !== 'auto' || !deadlinePassed()) return null;
+  const found = phaseSubmission(p);
+  return found && submissionOnTime(found) ? found.submission : null;
+}
+
 // What the current phase knows about a power: 'published' (its moves file has
-// an entry for this phase), 'submitted' (a valid comment is waiting),
-// 'none', or 'unknown' (comments not fetched yet / offline).
+// an entry for this phase), 'revealed'/'late' (auto mode, deadline passed),
+// 'submitted' (a valid comment is waiting), 'none', or 'unknown' (comments
+// not fetched yet / offline).
 function powerOnlineStatus(p) {
   const doc = online.moves && online.moves[p];
   if (doc && doc.history.some(matchesPhase)) return 'published';
   if (!online.comments) return 'unknown';
-  const login = (game.players || {})[p];
-  if (login) {
-    const found = findSubmission(online.comments, login);
-    if (found && matchesPhase(found.submission) && found.submission.power === p) return 'submitted';
+  const found = phaseSubmission(p);
+  if (found) {
+    if (publishMode() === 'auto' && deadlinePassed())
+      return submissionOnTime(found) ? 'revealed' : 'late';
+    return 'submitted';
   }
   return 'none';
 }
 
 const STATUS_BADGE = {
   published: ['✓ published', 'st-published'],
+  revealed: ['✓ revealed', 'st-published'],
+  late: ['⚠ late edit — void', 'st-none'],
   submitted: ['📨 submitted', 'st-submitted'],
   none: ['— waiting', 'st-none'],
   unknown: ['…', 'st-none'],
@@ -1281,7 +1333,14 @@ function renderOnlineUI() {
   if (!game) return;
   const hasPlayers = !!(game.published && game.players && Object.values(game.players).some(Boolean));
   $('submit-row').hidden = !assignedPower();
+  $('btn-submit-moves').disabled = deadlinePassed();
   $('online-row').hidden = !hasPlayers;
+  if (isReadOnly() && !playback) {
+    // keep the local-preview Resolve in step with the deadline ticking over
+    const localResolve = publishMode() === 'auto' && deadlinePassed();
+    $('btn-resolve').hidden = !localResolve;
+    $('btn-resolve-final').hidden = !localResolve;
+  }
   renderSubmitStatus();
   if (hasPlayers) {
     renderDeadlineInfo();
@@ -1295,9 +1354,21 @@ function renderSubmitStatus() {
   if (!p) return;
   const el = $('submit-status');
   const status = powerOnlineStatus(p);
+  el.classList.toggle('done', status === 'published' || status === 'revealed' || status === 'submitted');
   if (status === 'published') {
     el.textContent = '✓ Published — your moves are locked in for this phase';
-    el.classList.add('done');
+    return;
+  }
+  if (status === 'revealed') {
+    el.textContent = '✓ Revealed — the deadline passed and everyone can see your moves';
+    return;
+  }
+  if (status === 'late') {
+    el.textContent = '⚠ Edited after the deadline — this submission is void';
+    return;
+  }
+  if (deadlinePassed()) {
+    el.textContent = 'Deadline passed — submissions are closed';
     return;
   }
   const found = online.comments && online.login && findSubmission(online.comments, online.login);
@@ -1305,7 +1376,6 @@ function renderSubmitStatus() {
   if (s && matchesPhase(s) && s.power === p) {
     const when = s.submittedAt ? ' · ' + new Date(s.submittedAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '';
     el.textContent = `✓ Submitted${when} — resubmit any time before the deadline`;
-    el.classList.add('done');
   } else {
     el.textContent = 'Not submitted for this phase yet';
     el.classList.remove('done');
@@ -1328,8 +1398,9 @@ function renderSubmissionBoard() {
 }
 
 // ---- deadlines -------------------------------------------------------------
-// The GM confirms every deadline; the hourly Action only publishes a game
-// whose deadline has passed. game.deadline is an ISO timestamp in game.json.
+// The GM confirms every deadline (game.deadline, an ISO timestamp in
+// game.json). When it passes, submissions close; what happens next depends
+// on publishMode() — instant reveal, or GM review first.
 function deadlineDate() {
   if (!game || !game.deadline) return null;
   const d = new Date(game.deadline);
@@ -1352,7 +1423,7 @@ function renderDeadlineInfo() {
   el.classList.remove('past');
   if (!d) {
     el.textContent = game.isOwner
-      ? '⏰ No deadline set — moves will not auto-publish until you confirm one below'
+      ? '⏰ No deadline set — submissions stay open until you confirm one below'
       : '⏰ No deadline set yet — ask your game master';
     return;
   }
@@ -1360,7 +1431,12 @@ function renderDeadlineInfo() {
   if (d - Date.now() > 0) {
     el.textContent = `⏰ Deadline: ${when} (in ${fmtCountdown(d - Date.now())})`;
   } else {
-    el.textContent = `⏰ Deadline passed (${when}) — moves publish on the next hourly check`;
+    el.textContent =
+      publishMode() === 'auto'
+        ? `⏰ Deadline passed (${when}) — all submissions are revealed. ⬇ Load them, then Resolve to preview the result`
+        : game.isOwner
+          ? `⏰ Deadline passed (${when}) — 🔍 review the submissions, then 📣 publish results or re-open with a new deadline`
+          : `⏰ Deadline passed (${when}) — the game master is reviewing the results`;
     el.classList.add('past');
   }
 }
@@ -1379,9 +1455,28 @@ async function setDeadline(date) {
   renderDeadlineInfo();
   try {
     await updatePublished(game);
-    toast(date ? `Deadline confirmed: ${date.toLocaleString()}` : 'Deadline cleared — nothing will auto-publish', 'info');
+    toast(date ? `Deadline confirmed: ${date.toLocaleString()}` : 'Deadline cleared — submissions stay open', 'info');
   } catch (e) {
     toast('Could not save the deadline: ' + e.message);
+    if (isAuthError(e)) askToken();
+  }
+}
+
+// GM: how the deadline resolves — instant reveal, or review first.
+async function setPublishMode(mode) {
+  game.publishMode = mode;
+  S.saveGame(game);
+  renderOnlineUI();
+  try {
+    await updatePublished(game);
+    toast(
+      mode === 'auto'
+        ? 'Auto publish: everyone sees all moves the moment the deadline passes'
+        : 'Manual publish: after the deadline you review the submissions before releasing them',
+      'info'
+    );
+  } catch (e) {
+    toast('Could not save the setting: ' + e.message);
     if (isAuthError(e)) askToken();
   }
 }
@@ -1398,6 +1493,12 @@ function bumpDeadline(hours) {
 function renderPlayersPanel() {
   const input = $('deadline-input');
   if (document.activeElement !== input) input.value = game.deadline ? isoToLocalInput(game.deadline) : '';
+  const modeSel = $('publish-mode');
+  if (document.activeElement !== modeSel) modeSel.value = publishMode();
+  $('publish-mode-hint').textContent =
+    publishMode() === 'auto'
+      ? 'When the deadline passes, every player immediately sees all submitted moves and can preview the result. Submissions edited after the deadline are void.'
+      : 'When the deadline passes, submissions lock and only you see them. 🔍 Review the moves, then 📣 Publish results — or re-open by confirming a new deadline.';
   const rows = $('players-rows');
   rows.replaceChildren();
   for (const p of activePowers()) {
@@ -1413,7 +1514,7 @@ function renderPlayersPanel() {
     input.dataset.power = p;
     const status = document.createElement('span');
     status.className = 'pstatus ' + STATUS_BADGE[powerOnlineStatus(p)][1];
-    status.textContent = { published: '✓', submitted: '📨', none: '—', unknown: '…' }[powerOnlineStatus(p)];
+    status.textContent = { published: '✓', revealed: '✓', late: '⚠', submitted: '📨', none: '—', unknown: '…' }[powerOnlineStatus(p)];
     status.title = STATUS_BADGE[powerOnlineStatus(p)][0];
     const mk = (txt, title, fn) => {
       const b = document.createElement('button');
@@ -1450,7 +1551,10 @@ async function refreshOnlineStatus() {
     const login = token ? await getAuthenticatedLogin(token) : null;
     if (game !== g) return; // user switched games while we were fetching
     if (fresh && fresh.players) g.players = fresh.players;
-    if (fresh && !g.isOwner) g.deadline = fresh.deadline || null;
+    if (fresh && !g.isOwner) {
+      g.deadline = fresh.deadline || null;
+      g.publishMode = fresh.publishMode || null;
+    }
     online.moves = moves;
     online.comments = comments;
     online.login = login;
@@ -1496,6 +1600,8 @@ function maybeRestoreSubmission() {
 async function doSubmitMoves() {
   const power = assignedPower();
   if (!power) return;
+  if (deadlinePassed())
+    return toast('The deadline has passed — ask your game master to re-open with a new deadline');
   if (!getToken() && !askToken()) return;
   // only this player's block is submitted, whatever view the box is in
   const block = powerBlockText(power);
@@ -1516,12 +1622,14 @@ async function doSubmitMoves() {
     toast('Submit failed: ' + e.message);
     if (isAuthError(e)) askToken();
   } finally {
-    btn.disabled = false;
+    btn.disabled = deadlinePassed();
   }
 }
 
-// Fills the order box with every power's published moves for the current
-// phase — the reveal for players, the pre-resolve step for the GM.
+// Fills the order box with every power's revealed moves for the current
+// phase — published file entries, plus (auto mode, past deadline) on-time
+// submissions straight from the comments. The reveal for players, the
+// pre-resolve step for the GM.
 async function doLoadPublishedMoves() {
   const btn = $('btn-load-moves');
   btn.disabled = true;
@@ -1529,21 +1637,40 @@ async function doLoadPublishedMoves() {
     if (!online.moves) await refreshOnlineStatus();
     const blocks = [];
     for (const p of POWERS) {
-      const doc = online.moves && online.moves[p];
-      const entry = doc && doc.history.find(matchesPhase);
+      const entry = revealedEntry(p);
       if (entry && entry.orders.trim()) blocks.push(p.toUpperCase() + '\n' + entry.orders.trim() + '\n');
     }
     if (!blocks.length) return toast('No published moves for this phase yet');
     applyOrdersText(blocks.join('\n'));
-    toast(`Loaded published moves for ${blocks.length} power${blocks.length === 1 ? '' : 's'}`, 'info');
+    toast(`Loaded moves for ${blocks.length} power${blocks.length === 1 ? '' : 's'}`, 'info');
   } finally {
     btn.disabled = false;
   }
 }
 
-// GM: copy submitted comments into the per-power files. Without `force`,
-// powers already published for this phase are skipped (same rule as the
-// scheduled Action) so late comment edits cannot slip in.
+// GM: load everyone's submitted comments into the order box WITHOUT
+// publishing anything — the manual-mode review step after the deadline.
+async function gmReviewSubmissions() {
+  try {
+    if (!online.comments) await refreshOnlineStatus();
+    const blocks = [];
+    for (const p of activePowers()) {
+      const found = phaseSubmission(p);
+      const s = found && found.submission;
+      if (s && s.orders.trim()) blocks.push(p.toUpperCase() + '\n' + s.orders.trim() + '\n');
+    }
+    if (!blocks.length) return toast('No submissions for this phase yet');
+    applyOrdersText(blocks.join('\n'));
+    toast(`Loaded ${blocks.length} submission${blocks.length === 1 ? '' : 's'} for review — nothing is published yet`, 'info');
+  } catch (e) {
+    toast('Could not load submissions: ' + e.message);
+  }
+}
+
+// GM: copy submitted comments into the per-power files — 📣 Publish results.
+// Without `force`, powers already published for this phase are skipped, and
+// so are comments edited after the deadline; the per-power 📥 button forces
+// through both (the deliberate grace path).
 async function gmPublishFromComments(powers, { force = false } = {}) {
   try {
     const gistJson = await fetchGist(game.gistId);
@@ -1563,6 +1690,10 @@ async function gmPublishFromComments(powers, { force = false } = {}) {
       const s = found && found.submission;
       if (!s || !matchesPhase(s) || s.power !== p) {
         skipped.push(`${cap(p)}: no submission for this phase`);
+        continue;
+      }
+      if (!force && deadlinePassed() && !submissionOnTime(found)) {
+        skipped.push(`${cap(p)}: edited after the deadline (📥 to allow it)`);
         continue;
       }
       updates[p] = upsertMovesEntry(moves[p], p, {
@@ -1825,7 +1956,9 @@ async function init() {
   $('btn-load-moves').onclick = doLoadPublishedMoves;
   $('btn-refresh-online').onclick = () => refreshOnlineStatus();
   $('players-save').onclick = savePlayers;
+  $('players-review').onclick = gmReviewSubmissions;
   $('players-publish-all').onclick = () => gmPublishFromComments(activePowers());
+  $('publish-mode').onchange = (e) => setPublishMode(e.target.value);
   $('deadline-plus-week').onclick = () => bumpDeadline(7 * 24);
   $('deadline-plus-2day').onclick = () => bumpDeadline(48);
   $('deadline-plus-day').onclick = () => bumpDeadline(24);
@@ -1895,6 +2028,13 @@ async function init() {
   $('btn-undo').onclick = undoPhase;
   $('btn-redo').onclick = redoPhase;
   $('btn-branch').onclick = branchCurrent;
+
+  // tick the deadline countdown — and, in auto-publish games, flip the UI
+  // over to the reveal — while a published game sits open. Render-only; the
+  // network is touched only by the 🔄 button and explicit actions.
+  setInterval(() => {
+    if (game && game.published && !playback) renderOnlineUI();
+  }, 60000);
 
   renderHome();
   showScreen('home-screen');

@@ -15,7 +15,7 @@ A dependency-free web app for playing and practicing [Diplomacy](https://en.wiki
 - **Full game loop** — spring/fall movement, retreats, supply-center capture, winter builds & civil-disorder disbands.
 - **History & branching** — replay any past turn's step-through; branch a practice copy from any point to test future moves.
 - **Sharing** — export/import the whole game as a JSON file; state also autosaves in your browser.
-- **Online play** — publish a game as a GitHub gist link; assigned players submit their orders in-app with their own GitHub token, a scheduled Action reveals everyone's moves when the game master's confirmed deadline passes, and the game master resolves. See [Playing online](#playing-online).
+- **Online play** — publish a game as a GitHub gist link; assigned players submit their orders in-app with their own GitHub token. When the game master's confirmed deadline passes, moves either reveal to everyone instantly (auto publish) or go to the game master first for review (manual publish, the default). See [Playing online](#playing-online).
 - **Sandbox** — set up any position (units, coasts, supply centers) and try things.
 
 ## Running
@@ -58,18 +58,20 @@ A published game (a public GitHub gist) can collect each player's orders directl
 
 1. Publish the game (📣 Publish — needs a classic personal access token with only the `gist` scope).
 2. In the **👥 Players** panel, enter each power's player as their GitHub username and 💾 Save.
-3. Confirm the phase's **⏰ deadline** in the same panel: **+1 week** from the previous deadline is the default rhythm for movement, **+24 h** / **+48 h** suit retreats and builds, or pick any date and time. Moves publish automatically (checked hourly) once it passes — no deadline, no auto-publish. You can also publish on demand with 📣 Publish all submitted, or per power with 📥.
-4. After the deadline, **⬇ Load published moves** fills the order box with every power's published orders — Resolve, ☁ Update published, then confirm the next deadline.
-5. Grace and overrides: **✖** un-publishes a power for the phase so they can resubmit; **📝** publishes whatever the order box holds for a power (the "fix the typo the table forgave" path). The GM can always still type and resolve anything by hand.
+3. Pick the **⚙ publish mode**: **manual** (default) — when the deadline passes, submissions lock and only you see them until you release the results; **auto** — everyone sees all moves the moment the deadline passes.
+4. Confirm the phase's **⏰ deadline**: **+1 week** from the previous deadline is the default rhythm for movement, **+24 h** / **+48 h** suit retreats and builds, or pick any date and time. Submissions close when it passes — no late entries (a submission comment edited after the deadline is void).
+5. After the deadline — in manual mode — **🔍 Review submissions** fills the order box with everyone's moves, for your eyes only. If something's wrong, re-open by confirming a new deadline (players keep their submitted orders unless they resubmit). If it all looks right, **📣 Publish results** releases the moves to every player.
+6. Then Resolve, ☁ Update published, and confirm the next deadline.
+7. Grace and overrides: **✖** un-publishes a power for the phase so they can resubmit; **📥** force-publishes one power's submission (even a late edit); **📝** publishes whatever the order box holds for a power (the "fix the typo the table forgave" path). The GM can always still type and resolve anything by hand.
 
 **Players**
 
 1. Open the game link and set a GitHub token (🔑 on the home screen — classic token, `gist` scope only).
 2. If the GM assigned your GitHub username a power, you're locked to it. Write or drag your orders, then press **📤 Submit moves**.
 3. Resubmit as often as you like before the deadline. The same GitHub account works from any browser or device — your submitted orders come back with you.
-4. After the deadline, **⬇ Load published moves** shows what everyone ordered.
+4. After the deadline: in auto-publish games, **⬇ Load published moves** immediately shows what everyone ordered, and Resolve previews the new board (a local preview — the game master's published update remains the official position). In manual-publish games the moves appear once the game master has reviewed and published the results.
 
-**The deadline machinery** is a GitHub Action (`.github/workflows/diplomacy-publish-moves.yml`) that runs hourly. One-time setup: add a repository secret named `DIPLOMACY_GIST_TOKEN` holding the GM's gist-scope token (repo → Settings → Secrets and variables → Actions). Each run looks at every published game and, **only if the GM-confirmed deadline has passed**, copies every assigned power's valid submission for the current phase into that power's `moves-<power>.json` file in the gist — so a deadline is honoured within the hour it expires. Powers already published for the phase are skipped, which means editing a submission after the deadline changes nothing; a power that submitted *late* (after the deadline but before its moves were published) still gets picked up on the next hourly check.
+**No servers, no schedules.** The deadline is enforced by the app itself: submissions are gist comments, GitHub stamps every comment with an edit time, and any client can therefore tell — from public data — which submissions beat the deadline. Nothing needs to run *at* the deadline. An optional GitHub Action (`.github/workflows/diplomacy-publish-moves.yml`, manual `workflow_dispatch` only — it never runs on a schedule) can copy auto-mode games' revealed submissions into per-power `moves-<power>.json` files as a durable record; it needs a repository secret named `DIPLOMACY_GIST_TOKEN` holding the GM's gist-scope token.
 
 **Fair warning:** submissions travel as gist comments, which are public. The app only surfaces moves once published, but a determined player could read the gist's comments early — treat "don't peek" as a house rule, as in any honour-system correspondence game.
 
