@@ -11,7 +11,12 @@ import {
   adjudicateAdjustments,
 } from './adjudicator.js';
 import { PROVINCES, POWERS } from './map-data.js';
-import { getToken, setToken, publishGame, updatePublished, fetchPublished, getAuthenticatedLogin, extractGistId } from './publish.js';
+import {
+  getToken, setToken, publishGame, updatePublished, fetchPublished,
+  getAuthenticatedLogin, extractGistId,
+  listComments, findSubmission, submitOrders,
+  fetchGist, readMovesFiles, readGameFile, writeMovesFiles, upsertMovesEntry,
+} from './publish.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -28,6 +33,11 @@ let mobileSheet = null; // null | 'edit' | 'orders' | 'standings' — mobile bot
 // playing as. Those other powers' order lines live here instead — a second
 // text buffer in the same line format, just never rendered into the box.
 let hiddenOrdersText = '';
+
+// Live view of a published game's online-play state: everyone's submission
+// comments, the published moves-<power>.json files, and this browser's
+// GitHub login. Refetched on load and after every submit/publish action.
+let online = { comments: null, moves: null, login: null, restored: false };
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -160,7 +170,9 @@ function renderHome() {
       ? ` <span class="badge published">${g.isOwner ? 'Published' : 'Read only'}</span>`
       : g.sandbox ? ' <span class="badge sandbox">Sandbox</span>' : '';
     load.innerHTML = `${name} <span class="meta">· ${S.phaseLabel(g)}</span>${badge}`;
-    load.onclick = () => openGame(g);
+    // someone else's published game may have moved on since we last saw it —
+    // reload it through the gist (falls back to the local copy when offline)
+    load.onclick = () => (g.published && !g.isOwner && g.gistId ? loadPublishedGame(g.gistId) : openGame(g));
     const del = document.createElement('button');
     del.className = 'del';
     del.textContent = '🗑';
@@ -202,15 +214,29 @@ function myCountry() {
   return (isReadOnly() && game.myCountry) || '';
 }
 
+// The power the GM assigned to this browser's GitHub account (game.players
+// maps power → login). An assigned player is locked to that power for the
+// whole game — on every device, since the token resolves to the same login.
+function assignedPower() {
+  return (isReadOnly() && game.assignedPower) || '';
+}
+
+// Does a submission/published entry belong to the phase on the table now?
+function matchesPhase(s) {
+  return s && s.year === game.year && s.season === game.season && s.step === game.step;
+}
+
 function openGame(g) {
   game = g;
   playback = null;
+  online = { comments: null, moves: null, login: null, restored: false };
   S.saveGame(game);
   showScreen('game-screen');
   $('game-name').textContent = game.name;
   mobileSheet = null;
   setEditMode(!isReadOnly() && !!game.sandbox && game.units.length === 0);
   refreshAll();
+  if (game.published && game.gistId) refreshOnlineStatus();
 }
 
 function refreshAll() {
@@ -235,6 +261,8 @@ function refreshAll() {
   $('btn-redo').disabled = ro || !(game.redoStack && game.redoStack.length);
   $('btn-publish').hidden = ro || !!game.published;
   $('btn-update-published').hidden = !(game.published && game.isOwner);
+  $('panel-players').hidden = !(game.published && game.isOwner);
+  renderOnlineUI();
   prefillOrders();
   renderHistorySelect();
   renderStandings();
@@ -244,6 +272,15 @@ function refreshAll() {
 function renderCountrySelect() {
   const sel = $('country-select');
   sel.replaceChildren();
+  const assigned = assignedPower();
+  if (assigned) {
+    // assigned players are tied to their power for the whole game — the only
+    // other view is "all countries", for reading everyone's published moves
+    sel.appendChild(new Option(`Playing as ${cap(assigned)}`, assigned));
+    sel.appendChild(new Option('👁 View all countries', ''));
+    sel.value = game.myCountry === assigned ? assigned : '';
+    return;
+  }
   sel.appendChild(new Option('👁 View all countries', ''));
   for (const p of POWERS) {
     if (game.units.some((u) => u.power === p) || Object.values(game.scOwners).includes(p)) {
@@ -253,8 +290,58 @@ function renderCountrySelect() {
   sel.value = game.myCountry || '';
 }
 
-function prefillOrders() {
-  hiddenOrdersText = '';
+// Split a multi-power orders text into per-power blocks (header line plus
+// the lines under it), same header-tracking rule locateOrderLine uses.
+function splitOrdersByPower(text) {
+  const byPower = new Map();
+  let current = null;
+  for (const line of text.split('\n')) {
+    const stripped = line.split('#')[0].trim();
+    if (stripped && stripped.split(/\s+/).length === 1) {
+      const p = normalizePower(stripped.replace(/:$/, ''));
+      if (p) {
+        current = p;
+        if (!byPower.has(p)) byPower.set(p, []);
+        byPower.get(p).push(line);
+        continue;
+      }
+    }
+    if (current) byPower.get(current).push(line);
+  }
+  return byPower;
+}
+
+// Every power's default (empty) order block for the current phase — used
+// both for a fresh phase and to fill in powers a preserved buffer has no
+// block for yet (a country nobody has drawn orders for yet).
+function defaultOrdersText() {
+  const lines = [];
+  if (game.step === 'movement') {
+    for (const p of POWERS) {
+      if (game.units.some((u) => u.power === p)) lines.push(p.toUpperCase(), '');
+    }
+  } else if (game.step === 'retreat') {
+    for (const d of game.pending.dislodged) {
+      lines.push(d.unit.power.toUpperCase());
+      lines.push(`${d.unit.type} ${prov(d.from)} disband   # options: ${d.retreatOptions.join(', ') || 'none'}`);
+      lines.push('');
+    }
+  } else {
+    const counts = S.adjustmentCounts(game);
+    for (const [p, c] of Object.entries(counts)) {
+      if (c > 0) lines.push(p.toUpperCase(), `# ${c} build${c > 1 ? 's' : ''}`, '');
+      else if (c < 0) lines.push(p.toUpperCase(), `# disband ${-c}`, '');
+    }
+  }
+  return lines.join('\n');
+}
+
+// Rebuild the visible textarea + hidden buffer for the current myCountry()
+// filter. With preserve=true, orders already drawn for every power (visible
+// textarea + hidden buffer, i.e. a full switch-country round trip) are kept;
+// only powers with no orders at all get the blank per-phase template. With
+// preserve=false (a real phase change / game load) everything resets.
+function prefillOrders(preserve = false) {
   const ta = $('orders-text');
   const info = $('phase-info');
   const myC = myCountry();
@@ -263,45 +350,92 @@ function prefillOrders() {
     info.textContent = myC
       ? `Write ${cap(myC)}'s orders (type or drag units), then 📋 copy them for your game master. Branch first to test ideas.`
       : 'Type orders or drag units on the map. Unordered units hold.';
-    const lines = [];
-    for (const p of POWERS) {
-      if (myC && p !== myC) continue;
-      if (game.units.some((u) => u.power === p)) lines.push(p.toUpperCase(), '');
-    }
-    ta.value = lines.join('\n');
   } else if (game.step === 'retreat') {
     $('orders-title').textContent = 'Retreats — ' + S.phaseLabel(game);
     info.textContent = 'Drag a dislodged unit to retreat it, or click it to disband. Unordered units disband.';
-    const lines = [];
-    for (const d of game.pending.dislodged) {
-      if (myC && d.unit.power !== myC) continue;
-      lines.push(d.unit.power.toUpperCase());
-      lines.push(`${d.unit.type} ${prov(d.from)} disband   # options: ${d.retreatOptions.join(', ') || 'none'}`);
-      lines.push('');
-    }
-    ta.value = lines.join('\n');
   } else {
     $('orders-title').textContent = 'Builds — ' + S.phaseLabel(game);
     const counts = S.adjustmentCounts(game);
     const occupied = new Set(game.units.map((u) => prov(u.loc)));
-    const lines = [];
     const infoLines = [];
     for (const [p, c] of Object.entries(counts)) {
-      if (myC && p !== myC) continue;
       if (c > 0) {
         const free = (S.HOME_CENTERS[p] || []).filter(
           (h) => game.scOwners[h] === p && !occupied.has(h)
         );
         infoLines.push(`${cap(p)}: ${c} build${c > 1 ? 's' : ''} — click a free home center (${free.join(', ') || 'none free'})`);
-        lines.push(p.toUpperCase(), `# ${c} build${c > 1 ? 's' : ''}`, '');
       } else if (c < 0) {
         infoLines.push(`${cap(p)}: must disband ${-c} — click units to remove`);
-        lines.push(p.toUpperCase(), `# disband ${-c}`, '');
       }
     }
     info.textContent = infoLines.join('\n') || 'No builds or disbands required.';
-    ta.value = lines.join('\n');
   }
+
+  const defaultByPower = splitOrdersByPower(defaultOrdersText());
+  let sourceByPower;
+  if (preserve) {
+    const existing = ta.value + (hiddenOrdersText ? '\n' + hiddenOrdersText : '');
+    sourceByPower = splitOrdersByPower(existing);
+  } else {
+    sourceByPower = new Map();
+  }
+  const merged = [];
+  for (const p of POWERS) {
+    if (sourceByPower.has(p)) merged.push(sourceByPower.get(p).join('\n'));
+    else if (defaultByPower.has(p)) merged.push(defaultByPower.get(p).join('\n'));
+  }
+  const byPower = splitOrdersByPower(merged.join('\n'));
+
+  const visible = [];
+  const hidden = [];
+  for (const p of POWERS) {
+    if (!byPower.has(p)) continue;
+    const block = byPower.get(p).join('\n');
+    if (!myC || p === myC) visible.push(block);
+    else hidden.push(block);
+  }
+  ta.value = visible.join('\n');
+  hiddenOrdersText = hidden.join('\n');
+}
+
+// Everything currently drafted, across the visible textarea and the hidden
+// buffer — one multi-power text in the standard order format.
+function fullOrdersText() {
+  return $('orders-text').value + (hiddenOrdersText ? '\n' + hiddenOrdersText : '');
+}
+
+// One power's order lines (header dropped), or '' if it has no block.
+function powerBlockText(power) {
+  const block = splitOrdersByPower(fullOrdersText()).get(power);
+  return block ? block.slice(1).join('\n').trim() : '';
+}
+
+// Replaces the whole order text (visible + hidden) with `fullText`, split
+// into the textarea / hidden buffer for the current myCountry() filter.
+function applyOrdersText(fullText) {
+  const byPower = splitOrdersByPower(fullText);
+  const myC = myCountry();
+  const visible = [];
+  const hidden = [];
+  for (const p of POWERS) {
+    if (!byPower.has(p)) continue;
+    const block = byPower.get(p).join('\n');
+    if (!myC || p === myC) visible.push(block);
+    else hidden.push(block);
+  }
+  $('orders-text').value = visible.join('\n');
+  hiddenOrdersText = hidden.join('\n');
+  onOrdersChanged();
+}
+
+// Swaps in a new block for one power, leaving every other power's draft as it
+// is (used to restore a player's submitted orders from the gist).
+function replacePowerBlock(power, ordersText) {
+  const byPower = splitOrdersByPower(fullOrdersText());
+  byPower.set(power, [power.toUpperCase(), ...ordersText.split('\n'), '']);
+  const blocks = [];
+  for (const p of POWERS) if (byPower.has(p)) blocks.push(byPower.get(p).join('\n'));
+  applyOrdersText(blocks.join('\n'));
 }
 
 function onOrdersChanged() {
@@ -326,8 +460,29 @@ function onOrdersChanged() {
     parts.push(`<span class="ok">${own.orders.length} order${own.orders.length === 1 ? '' : 's'} ✓ (everyone else holds)</span>`);
   }
   el.innerHTML = parts.join('\n');
+  if (game && game.step === 'adjustment' && !playback) updateAdjustmentInfo();
   drawLive();
   return { orders: own.orders, errors: own.errors };
+}
+
+// Live build/disband tally for the winter phase — "France: 1/2 builds" — kept
+// in step with the order box so it updates as orders are clicked or typed.
+function updateAdjustmentInfo() {
+  const counts = S.adjustmentCounts(game);
+  const occupied = new Set(game.units.map((u) => prov(u.loc)));
+  const lines = [];
+  for (const [p, c] of Object.entries(counts)) {
+    const used = adjustmentUsed(p);
+    if (c > 0) {
+      const free = (S.HOME_CENTERS[p] || []).filter(
+        (h) => game.scOwners[h] === p && !occupied.has(h)
+      );
+      lines.push(`${cap(p)}: ${used.builds}/${c} build${c > 1 ? 's' : ''} — click a free home center (${free.join(', ') || 'none free'})`);
+    } else if (c < 0) {
+      lines.push(`${cap(p)}: ${used.removes}/${-c} disband${-c > 1 ? 's' : ''} — click units to remove`);
+    }
+  }
+  $('phase-info').textContent = lines.join('\n') || 'No builds or disbands required.';
 }
 
 // Dry-run the current orders through the real engine so problems that will
@@ -370,7 +525,8 @@ function drawLive(excludeProv = null) {
   if (playback || !game) return;
   board.clearOrders();
   for (const o of lastParsed.orders) {
-    if (excludeProv && o.loc && prov(o.loc) === excludeProv) continue;
+    if (!o.loc) continue; // a waive has no location — nothing to draw
+    if (excludeProv && prov(o.loc) === excludeProv) continue;
     const reason = o.loc && lastParsed.illegal.get(prov(o.loc));
     // a convoy that cannot exist is a void order (the unit holds) — no
     // arrow at all; the warning below the order box explains why
@@ -601,12 +757,29 @@ function retreatDrop(from, to, ev) {
   syncOrderLine(d.unit.power, from, orderTextFor(d.unit, { kind: 'retreat', dest: nearestLoc(ev, opts) }));
 }
 
+// How many of a power's builds (+ waives) and removals are already written in
+// the order box — the click handlers refuse to go past the phase's allowance.
+function adjustmentUsed(power) {
+  let builds = 0;
+  let removes = 0;
+  for (const o of lastParsed.orders) {
+    if (o.power !== power) continue;
+    if (o.kind === 'build' || o.kind === 'waive') builds++;
+    else if (o.kind === 'remove') removes++;
+  }
+  return { builds, removes };
+}
+
 function adjustmentClick(p, ev) {
   const counts = S.adjustmentCounts(game);
   const u = unitAt(p);
   if (u && (counts[u.power] || 0) < 0) {
     // toggle removal
     const existing = lastParsed.orders.find((o) => o.kind === 'remove' && prov(o.loc) === p);
+    const owed = -counts[u.power];
+    if (!existing && adjustmentUsed(u.power).removes >= owed) {
+      return toast(`${cap(u.power)}: only ${owed} disband${owed > 1 ? 's' : ''} required — click an ordered unit to keep it instead`);
+    }
     syncOrderLine(u.power, p, existing ? null : `remove ${p}`);
     return;
   }
@@ -614,6 +787,9 @@ function adjustmentClick(p, ev) {
   if (owner && (counts[owner] || 0) > 0 && !u && (S.HOME_CENTERS[owner] || []).includes(p)) {
     // cycle build: none -> A -> F -> none
     const existing = lastParsed.orders.find((o) => o.kind === 'build' && prov(o.loc) === p);
+    if (!existing && adjustmentUsed(owner).builds >= counts[owner]) {
+      return toast(`${cap(owner)}: all ${counts[owner]} build${counts[owner] > 1 ? 's' : ''} used — remove one first`);
+    }
     const info = PROVINCES[p];
     if (!existing) return syncOrderLine(owner, p, `build A ${p}`);
     if (existing.unitType === 'A' && info.type === 'coast') {
@@ -1070,6 +1246,400 @@ async function importFile(file) {
 }
 
 // ---------------------------------------------------------------------------
+// online play (players submit moves as gist comments; the GM / a scheduled
+// GitHub Action publishes them into per-power moves-<power>.json files)
+// ---------------------------------------------------------------------------
+function activePowers() {
+  return POWERS.filter(
+    (p) => game.units.some((u) => u.power === p) || Object.values(game.scOwners).includes(p)
+  );
+}
+
+// What the current phase knows about a power: 'published' (its moves file has
+// an entry for this phase), 'submitted' (a valid comment is waiting),
+// 'none', or 'unknown' (comments not fetched yet / offline).
+function powerOnlineStatus(p) {
+  const doc = online.moves && online.moves[p];
+  if (doc && doc.history.some(matchesPhase)) return 'published';
+  if (!online.comments) return 'unknown';
+  const login = (game.players || {})[p];
+  if (login) {
+    const found = findSubmission(online.comments, login);
+    if (found && matchesPhase(found.submission) && found.submission.power === p) return 'submitted';
+  }
+  return 'none';
+}
+
+const STATUS_BADGE = {
+  published: ['✓ published', 'st-published'],
+  submitted: ['📨 submitted', 'st-submitted'],
+  none: ['— waiting', 'st-none'],
+  unknown: ['…', 'st-none'],
+};
+
+function renderOnlineUI() {
+  if (!game) return;
+  const hasPlayers = !!(game.published && game.players && Object.values(game.players).some(Boolean));
+  $('submit-row').hidden = !assignedPower();
+  $('online-row').hidden = !hasPlayers;
+  renderSubmitStatus();
+  if (hasPlayers) {
+    renderDeadlineInfo();
+    renderSubmissionBoard();
+  }
+  if (game.published && game.isOwner) renderPlayersPanel();
+}
+
+function renderSubmitStatus() {
+  const p = assignedPower();
+  if (!p) return;
+  const el = $('submit-status');
+  const status = powerOnlineStatus(p);
+  if (status === 'published') {
+    el.textContent = '✓ Published — your moves are locked in for this phase';
+    el.classList.add('done');
+    return;
+  }
+  const found = online.comments && online.login && findSubmission(online.comments, online.login);
+  const s = found && found.submission;
+  if (s && matchesPhase(s) && s.power === p) {
+    const when = s.submittedAt ? ' · ' + new Date(s.submittedAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '';
+    el.textContent = `✓ Submitted${when} — resubmit any time before the deadline`;
+    el.classList.add('done');
+  } else {
+    el.textContent = 'Not submitted for this phase yet';
+    el.classList.remove('done');
+  }
+}
+
+function renderSubmissionBoard() {
+  const table = $('submission-board');
+  table.replaceChildren();
+  for (const p of activePowers()) {
+    const login = (game.players || {})[p];
+    if (!login) continue;
+    const [label, cls] = STATUS_BADGE[powerOnlineStatus(p)];
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      `<td><span class="chip" style="background:${POWER_COLORS[p]}"></span>${cap(p)}</td>` +
+      `<td class="login">@${escapeHtml(login)}</td><td class="${cls}">${label}</td>`;
+    table.appendChild(tr);
+  }
+}
+
+// ---- deadlines -------------------------------------------------------------
+// The GM confirms every deadline; the hourly Action only publishes a game
+// whose deadline has passed. game.deadline is an ISO timestamp in game.json.
+function deadlineDate() {
+  if (!game || !game.deadline) return null;
+  const d = new Date(game.deadline);
+  return isNaN(d) ? null : d;
+}
+
+function fmtCountdown(ms) {
+  const mins = Math.max(0, Math.round(ms / 60000));
+  const d = Math.floor(mins / 1440);
+  const h = Math.floor((mins % 1440) / 60);
+  const m = mins % 60;
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+function renderDeadlineInfo() {
+  const el = $('deadline-info');
+  const d = deadlineDate();
+  el.classList.remove('past');
+  if (!d) {
+    el.textContent = game.isOwner
+      ? '⏰ No deadline set — moves will not auto-publish until you confirm one below'
+      : '⏰ No deadline set yet — ask your game master';
+    return;
+  }
+  const when = d.toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  if (d - Date.now() > 0) {
+    el.textContent = `⏰ Deadline: ${when} (in ${fmtCountdown(d - Date.now())})`;
+  } else {
+    el.textContent = `⏰ Deadline passed (${when}) — moves publish on the next hourly check`;
+    el.classList.add('past');
+  }
+}
+
+// datetime-local wants local wall-clock time, not ISO/UTC
+function isoToLocalInput(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+async function setDeadline(date) {
+  game.deadline = date ? date.toISOString() : null;
+  S.saveGame(game);
+  renderDeadlineInfo();
+  try {
+    await updatePublished(game);
+    toast(date ? `Deadline confirmed: ${date.toLocaleString()}` : 'Deadline cleared — nothing will auto-publish', 'info');
+  } catch (e) {
+    toast('Could not save the deadline: ' + e.message);
+    if (isAuthError(e)) askToken();
+  }
+}
+
+// Quick-set: previous deadline + `hours` — the weekly rhythm — falling back
+// to now + `hours` when no deadline exists (or the old one is long gone).
+function bumpDeadline(hours) {
+  const prev = deadlineDate();
+  const base = prev && prev.getTime() > Date.now() - 7 * 86400000 ? prev.getTime() : Date.now();
+  setDeadline(new Date(base + hours * 3600000));
+}
+
+// ---- player assignments ----------------------------------------------------
+function renderPlayersPanel() {
+  const input = $('deadline-input');
+  if (document.activeElement !== input) input.value = game.deadline ? isoToLocalInput(game.deadline) : '';
+  const rows = $('players-rows');
+  rows.replaceChildren();
+  for (const p of activePowers()) {
+    const row = document.createElement('div');
+    row.className = 'player-row';
+    const name = document.createElement('span');
+    name.className = 'pname';
+    name.innerHTML = `<span class="chip" style="background:${POWER_COLORS[p]}"></span>${cap(p)}`;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'GitHub username';
+    input.value = (game.players || {})[p] || '';
+    input.dataset.power = p;
+    const status = document.createElement('span');
+    status.className = 'pstatus ' + STATUS_BADGE[powerOnlineStatus(p)][1];
+    status.textContent = { published: '✓', submitted: '📨', none: '—', unknown: '…' }[powerOnlineStatus(p)];
+    status.title = STATUS_BADGE[powerOnlineStatus(p)][0];
+    const mk = (txt, title, fn) => {
+      const b = document.createElement('button');
+      b.textContent = txt;
+      b.title = title;
+      b.onclick = fn;
+      return b;
+    };
+    row.append(
+      name, input, status,
+      mk('📥', `Publish ${cap(p)}'s submitted moves for this phase (overwrites what's published)`,
+        () => gmPublishFromComments([p], { force: true })),
+      mk('📝', `Publish the order box's ${cap(p)} block for this phase (manual override)`,
+        () => gmPublishFromBox(p)),
+      mk('✖', `Un-publish ${cap(p)} for this phase so they can resubmit`,
+        () => gmUnpublish(p)),
+    );
+    rows.appendChild(row);
+  }
+}
+
+// Re-reads the gist's game.json (for fresh player assignments), the published
+// moves files, everyone's submission comments, and this browser's login —
+// then re-renders all online UI. Safe to call often; all reads are public.
+async function refreshOnlineStatus() {
+  const g = game;
+  if (!g || !g.published || !g.gistId) return;
+  try {
+    const gistJson = await fetchGist(g.gistId);
+    const fresh = await readGameFile(gistJson);
+    const moves = await readMovesFiles(gistJson);
+    const comments = await listComments(g.gistId);
+    const token = getToken();
+    const login = token ? await getAuthenticatedLogin(token) : null;
+    if (game !== g) return; // user switched games while we were fetching
+    if (fresh && fresh.players) g.players = fresh.players;
+    if (fresh && !g.isOwner) g.deadline = fresh.deadline || null;
+    online.moves = moves;
+    online.comments = comments;
+    online.login = login;
+    let assigned = null;
+    if (!g.isOwner && login && g.players) {
+      for (const [p, l] of Object.entries(g.players)) {
+        if (l && l.toLowerCase() === login.toLowerCase()) { assigned = p; break; }
+      }
+    }
+    const changed = (g.assignedPower || null) !== assigned;
+    g.assignedPower = assigned;
+    // snap to the assigned power on a NEW assignment only — after that the
+    // player may deliberately switch to the all-countries view
+    if (assigned && changed) g.myCountry = assigned;
+    S.saveGame(g);
+    if (changed) {
+      renderCountrySelect();
+      prefillOrders(true);
+      onOrdersChanged();
+    }
+    maybeRestoreSubmission();
+    renderOnlineUI();
+  } catch {
+    // offline or rate-limited — keep whatever state we already had
+  }
+}
+
+// On first load, put the player's already-submitted orders back into the box
+// (multi-device continuity) — unless they have started drafting this session.
+function maybeRestoreSubmission() {
+  if (online.restored) return;
+  const p = assignedPower();
+  if (!p || !online.comments || !online.login) return;
+  const found = findSubmission(online.comments, online.login);
+  const s = found && found.submission;
+  if (!s || !matchesPhase(s) || s.power !== p) return;
+  online.restored = true;
+  if (parseOrders(powerBlockText(p), phaseKind()).orders.length) return;
+  replacePowerBlock(p, s.orders);
+  toast('Restored the orders you already submitted', 'info');
+}
+
+async function doSubmitMoves() {
+  const power = assignedPower();
+  if (!power) return;
+  if (!getToken() && !askToken()) return;
+  // only this player's block is submitted, whatever view the box is in
+  const block = powerBlockText(power);
+  const parsed = parseOrders(power.toUpperCase() + '\n' + block, phaseKind());
+  if (parsed.errors.length) return toast('Fix the order problems first');
+  if (!parsed.orders.length) return toast(`Write some ${cap(power)} orders first`);
+  const btn = $('btn-submit-moves');
+  btn.disabled = true;
+  try {
+    await submitOrders(game.gistId, {
+      power, year: game.year, season: game.season, step: game.step,
+      orders: block,
+    });
+    online.restored = true; // what's in the box IS the submission now
+    toast(`Orders submitted for ${cap(power)} — resubmit any time before the deadline`, 'info');
+    await refreshOnlineStatus();
+  } catch (e) {
+    toast('Submit failed: ' + e.message);
+    if (isAuthError(e)) askToken();
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// Fills the order box with every power's published moves for the current
+// phase — the reveal for players, the pre-resolve step for the GM.
+async function doLoadPublishedMoves() {
+  const btn = $('btn-load-moves');
+  btn.disabled = true;
+  try {
+    if (!online.moves) await refreshOnlineStatus();
+    const blocks = [];
+    for (const p of POWERS) {
+      const doc = online.moves && online.moves[p];
+      const entry = doc && doc.history.find(matchesPhase);
+      if (entry && entry.orders.trim()) blocks.push(p.toUpperCase() + '\n' + entry.orders.trim() + '\n');
+    }
+    if (!blocks.length) return toast('No published moves for this phase yet');
+    applyOrdersText(blocks.join('\n'));
+    toast(`Loaded published moves for ${blocks.length} power${blocks.length === 1 ? '' : 's'}`, 'info');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// GM: copy submitted comments into the per-power files. Without `force`,
+// powers already published for this phase are skipped (same rule as the
+// scheduled Action) so late comment edits cannot slip in.
+async function gmPublishFromComments(powers, { force = false } = {}) {
+  try {
+    const gistJson = await fetchGist(game.gistId);
+    const moves = await readMovesFiles(gistJson);
+    const comments = await listComments(game.gistId);
+    const updates = {};
+    const done = [];
+    const skipped = [];
+    for (const p of powers) {
+      const login = (game.players || {})[p];
+      if (!login) continue;
+      if (!force && moves[p] && moves[p].history.some(matchesPhase)) {
+        skipped.push(`${cap(p)}: already published`);
+        continue;
+      }
+      const found = findSubmission(comments, login);
+      const s = found && found.submission;
+      if (!s || !matchesPhase(s) || s.power !== p) {
+        skipped.push(`${cap(p)}: no submission for this phase`);
+        continue;
+      }
+      updates[p] = upsertMovesEntry(moves[p], p, {
+        year: s.year, season: s.season, step: s.step, orders: s.orders,
+        by: login, submittedAt: s.submittedAt || null,
+        publishedAt: new Date().toISOString(), publishedBy: 'gm',
+      });
+      done.push(cap(p));
+    }
+    if (done.length) await writeMovesFiles(game.gistId, updates);
+    const msg = done.length ? `Published: ${done.join(', ')}` : 'Nothing published';
+    toast(skipped.length ? `${msg} · ${skipped.join(' · ')}` : msg, done.length ? 'info' : '');
+    await refreshOnlineStatus();
+  } catch (e) {
+    toast('Publish failed: ' + e.message);
+    if (isAuthError(e)) askToken();
+  }
+}
+
+// GM: publish whatever the order box holds for one power — the grace path
+// when a player's submission has a typo the table forgives.
+async function gmPublishFromBox(power) {
+  const orders = powerBlockText(power);
+  if (!orders) return toast(`No ${cap(power)} orders in the box`);
+  try {
+    const moves = await readMovesFiles(await fetchGist(game.gistId));
+    const doc = upsertMovesEntry(moves[power], power, {
+      year: game.year, season: game.season, step: game.step, orders,
+      by: online.login || 'game master', submittedAt: null,
+      publishedAt: new Date().toISOString(), publishedBy: 'gm-override',
+    });
+    await writeMovesFiles(game.gistId, { [power]: doc });
+    toast(`Published ${cap(power)} from the order box`, 'info');
+    await refreshOnlineStatus();
+  } catch (e) {
+    toast('Publish failed: ' + e.message);
+    if (isAuthError(e)) askToken();
+  }
+}
+
+// GM: drop a power's published entry for the current phase, reopening its
+// submission window (the player can edit their comment and republish).
+async function gmUnpublish(power) {
+  try {
+    const moves = await readMovesFiles(await fetchGist(game.gistId));
+    const doc = moves[power];
+    if (!doc || !doc.history.some(matchesPhase))
+      return toast(`${cap(power)} has nothing published for this phase`);
+    doc.history = doc.history.filter((h) => !matchesPhase(h));
+    await writeMovesFiles(game.gistId, { [power]: doc });
+    toast(`Un-published ${cap(power)} for this phase — they can resubmit`, 'info');
+    await refreshOnlineStatus();
+  } catch (e) {
+    toast('Un-publish failed: ' + e.message);
+    if (isAuthError(e)) askToken();
+  }
+}
+
+async function savePlayers() {
+  const players = {};
+  for (const input of $('players-rows').querySelectorAll('input')) {
+    const v = input.value.trim().replace(/^@/, '');
+    if (v) players[input.dataset.power] = v;
+  }
+  game.players = players;
+  S.saveGame(game);
+  try {
+    await updatePublished(game);
+    toast('Player assignments saved to the published game', 'info');
+    await refreshOnlineStatus();
+  } catch (e) {
+    toast('Save failed: ' + e.message);
+    if (isAuthError(e)) askToken();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // publishing (read-only shareable links, backed by a GitHub gist)
 // ---------------------------------------------------------------------------
 const TOKEN_HELP =
@@ -1124,7 +1694,13 @@ async function doPublish() {
 async function doUpdatePublished() {
   try {
     await updatePublished(game);
-    toast('Published game updated', 'info');
+    const d = deadlineDate();
+    const hasPlayers = game.players && Object.values(game.players).some(Boolean);
+    if (hasPlayers && (!d || d.getTime() <= Date.now())) {
+      toast('Updated — now confirm the next deadline in 👥 Players', 'info');
+    } else {
+      toast('Published game updated', 'info');
+    }
   } catch (e) {
     toast('Update failed: ' + e.message);
     if (isAuthError(e)) askToken();
@@ -1160,6 +1736,10 @@ async function loadPublishedGame(idOrUrl) {
     g.isOwner = isOwner;
     g.name = local ? local.name : uniqueName(g.name || 'Published game');
     g.myCountry = local ? local.myCountry : null; // keep the viewer's chosen country
+    // keep the known assignment so the power lock renders immediately;
+    // refreshOnlineStatus() re-verifies it against the token's login
+    g.assignedPower = local ? local.assignedPower : null;
+    if (g.assignedPower) g.myCountry = g.assignedPower;
     openGame(g);
     toast(
       isOwner
@@ -1238,7 +1818,23 @@ async function init() {
   $('country-select').onchange = () => {
     game.myCountry = $('country-select').value || null;
     S.saveGame(game);
-    refreshAll();
+    prefillOrders(true);
+    onOrdersChanged();
+  };
+  $('btn-submit-moves').onclick = doSubmitMoves;
+  $('btn-load-moves').onclick = doLoadPublishedMoves;
+  $('btn-refresh-online').onclick = () => refreshOnlineStatus();
+  $('players-save').onclick = savePlayers;
+  $('players-publish-all').onclick = () => gmPublishFromComments(activePowers());
+  $('deadline-plus-week').onclick = () => bumpDeadline(7 * 24);
+  $('deadline-plus-2day').onclick = () => bumpDeadline(48);
+  $('deadline-plus-day').onclick = () => bumpDeadline(24);
+  $('deadline-clear').onclick = () => setDeadline(null);
+  $('deadline-set').onclick = () => {
+    const v = $('deadline-input').value;
+    const d = v && new Date(v);
+    if (!d || isNaN(d)) return toast('Pick a date and time first');
+    setDeadline(d);
   };
   $('btn-copy-orders').onclick = () => {
     const text = $('orders-text').value.trim();
@@ -1324,6 +1920,18 @@ function autotest() {
     'ITALY', 'A ven - pie', 'A rom - ven', 'F nap - ion',
   ].join('\n');
   if (stage === 'board') return done();
+  if (stage === 'builds') {
+    // a winter with France owed 2 builds (bel captured, A Par removed), so
+    // the live build counter and its limits can be screenshot-checked
+    game.scOwners.bel = 'france';
+    game.units = game.units.filter((u) => !(u.power === 'france' && prov(u.loc) === 'par'));
+    game.season = 'winter';
+    game.step = 'adjustment';
+    refreshAll();
+    $('orders-text').value = 'FRANCE\nBuild A Par\nWaive';
+    onOrdersChanged();
+    return done();
+  }
   $('orders-text').value = orders;
   onOrdersChanged();
   if (stage === 'preview') return done();

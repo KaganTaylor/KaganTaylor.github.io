@@ -112,3 +112,19 @@ It was a ☰ burger. The button does not open a drawer or expand a menu — it l
 A published game is a public GitHub gist, written with a personal access token the player supplies (classic token, `gist` scope only — fine-grained tokens cannot access gists). The token is kept in `localStorage` and never leaves the browser except to `api.github.com`.
 
 Only the browser that published a game can advance it (`isOwner`). Everyone else opening the link gets a live, read-only view: they may pick their country, write and copy their own orders, and branch the position into a private practice game, but not resolve the real one. That keeps the game master authoritative without needing a server.
+
+---
+
+## Online play: submissions are gist comments
+
+Only a gist's owner can write its files — gists have no collaborators — so players cannot write their moves into the game gist directly. Three transports were weighed:
+
+- **Gist comments (chosen).** Any GitHub account can comment on a public gist with a `gist`-scope token. Each player keeps exactly ONE comment (a marker line + JSON payload, see `ORDERS_MARKER` in `js/publish.js`) and edits it in place to resubmit. Comments are separate API objects, so simultaneous submissions from different players **cannot conflict** — the deciding property, since everyone submits as the deadline closes in. GitHub stamps each comment with its author's login, so a submission cannot be forged. Multi-device support comes free: the token resolves to a login (`GET /user`), and the comment is found *by login*, not by device or token string.
+- **Per-player gists** would also be conflict-free, but every player would have to create an orders gist and get its ID registered with the GM — reintroducing the coordination the feature removes — and unauthenticated polling of N player gists runs into GitHub's 60 req/hr/IP limit.
+- **A repo per game** (players as collaborators) matches the naive mental model, but needs broad `repo`-scope tokens, invite acceptance per player, retry logic for the contents API's concurrent-commit 409s, and a second storage backend beside gists.
+
+The published per-power files (`moves-<power>.json`) have a **single writer** — the GM's token, used by the app's publish buttons and by the scheduled Action — so they cannot conflict either. Each file keeps one entry per year/season/step: history stays as a record, and only the entry matching the game's current phase is ever loaded into the order box. The publish step writes a power's entry only if the phase has none yet, so editing a comment after the deadline is inert; the GM un-publishes (✖) to deliberately reopen a power's window.
+
+Submissions are cleartext. Real pre-deadline secrecy on public infrastructure would need client-side encryption (considered, deferred); "don't read the gist comments early" is a house rule, like not reading someone else's postcard.
+
+**Deadlines are confirmed, not scheduled.** The Action does not fire on a fixed weekday; it checks hourly and publishes a game only once the `deadline` timestamp in its game.json has passed — and only the GM writes that field, confirming each phase's deadline in the app (+1 week is the default rhythm; +24/48 h fit retreats and builds). A cron-only deadline was rejected because a missed GM week would silently publish a half-submitted phase, and because retreat/build phases want much shorter turnarounds than movement. No deadline set means nothing publishes, which fails safe.

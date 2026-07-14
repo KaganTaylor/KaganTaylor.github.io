@@ -101,6 +101,26 @@ a { color: #7fb4ff; }
 #edit-tools .tool.active { background: #2f6b46; border-color: #3f8f5e; }
 #btn-edit.active { background: #6b4a2f; border-color: #9c6b3f; }
 
+/* ---------- online play (submissions + player assignments) ---------- */
+#submit-row { align-items: center; }
+#submit-status { align-self: center; }
+#submit-status.done { color: #6fce7f; }
+#submission-board { width: 100%; border-collapse: collapse; font-size: 0.85em; margin: 6px 0; }
+#submission-board td { padding: 2px 6px; }
+#submission-board .login { color: #8892a0; }
+#submission-board .st-none { color: #77808e; }
+#submission-board .st-submitted { color: #ffc46b; }
+#submission-board .st-published { color: #6fce7f; }
+#players-rows { display: flex; flex-direction: column; gap: 6px; }
+.panel .subhead { font-size: 0.95rem; margin: 12px 0 4px; color: #aab3c0; }
+#deadline-info { margin: 4px 0; }
+#deadline-info.past { color: #ffc46b; }
+.player-row { display: flex; gap: 6px; align-items: center; }
+.player-row .pname { width: 72px; flex: none; font-size: 0.9em; }
+.player-row input { flex: 1; min-width: 0; }
+.player-row button { padding: 6px 8px; flex: none; }
+.player-row .pstatus { flex: none; font-size: 0.85em; width: 1.4em; text-align: center; }
+
 #standings { width: 100%; border-collapse: collapse; font-size: 0.9em; }
 #standings td { padding: 2px 6px; }
 #standings td.num { text-align: right; font-variant-numeric: tabular-nums; }

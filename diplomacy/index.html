@@ -91,6 +91,18 @@
           <select id="country-select" title="Choose your country to write its orders"></select>
           <button id="btn-copy-orders" title="Copy the orders below — paste them into your email to the game master">📋 Copy orders</button>
         </div>
+        <div class="btnrow" id="submit-row" hidden>
+          <button id="btn-submit-moves" class="primary" title="Submit your orders to the game — you can resubmit as often as you like before the deadline">📤 Submit moves</button>
+          <span id="submit-status" class="hint"></span>
+        </div>
+        <div id="online-row" hidden>
+          <div id="deadline-info" class="hint"></div>
+          <table id="submission-board" title="Who has submitted for the current phase, and whose moves are published"></table>
+          <div class="btnrow">
+            <button id="btn-load-moves" title="Fill the order box with every power's published moves for the current phase">⬇ Load published moves</button>
+            <button id="btn-refresh-online" title="Re-check submissions and published moves">🔄</button>
+          </div>
+        </div>
         <div id="phase-info"></div>
         <textarea id="orders-text" spellcheck="false" placeholder="FRANCE&#10;A Par - Bur&#10;F Bre - MAO&#10;A Mar S A Par - Bur"></textarea>
         <div id="parse-status"></div>
@@ -99,6 +111,34 @@
           <button id="btn-resolve-final" title="Resolve and jump straight to the final position — animates the moves without stepping through each order first">⏭ Resolve to final</button>
         </div>
         <p class="hint" id="drag-hint">Drag a unit to its destination to write the order · drop on itself to hold · <b>⇧-drop</b> on a unit to support it · <b>Ctrl-drop</b> (fleet at sea, onto a moving army) to convoy · unordered units hold.</p>
+      </div>
+
+      <!-- player assignments + move publishing (game master, published games only) -->
+      <div id="panel-players" class="panel" hidden>
+        <h2>👥 Players</h2>
+        <p class="hint">Assign each power to the GitHub username that will submit its moves.
+          Assigned players are locked to their power when they open the game with their token.</p>
+        <div id="players-rows"></div>
+        <div class="btnrow">
+          <button id="players-save" title="Save the assignments to the published game">💾 Save assignments</button>
+          <button id="players-publish-all" class="primary" title="Publish every power's submitted moves for the current phase (skips powers already published)">📣 Publish all submitted</button>
+        </div>
+        <h3 class="subhead">⏰ Deadline</h3>
+        <p class="hint">Submitted moves publish automatically (checked hourly) once the deadline you
+          confirm here passes — no deadline, no auto-publish. Movement phases usually get a week;
+          retreats and builds a day or two.</p>
+        <div class="btnrow">
+          <button id="deadline-plus-week" title="Previous deadline + 1 week (from now if none is set)">+1 week</button>
+          <button id="deadline-plus-2day" title="Previous deadline + 48 hours (from now if none is set)">+48 h</button>
+          <button id="deadline-plus-day" title="Previous deadline + 24 hours (from now if none is set)">+24 h</button>
+          <button id="deadline-clear" title="Remove the deadline — nothing publishes until you set a new one">✖ Clear</button>
+        </div>
+        <div class="sandbox-row">
+          <input id="deadline-input" type="datetime-local" title="Pick a custom deadline (your local time)">
+          <button id="deadline-set" title="Set the deadline to the picked date and time">Set</button>
+        </div>
+        <p class="hint">Per power: 📥 publish its submission (overwrites), 📝 publish
+          what's in the order box for it, ✖ un-publish this phase.</p>
       </div>
 
       <!-- standings -->

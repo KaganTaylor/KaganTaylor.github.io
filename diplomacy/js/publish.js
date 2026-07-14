@@ -16,7 +16,9 @@ export function setToken(t) {
 }
 
 function stripForPublish(game) {
-  const { gistId, gistUrl, published, isOwner, myCountry, ...rest } = game;
+  // viewer-local fields only — `players` (power → GitHub login) stays in,
+  // it is shared state every viewer needs to know their assignment
+  const { gistId, gistUrl, published, isOwner, myCountry, assignedPower, ...rest } = game;
   return rest;
 }
 
@@ -89,6 +91,150 @@ export async function getAuthenticatedLogin(token) {
   } catch {
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Online move submission.
+//
+// Players cannot write files into the GM's gist (gists have no collaborators),
+// so each player instead maintains ONE gist comment, posted with their own
+// token and edited in place on every resubmit. Comments are separate API
+// objects, so simultaneous submissions from different players can never
+// conflict; GitHub stamps each comment with the author's login, so a
+// submission cannot be forged. At the deadline (a scheduled GitHub Action,
+// or the GM's publish buttons) the latest valid comment per assigned power is
+// copied into a per-power file — moves-<power>.json — written with the GM's
+// token, the file's only writer.
+// ---------------------------------------------------------------------------
+
+export const ORDERS_MARKER = 'DIPLOMACY-ORDERS v1';
+
+// Reads every comment on the gist. Public data — no auth needed.
+export async function listComments(gistId) {
+  const out = [];
+  for (let page = 1; page <= 10; page++) {
+    const batch = await ghFetch(`${API}/gists/${gistId}/comments?per_page=100&page=${page}`);
+    out.push(...batch);
+    if (batch.length < 100) break;
+  }
+  return out;
+}
+
+// A submission comment is the marker line followed by a JSON payload:
+//   DIPLOMACY-ORDERS v1
+//   {"power":"france","year":1901,"season":"spring","step":"movement","orders":"..."}
+// Returns the payload, or null if the body is not a well-formed submission.
+export function parseSubmission(body) {
+  if (!body || !body.startsWith(ORDERS_MARKER)) return null;
+  try {
+    const sub = JSON.parse(body.slice(ORDERS_MARKER.length));
+    if (!sub || !sub.power || !sub.year || !sub.season || !sub.step) return null;
+    if (typeof sub.orders !== 'string') return null;
+    return sub;
+  } catch {
+    return null;
+  }
+}
+
+// The one submission comment a given GitHub account holds on this gist.
+// Returns {commentId, submission} or null.
+export function findSubmission(comments, login) {
+  if (!login) return null;
+  for (const c of comments) {
+    if (c.user && c.user.login.toLowerCase() === login.toLowerCase()) {
+      const sub = parseSubmission(c.body);
+      if (sub) return { commentId: c.id, submission: sub };
+    }
+  }
+  return null;
+}
+
+// Creates or updates the caller's submission comment. `payload` carries
+// {power, year, season, step, orders}; submittedAt is stamped here.
+export async function submitOrders(gistId, payload) {
+  const token = getToken();
+  if (!token) throw new Error('no GitHub token set');
+  const login = await getAuthenticatedLogin(token);
+  if (!login) throw new Error('token was not accepted by GitHub');
+  const submission = { ...payload, submittedAt: new Date().toISOString() };
+  const body = ORDERS_MARKER + '\n' + JSON.stringify(submission, null, 1);
+  const mine = findSubmission(await listComments(gistId), login);
+  const url = mine
+    ? `${API}/gists/${gistId}/comments/${mine.commentId}`
+    : `${API}/gists/${gistId}/comments`;
+  await ghFetch(url, {
+    method: mine ? 'PATCH' : 'POST',
+    headers: { Authorization: `token ${token}`, Accept: 'application/vnd.github+json' },
+    body: JSON.stringify({ body }),
+  });
+  return { login, submission };
+}
+
+// Full gist JSON (files + metadata). Public — no auth needed.
+export function fetchGist(gistId) {
+  return ghFetch(`${API}/gists/${gistId}`);
+}
+
+async function gistFileContent(file) {
+  if (!file) return null;
+  return file.truncated ? await (await fetch(file.raw_url)).text() : file.content;
+}
+
+export function movesFileName(power) {
+  return `moves-${power}.json`;
+}
+
+// Extracts every moves-<power>.json from a fetched gist.
+// Returns { france: {power, history: [...]}, ... } (malformed files skipped).
+export async function readMovesFiles(gistJson) {
+  const out = {};
+  for (const [name, file] of Object.entries(gistJson.files || {})) {
+    const m = name.match(/^moves-([a-z]+)\.json$/);
+    if (!m) continue;
+    try {
+      const doc = JSON.parse(await gistFileContent(file));
+      if (doc && Array.isArray(doc.history)) out[m[1]] = doc;
+    } catch { /* ignore a malformed file */ }
+  }
+  return out;
+}
+
+// The (fresh) game.json out of a fetched gist, or null.
+export async function readGameFile(gistJson) {
+  try {
+    const content = await gistFileContent((gistJson.files || {})['game.json']);
+    return content ? JSON.parse(content) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Writes the given per-power documents into the gist (owner token only).
+// `byPower` is { france: movesDoc, ... }; other gist files are untouched.
+export async function writeMovesFiles(gistId, byPower) {
+  const token = getToken();
+  if (!token) throw new Error('no GitHub token set');
+  const files = {};
+  for (const [power, doc] of Object.entries(byPower)) {
+    files[movesFileName(power)] = { content: JSON.stringify(doc, null, 1) };
+  }
+  await ghFetch(`${API}/gists/${gistId}`, {
+    method: 'PATCH',
+    headers: { Authorization: `token ${token}`, Accept: 'application/vnd.github+json' },
+    body: JSON.stringify({ files }),
+  });
+}
+
+// Replaces any existing entry for the entry's phase, then appends — each
+// power's file keeps one entry per year/season/step, newest last.
+export function upsertMovesEntry(doc, power, entry) {
+  const out = doc && Array.isArray(doc.history) ? doc : { power, history: [] };
+  out.power = power;
+  out.history = out.history.filter(
+    (h) => !(h.year === entry.year && h.season === entry.season && h.step === entry.step)
+  );
+  out.history.push(entry);
+  return out;
 }
 
 // Accepts a bare gist id or a full gist URL and returns the id, or null.

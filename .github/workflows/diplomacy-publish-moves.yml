@@ -1,0 +1,29 @@
+# Publishes Diplomacy players' submitted moves into each game gist's
+# per-power moves-<power>.json files, once the deadline the game master
+# confirmed in the app has passed. See diplomacy/tools/publish-moves.js.
+#
+# Requires the repository secret DIPLOMACY_GIST_TOKEN: the game master's
+# classic personal access token with ONLY the "gist" scope (the same token
+# used to publish games from the app).
+name: Publish Diplomacy moves
+
+on:
+  schedule:
+    # Hourly check (at :23, off the congested top of the hour). Each game only
+    # publishes when its own game.json deadline has passed, so this is cheap —
+    # a deadline is honoured within the hour it expires.
+    - cron: '23 * * * *'
+  workflow_dispatch: # allow manual runs from the Actions tab
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Publish submitted moves
+        run: node diplomacy/tools/publish-moves.js
+        env:
+          DIPLOMACY_GIST_TOKEN: ${{ secrets.DIPLOMACY_GIST_TOKEN }}
