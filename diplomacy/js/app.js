@@ -27,6 +27,7 @@ let editMode = false;
 let editTool = 'A';
 let lastParsed = { orders: [], errors: [], byProv: new Map() };
 let mobileSheet = null; // null | 'edit' | 'orders' | 'standings' — mobile bottom-sheet state
+let orderMode = null; // null | 'support' | 'convoy' — see setOrderMode()
 
 // Gist viewers drag/click units for ANY power to sketch out what opponents
 // might do, but the orders textarea only ever shows the power they're
@@ -267,6 +268,7 @@ function refreshAll() {
   $('btn-update-published').hidden = !(game.published && game.isOwner);
   $('panel-players').hidden = !(game.published && game.isOwner);
   renderOnlineUI();
+  setOrderMode(null);
   prefillOrders();
   renderHistorySelect();
   renderStandings();
@@ -694,15 +696,53 @@ function attachBoardHandlers() {
   };
 }
 
+// ---------------------------------------------------------------------------
+// order modes (Support / Convoy)
+// ---------------------------------------------------------------------------
+// A tappable stand-in for ⇧-drop and Ctrl-drop: with a mode on, the next drag
+// is read as a support (or convoy) order instead of a move. Touchscreens have
+// no modifier keys, so on mobile this is the only way to write those orders.
+// The mode is one-shot — it switches itself off once an order is written —
+// because leaving it armed would silently turn the *next* intended move into
+// another support. A failed drop (nothing to support there, wrong unit type)
+// leaves it on so the drag can simply be retried.
+function setOrderMode(mode) {
+  orderMode = mode;
+  updateOrderModeUI();
+}
+
+function toggleOrderMode(mode) {
+  setOrderMode(orderMode === mode ? null : mode);
+  if (orderMode === 'support') toast('Support: drag a unit onto the one it should support', 'info');
+  if (orderMode === 'convoy') toast('Convoy: drag a fleet at sea onto a moving army', 'info');
+}
+
+// The toggles only make sense where a drag writes a movement order at all —
+// the same condition canDrag() uses — so they are hidden during edit mode,
+// playback, and the retreat/build phases.
+function updateOrderModeUI() {
+  const usable = !!game && !playback && !editMode && game.step === 'movement';
+  if (!usable && orderMode) orderMode = null;
+  $('order-modes').hidden = !usable;
+  $('btn-mode-support').setAttribute('aria-pressed', String(orderMode === 'support'));
+  $('btn-mode-convoy').setAttribute('aria-pressed', String(orderMode === 'convoy'));
+}
+
 function orderDrop(from, to, ev) {
   const u = unitAt(from);
   if (!u) return;
-  if (from === to) return setOrder(u, { kind: 'hold' });
+  const wantSupport = ev.shiftKey || orderMode === 'support';
+  const wantConvoy = ev.ctrlKey || ev.metaKey || orderMode === 'convoy';
+  if (from === to) {
+    if (wantSupport) return toast('Drop onto the unit you want to support');
+    if (wantConvoy) return toast('Drop onto the army you want to convoy');
+    return setOrder(u, { kind: 'hold' });
+  }
 
   const targetUnit = unitAt(to);
   const targetOrder = lastParsed.byProv.get(to);
 
-  if (ev.shiftKey) {
+  if (wantSupport) {
     // support: the target unit's move if it has one, else its hold; on an
     // empty province, support whichever unit is ordered to move there
     let tLoc = null, tDest = null;
@@ -720,20 +760,22 @@ function orderDrop(from, to, ev) {
     }
     if (!tLoc) return toast('Nothing there to support');
     const tu = unitAt(tLoc);
-    return setOrder(u, {
+    setOrder(u, {
       kind: 'support',
       targetType: tu.type,
       targetLoc: tLoc,
       targetDest: tDest,
     });
+    return setOrderMode(null);
   }
 
-  if (ev.ctrlKey || ev.metaKey) {
+  if (wantConvoy) {
     if (u.type !== 'F' || PROVINCES[from].type !== 'water')
       return toast('Only a fleet in open sea can convoy');
     if (!targetUnit || targetUnit.type !== 'A' || !targetOrder || targetOrder.kind !== 'move')
-      return toast('Ctrl-drop onto an army that already has a move order');
-    return setOrder(u, { kind: 'convoy', targetLoc: to, dest: prov(targetOrder.dest) });
+      return toast('Drop onto an army that already has a move order');
+    setOrder(u, { kind: 'convoy', targetLoc: to, dest: prov(targetOrder.dest) });
+    return setOrderMode(null);
   }
 
   // plain move
@@ -818,6 +860,7 @@ function setEditMode(on) {
   $('panel-edit').hidden = !on;
   mobileSheet = on ? 'edit' : (mobileSheet === 'edit' ? null : mobileSheet);
   applyMobileSheetUI();
+  updateOrderModeUI();
 }
 
 function toggleEditMode() {
@@ -990,6 +1033,7 @@ function partialVerdicts(entry, revealedOrders) {
 
 function startPlayback(entry, readonly) {
   playback = { entry, readonly, orders: playbackOrders(entry), step: 0, animating: false };
+  setOrderMode(null);
   $('panel-orders').hidden = true;
   $('panel-edit').hidden = true;
   $('panel-playback').hidden = false;
@@ -1912,6 +1956,14 @@ async function init() {
   };
   $('btn-export').onclick = exportCurrent;
   $('btn-edit').onclick = toggleEditMode;
+  $('btn-mode-support').onclick = () => toggleOrderMode('support');
+  $('btn-mode-convoy').onclick = () => toggleOrderMode('convoy');
+  // on mobile the toggles float just below the topbar, whose height depends on
+  // the phone's font size and on whether the phase label wraps
+  const topbarH = () =>
+    document.documentElement.style.setProperty('--topbar-h', $('topbar').offsetHeight + 'px');
+  new ResizeObserver(topbarH).observe($('topbar'));
+  topbarH();
 
   for (const b of document.querySelectorAll('#mobile-tabbar .mtab')) {
     b.onclick = () => {

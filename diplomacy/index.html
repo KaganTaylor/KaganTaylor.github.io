@@ -47,6 +47,18 @@
     <span id="readonly-badge" class="badge published" hidden>👁 Published — read only</span>
     <span id="hover-info"></span>
     <span class="spacer"></span>
+    <!-- order-mode toggles: a tappable stand-in for ⇧-drop / Ctrl-drop, so a
+         touchscreen (no modifier keys) can order supports and convoys too -->
+    <div id="order-modes" role="group" aria-label="Order mode">
+      <button id="btn-mode-support" class="mode-btn" aria-pressed="false"
+              title="Support mode — drag a unit onto the unit it should support (same as ⇧-drop)">
+        <span class="mode-icon">🤝</span><span class="mode-label">Support</span>
+      </button>
+      <button id="btn-mode-convoy" class="mode-btn" aria-pressed="false"
+              title="Convoy mode — drag a fleet at sea onto an army that already has a move order (same as Ctrl-drop)">
+        <span class="mode-icon">⚓</span><span class="mode-label">Convoy</span>
+      </button>
+    </div>
     <button id="btn-edit" title="Freely place, move and remove units and set supply-center owners">✏ Edit board</button>
     <div id="topbar-more-wrap">
       <button id="topbar-more-btn" title="More actions">⋮</button>
@@ -110,7 +122,7 @@
           <button id="btn-resolve" class="primary">Resolve</button>
           <button id="btn-resolve-final" title="Resolve and jump straight to the final position — animates the moves without stepping through each order first">⏭ Resolve to final</button>
         </div>
-        <p class="hint" id="drag-hint">Drag a unit to its destination to write the order · drop on itself to hold · <b>⇧-drop</b> on a unit to support it · <b>Ctrl-drop</b> (fleet at sea, onto a moving army) to convoy · unordered units hold.</p>
+        <p class="hint" id="drag-hint">Drag a unit to its destination to write the order · drop on itself to hold · <b>⇧-drop</b> on a unit to support it (or turn on 🤝&nbsp;Support and just drag) · <b>Ctrl-drop</b> a fleet at sea onto a moving army to convoy (or turn on ⚓&nbsp;Convoy) · unordered units hold.</p>
       </div>
 
       <!-- player assignments + move publishing (game master, published games only) -->

@@ -121,6 +121,16 @@ a { color: #7fb4ff; }
 .player-row button { padding: 6px 8px; flex: none; }
 .player-row .pstatus { flex: none; font-size: 0.85em; width: 1.4em; text-align: center; }
 
+/* ---------- order-mode toggles (Support / Convoy) ---------- */
+/* Desktop: two ordinary buttons sitting in the topbar. Mobile: the same two
+   buttons, floated over the top-right of the map (see the media query) — a
+   touchscreen has no ⇧/Ctrl, so these are the only way to order a support or
+   a convoy there, and they must stay reachable while the map is being used. */
+#order-modes { display: flex; gap: 6px; }
+.mode-btn { display: inline-flex; align-items: center; gap: 6px; }
+.mode-btn[aria-pressed="true"] { background: #2f4d6b; border-color: #5a90c9; color: #dcecff; }
+.mode-btn[aria-pressed="true"]:hover { background: #37597b; }
+
 #standings { width: 100%; border-collapse: collapse; font-size: 0.9em; }
 #standings td { padding: 2px 6px; }
 #standings td.num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -182,6 +192,24 @@ a { color: #7fb4ff; }
   #topbar { gap: 8px; padding: 8px; flex-wrap: nowrap; }
   #hover-info { display: none; }
   #btn-edit { display: none; } /* superseded by the mobile Edit tab */
+
+  /* Lifted out of the topbar and parked over the map's top-right corner: big
+     thumb-sized targets that stay put while panning/zooming, sitting clear of
+     the ⋮ menu button above them. --topbar-h is measured in app.js. */
+  #order-modes {
+    position: fixed; z-index: 22;
+    top: calc(var(--topbar-h, 60px) + 10px); right: 10px;
+    flex-direction: column; gap: 8px;
+  }
+  .mode-btn {
+    flex-direction: column; gap: 1px;
+    width: 60px; min-height: 60px; padding: 6px 2px; border-radius: 12px;
+    background: rgba(34, 38, 46, 0.92);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, .45);
+  }
+  .mode-btn .mode-icon { font-size: 20px; line-height: 1; }
+  .mode-btn .mode-label { font-size: 11px; color: #aab3c0; }
+  .mode-btn[aria-pressed="true"] .mode-label { color: #dcecff; }
 
   /* a real box again, so the absolutely-positioned menu below hangs off the
      ⋮ button rather than off the page (which put it below the viewport) */
