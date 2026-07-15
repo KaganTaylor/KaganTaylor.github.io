@@ -17,8 +17,10 @@ export function setToken(t) {
 
 function stripForPublish(game) {
   // viewer-local fields only — `players` (power → GitHub login) stays in,
-  // it is shared state every viewer needs to know their assignment
-  const { gistId, gistUrl, published, isOwner, myCountry, assignedPower, ...rest } = game;
+  // it is shared state every viewer needs to know their assignment.
+  // publishedState is the game master's own bookkeeping of what's already
+  // live (see js/app.js boardDirty()) — never itself part of the position.
+  const { gistId, gistUrl, published, isOwner, myCountry, assignedPower, publishedState, ...rest } = game;
   return rest;
 }
 
@@ -48,15 +50,19 @@ export async function publishGame(game) {
   return { id: json.id, url: json.html_url };
 }
 
-// Overwrites an already-published gist with the game's current state.
-export async function updatePublished(game) {
+// Overwrites an already-published gist with the game's current state. Pass
+// `boardOverride` (a board-only snapshot, see state.js boardSnapshot()) to
+// push settings only — deadline, publish mode, player assignments — without
+// also leaking the game master's in-progress, not-yet-published position.
+export async function updatePublished(game, boardOverride) {
   const token = getToken();
   if (!token) throw new Error('no GitHub token set');
+  const payload = boardOverride ? { ...stripForPublish(game), ...boardOverride } : stripForPublish(game);
   await ghFetch(`${API}/gists/${game.gistId}`, {
     method: 'PATCH',
     headers: { Authorization: `token ${token}`, Accept: 'application/vnd.github+json' },
     body: JSON.stringify({
-      files: { 'game.json': { content: JSON.stringify(stripForPublish(game), null, 1) } },
+      files: { 'game.json': { content: JSON.stringify(payload, null, 1) } },
     }),
   });
 }

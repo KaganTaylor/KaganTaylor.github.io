@@ -23,6 +23,7 @@ const $ = (id) => document.getElementById(id);
 let board;
 let game = null;
 let playback = null; // {entry, step, orders, readonly, animating}
+let publishedPreview = null; // board fields of the live published game, while 👁 viewing it
 let editMode = false;
 let editTool = 'A';
 let lastParsed = { orders: [], errors: [], byProv: new Map() };
@@ -207,6 +208,18 @@ function isReadOnly() {
   return !!(game && game.published && !game.isOwner);
 }
 
+// True once the game master's local position (resolves, undos, redos, board
+// edits) has moved on from what's actually live at the shared link — the
+// gate on the "☁ Publish changes" button. Drafting in the order box never
+// counts: that text isn't part of the game object until Resolve runs, so a
+// GM can sketch out their own plan without it looking like a change to
+// publish. See state.js boardSnapshot().
+function boardDirty() {
+  if (!game || !game.published || !game.isOwner) return false;
+  if (!game.publishedState) return true;
+  return JSON.stringify(S.boardSnapshot(game)) !== JSON.stringify(game.publishedState);
+}
+
 // Viewers of a published game pick the country they play; order entry
 // (typing and dragging) then works for that power only, and "📋 Copy
 // orders" hands them their order block to email to the game master.
@@ -230,6 +243,7 @@ function matchesPhase(s) {
 function openGame(g) {
   game = g;
   playback = null;
+  publishedPreview = null;
   online = { comments: null, moves: null, login: null, restored: false };
   S.saveGame(game);
   showScreen('game-screen');
@@ -266,6 +280,8 @@ function refreshAll() {
   $('btn-redo').disabled = ro || !(game.redoStack && game.redoStack.length);
   $('btn-publish').hidden = ro || !!game.published;
   $('btn-update-published').hidden = !(game.published && game.isOwner);
+  $('btn-update-published').disabled = !boardDirty();
+  $('btn-view-published').hidden = !(game.published && game.isOwner);
   $('panel-players').hidden = !(game.published && game.isOwner);
   renderOnlineUI();
   setOrderMode(null);
@@ -640,7 +656,7 @@ function selectOrderLine(unitProv) {
 function attachBoardHandlers() {
   board.handlers = {
     canDrag(p) {
-      if (playback || !game) return null;
+      if (playback || publishedPreview || !game) return null;
       const base = prov(p);
       if (editMode || game.step === 'movement') {
         const u = unitAt(base);
@@ -662,7 +678,7 @@ function attachBoardHandlers() {
       if (game.step === 'retreat') return retreatDrop(from, toProv, ev);
     },
     onClick(p, ev) {
-      if (playback || !game) return;
+      if (playback || publishedPreview || !game) return;
       const base = prov(p);
       if (editMode) return editClick(base, ev);
       if (game.step === 'retreat') {
@@ -721,7 +737,7 @@ function toggleOrderMode(mode) {
 // the same condition canDrag() uses — so they are hidden during edit mode,
 // playback, and the retreat/build phases.
 function updateOrderModeUI() {
-  const usable = !!game && !playback && !editMode && game.step === 'movement';
+  const usable = !!game && !playback && !publishedPreview && !editMode && game.step === 'movement';
   if (!usable && orderMode) orderMode = null;
   $('order-modes').hidden = !usable;
   $('btn-mode-support').setAttribute('aria-pressed', String(orderMode === 'support'));
@@ -864,6 +880,7 @@ function setEditMode(on) {
 }
 
 function toggleEditMode() {
+  if (publishedPreview) exitPublishedPreview();
   setEditMode(!editMode);
   if (editMode && playback) endPlayback();
 }
@@ -903,6 +920,7 @@ function editApply() {
   board.setUnits(game.units, game.step === 'retreat' && game.pending ? game.pending.dislodged : []);
   renderStandings();
   onOrdersChanged();
+  if (game.published && game.isOwner) $('btn-update-published').disabled = !boardDirty();
 }
 
 function editClick(p, ev) {
@@ -990,6 +1008,7 @@ async function resolveAndSkip() {
 }
 
 function redoPhase() {
+  if (publishedPreview) exitPublishedPreview();
   const entry = S.redoPhase(game);
   if (!entry) return toast('Nothing to redo');
   playback = null;
@@ -1242,6 +1261,7 @@ function replaySelected() {
 }
 
 function undoPhase() {
+  if (publishedPreview) exitPublishedPreview();
   const entry = S.undoLastPhase(game);
   if (!entry) return toast('Nothing to undo');
   playback = null;
@@ -1498,7 +1518,7 @@ async function setDeadline(date) {
   S.saveGame(game);
   renderDeadlineInfo();
   try {
-    await updatePublished(game);
+    await updatePublished(game, game.publishedState);
     toast(date ? `Deadline confirmed: ${date.toLocaleString()}` : 'Deadline cleared — submissions stay open', 'info');
   } catch (e) {
     toast('Could not save the deadline: ' + e.message);
@@ -1512,7 +1532,7 @@ async function setPublishMode(mode) {
   S.saveGame(game);
   renderOnlineUI();
   try {
-    await updatePublished(game);
+    await updatePublished(game, game.publishedState);
     toast(
       mode === 'auto'
         ? 'Auto publish: everyone sees all moves the moment the deadline passes'
@@ -1541,8 +1561,18 @@ function renderPlayersPanel() {
   if (document.activeElement !== modeSel) modeSel.value = publishMode();
   $('publish-mode-hint').textContent =
     publishMode() === 'auto'
-      ? 'When the deadline passes, every player immediately sees all submitted moves and can preview the result. Submissions edited after the deadline are void.'
+      ? 'When the deadline passes, every player immediately sees all submitted moves and can preview the result — there is no review step.'
       : 'When the deadline passes, submissions lock and only you see them. 🔍 Review the moves, then 📣 Publish results — or re-open by confirming a new deadline.';
+  // 🔍 Review is a manual-mode-only step, and only once the deadline has
+  // passed — before that, submissions can still change, and auto mode skips
+  // the review step entirely (the deadline reveals everything on its own).
+  const reviewBtn = $('players-review');
+  reviewBtn.hidden = publishMode() === 'auto';
+  reviewBtn.disabled = !deadlinePassed();
+  reviewBtn.title = deadlinePassed()
+    ? 'Fill the order box with every submission — for your eyes only, nothing is published'
+    : 'Available once the deadline passes';
+  $('players-publish-all').disabled = !deadlinePassed();
   const rows = $('players-rows');
   rows.replaceChildren();
   for (const p of activePowers()) {
@@ -1694,7 +1724,10 @@ async function doLoadPublishedMoves() {
 
 // GM: load everyone's submitted comments into the order box WITHOUT
 // publishing anything — the manual-mode review step after the deadline.
+// Gated on the deadline: before it, submissions can still change, and no
+// one — including the GM — gets a shortcut to see them early.
 async function gmReviewSubmissions() {
+  if (!deadlinePassed()) return toast('Wait for the deadline before reviewing submissions');
   try {
     if (!online.comments) await refreshOnlineStatus();
     const blocks = [];
@@ -1712,10 +1745,14 @@ async function gmReviewSubmissions() {
 }
 
 // GM: copy submitted comments into the per-power files — 📣 Publish results.
-// Without `force`, powers already published for this phase are skipped, and
-// so are comments edited after the deadline; the per-power 📥 button forces
-// through both (the deliberate grace path).
+// Without `force`, this waits for the deadline (results reveal what everyone
+// ordered, so releasing them early would leak the position to whoever's
+// already submitted while others are still deciding), skips powers already
+// published for this phase, and skips comments edited after the deadline;
+// the per-power 📥 button forces through all three (the deliberate grace
+// path for one power at a time).
 async function gmPublishFromComments(powers, { force = false } = {}) {
+  if (!force && !deadlinePassed()) return toast('Wait for the deadline before publishing results');
   try {
     const gistJson = await fetchGist(game.gistId);
     const moves = await readMovesFiles(gistJson);
@@ -1805,7 +1842,7 @@ async function savePlayers() {
   game.players = players;
   S.saveGame(game);
   try {
-    await updatePublished(game);
+    await updatePublished(game, game.publishedState);
     toast('Player assignments saved to the published game', 'info');
     await refreshOnlineStatus();
   } catch (e) {
@@ -1850,6 +1887,7 @@ async function doPublish() {
     game.gistUrl = url;
     game.published = true;
     game.isOwner = true;
+    game.publishedState = S.boardSnapshot(game);
     S.saveGame(game);
     refreshAll();
     const shareLink = `${location.origin}${location.pathname}?gist=${id}`;
@@ -1857,7 +1895,7 @@ async function doPublish() {
       'Published! Send this link to every player. They can watch the game, ' +
       'pick their country to write orders and copy them into an email to you, ' +
       'and branch the position to test ideas. After you resolve a turn, use ' +
-      '"☁ Update published" so everyone sees the latest moves at the same link.',
+      '"☁ Publish changes" so everyone sees the latest position at the same link.',
       shareLink
     );
   } catch (e) {
@@ -1866,20 +1904,73 @@ async function doPublish() {
   }
 }
 
+// The dedicated "publish a new game state" action — distinct from 📤 Submit
+// moves (the GM playing their own power) and from 📣 Publish results (the
+// order-reveal flow). Only enabled while boardDirty() — see refreshAll().
 async function doUpdatePublished() {
+  if (publishedPreview) exitPublishedPreview();
   try {
     await updatePublished(game);
+    game.publishedState = S.boardSnapshot(game);
+    S.saveGame(game);
+    $('btn-update-published').disabled = !boardDirty();
     const d = deadlineDate();
     const hasPlayers = game.players && Object.values(game.players).some(Boolean);
     if (hasPlayers && (!d || d.getTime() <= Date.now())) {
-      toast('Updated — now confirm the next deadline in 👥 Players', 'info');
+      toast('Changes published — now confirm the next deadline in 👥 Players', 'info');
     } else {
-      toast('Published game updated', 'info');
+      toast('Changes published', 'info');
     }
   } catch (e) {
-    toast('Update failed: ' + e.message);
+    toast('Publish failed: ' + e.message);
     if (isAuthError(e)) askToken();
   }
+}
+
+// GM: read the shared link's actual game.json and show it on the board —
+// without touching the local game object, so it's safe to check the live
+// position mid-plan. Anything that would move the real position (resolve,
+// undo, redo, board edits) exits the preview first.
+async function doViewPublished() {
+  if (!game || !game.gistId) return;
+  const btn = $('btn-view-published');
+  btn.disabled = true;
+  try {
+    const fresh = await readGameFile(await fetchGist(game.gistId));
+    if (!fresh) return toast('Could not read the published game');
+    if (playback) endPlayback();
+    if (editMode) setEditMode(false);
+    publishedPreview = {
+      year: fresh.year, season: fresh.season, step: fresh.step,
+      units: fresh.units, scOwners: fresh.scOwners, pending: fresh.pending,
+    };
+    renderPublishedPreview();
+  } catch (e) {
+    toast('Could not load the published game: ' + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderPublishedPreview() {
+  const p = publishedPreview;
+  $('panel-orders').hidden = true;
+  $('panel-edit').hidden = true;
+  $('panel-playback').hidden = true;
+  $('published-preview-banner').hidden = false;
+  $('btn-exit-preview').hidden = false;
+  board.clearOrders();
+  board.setPhaseText(S.phaseLabel(p) + ' — published');
+  board.setInfluence(p.scOwners);
+  board.setUnits(p.units, p.step === 'retreat' && p.pending ? p.pending.dislodged : []);
+  updateOrderModeUI();
+}
+
+function exitPublishedPreview() {
+  publishedPreview = null;
+  $('published-preview-banner').hidden = true;
+  $('btn-exit-preview').hidden = true;
+  refreshAll();
 }
 
 // GitHub answers a bad or under-scoped token with 401/403
@@ -1951,6 +2042,7 @@ async function init() {
   $('import-file').onchange = (e) => e.target.files[0] && importFile(e.target.files[0]);
   $('btn-home').onclick = () => {
     playback = null;
+    publishedPreview = null;
     renderHome();
     showScreen('home-screen');
   };
@@ -1997,6 +2089,8 @@ async function init() {
   $('btn-token').onclick = doEditToken;
   $('btn-publish').onclick = doPublish;
   $('btn-update-published').onclick = doUpdatePublished;
+  $('btn-view-published').onclick = doViewPublished;
+  $('btn-exit-preview').onclick = exitPublishedPreview;
   $('btn-load-gist').onclick = () => loadPublishedGame($('load-gist-input').value);
   $('country-select').onchange = () => {
     game.myCountry = $('country-select').value || null;

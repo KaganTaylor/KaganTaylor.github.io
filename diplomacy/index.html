@@ -45,6 +45,7 @@
     <span id="game-name"></span>
     <span id="phase-label"></span>
     <span id="readonly-badge" class="badge published" hidden>👁 Published — read only</span>
+    <span id="published-preview-banner" class="badge published" hidden>👁 Viewing published state</span>
     <span id="hover-info"></span>
     <span class="spacer"></span>
     <!-- order-mode toggles: a tappable stand-in for ⇧-drop / Ctrl-drop, so a
@@ -59,12 +60,14 @@
         <span class="mode-icon">⚓</span><span class="mode-label">Convoy</span>
       </button>
     </div>
+    <button id="btn-exit-preview" hidden title="Stop viewing the published state and go back to your own position">◀ Back to my position</button>
     <button id="btn-edit" title="Freely place, move and remove units and set supply-center owners">✏ Edit board</button>
     <div id="topbar-more-wrap">
       <button id="topbar-more-btn" title="More actions">⋮</button>
       <div id="topbar-more-menu">
         <button id="btn-publish" title="Publish this game as a read-only, shareable link">📣 Publish</button>
-        <button id="btn-update-published" hidden title="Push the current position to the published link">☁ Update published</button>
+        <button id="btn-update-published" hidden title="Push your position to the published link, so every player sees it">☁ Publish changes</button>
+        <button id="btn-view-published" hidden title="See the position that's actually live at the published link, without touching your own">👁 View published state</button>
         <button id="btn-export">Export</button>
       </div>
     </div>

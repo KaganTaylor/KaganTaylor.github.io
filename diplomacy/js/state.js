@@ -195,6 +195,24 @@ export function redoPhase(g) {
   return entry;
 }
 
+// The fields that make up the actual position on the board — used to tell
+// whether the game master's local copy has moved on from what's published.
+// Deliberately excludes anything derived from the order box: that text never
+// touches the game object until resolvePhase() runs, so drafting orders (or
+// dragging arrows to plan) never counts as a change on its own.
+export function boardSnapshot(g) {
+  return structuredClone({
+    year: g.year,
+    season: g.season,
+    step: g.step,
+    units: g.units,
+    scOwners: g.scOwners,
+    pending: g.pending,
+    history: g.history,
+    redoStack: g.redoStack || [],
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Persistence
 // ---------------------------------------------------------------------------
