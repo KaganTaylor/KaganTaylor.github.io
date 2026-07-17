@@ -90,6 +90,10 @@ a { color: #7fb4ff; }
   padding: 12px; display: flex; flex-direction: column; gap: 14px;
 }
 .panel h2 { margin: 0 0 8px; font-size: 1.05rem; }
+details.panel summary { cursor: pointer; margin-bottom: 8px; }
+details.panel summary h2 { margin: 0; display: inline; }
+details.panel summary::marker { color: #8892a0; }
+details.panel:not([open]) summary { margin-bottom: 0; }
 #phase-info { color: #aab3c0; font-size: 0.9em; margin-bottom: 8px; white-space: pre-wrap; }
 #orders-text { width: 100%; min-height: 260px; resize: vertical; font-family: Consolas, ui-monospace, monospace; font-size: 13px; line-height: 1.45; }
 #parse-status { font-size: 0.85em; margin: 6px 0; min-height: 1.2em; white-space: pre-wrap; }
@@ -116,7 +120,6 @@ a { color: #7fb4ff; }
 #submission-board .st-submitted { color: #ffc46b; }
 #submission-board .st-published { color: #6fce7f; }
 #players-rows, #players-assign-rows { display: flex; flex-direction: column; gap: 6px; }
-.panel .subhead { font-size: 0.95rem; margin: 12px 0 4px; color: #aab3c0; }
 #deadline-info { margin: 4px 0; }
 #deadline-info.past { color: #ffc46b; }
 .player-row { display: flex; gap: 6px; align-items: center; }
@@ -188,7 +191,7 @@ a { color: #7fb4ff; }
 }
 .settings-toggle-row:hover { background: #2c313a; }
 
-/* small toggle switch, used for ⚡ Autopublish */
+/* small toggle switch, used for ⚡ Auto-Publish */
 .switch { position: relative; display: inline-block; width: 36px; height: 20px; flex: none; }
 .switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
 .switch .slider {

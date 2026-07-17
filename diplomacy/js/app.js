@@ -287,6 +287,7 @@ function refreshAll() {
   $('btn-update-published').disabled = !boardDirty();
   $('btn-view-published').hidden = !(game.published && game.isOwner);
   $('panel-players').hidden = !(game.published && game.isOwner);
+  $('panel-deadline').hidden = !(game.published && game.isOwner);
   $('btn-set-players').hidden = !(game.published && game.isOwner);
   $('autopublish-row').hidden = !(game.published && game.isOwner);
   renderOnlineUI();
@@ -2068,6 +2069,10 @@ async function loadPublishedGame(idOrUrl) {
     // refreshOnlineStatus() re-verifies it against the token's login
     g.assignedPower = local ? local.assignedPower : null;
     if (g.assignedPower) g.myCountry = g.assignedPower;
+    // this position was just fetched from the published gist, so it *is*
+    // the published state — without this, boardDirty() sees no
+    // publishedState and reports dirty even though nothing has changed yet
+    g.publishedState = S.boardSnapshot(g);
     openGame(g);
     toast(
       isOwner

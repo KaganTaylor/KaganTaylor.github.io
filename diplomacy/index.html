@@ -73,7 +73,7 @@
         <button id="btn-export" title="Download this game as a JSON file">📤 Export</button>
         <button id="btn-set-players" hidden title="Assign each power to the GitHub username that will submit its moves">👥 Set players</button>
         <label id="autopublish-row" class="settings-toggle-row" hidden title="When the deadline passes: on reveals every submission to everyone immediately, off waits for you to review and publish results">
-          <span>⚡ Autopublish</span>
+          <span>⚡ Auto-Publish</span>
           <span class="switch"><input type="checkbox" id="autopublish-toggle"><span class="slider"></span></span>
         </label>
       </div>
@@ -107,8 +107,8 @@
       </div>
 
       <!-- orders entry -->
-      <div id="panel-orders" class="panel">
-        <h2 id="orders-title">Orders</h2>
+      <details id="panel-orders" class="panel" open>
+        <summary><h2 id="orders-title">Orders</h2></summary>
         <div class="sandbox-row" id="country-row" hidden>
           <select id="country-select" title="Choose your country to write its orders"></select>
           <button id="btn-copy-orders" title="Copy the orders below — paste them into your email to the game master">📋 Copy orders</button>
@@ -133,42 +133,9 @@
           <button id="btn-resolve-final" title="Resolve and jump straight to the final position — animates the moves without stepping through each order first">⏭ Resolve to final</button>
         </div>
         <p class="hint" id="drag-hint">Drag a unit to its destination to write the order · drop on itself to hold · <b>⇧-drop</b> on a unit to support it (or turn on 🤝&nbsp;Support and just drag) · <b>Ctrl-drop</b> a fleet at sea onto a moving army to convoy (or turn on ⚓&nbsp;Convoy) · unordered units hold.</p>
-      </div>
+      </details>
 
-      <!-- deadline + move review/publishing (game master, published games only) -->
-      <div id="panel-players" class="panel" hidden>
-        <h2>👥 Submissions</h2>
-        <p class="hint">Who's submitted for this phase and what's published — use ⚙ Settings to assign players
-          or toggle autopublish. Per power: 📥 publish its submission (overwrites), 📝 publish
-          what's in the order box for it, ✖ un-publish this phase.</p>
-        <div id="players-rows"></div>
-        <div class="btnrow">
-          <button id="players-review" title="Fill the order box with every submission — for your eyes only, nothing is published">🔍 Review submissions</button>
-          <button id="players-publish-all" class="primary" title="Reveal every power's submitted moves to all players (skips powers already published and late edits)">📣 Publish results</button>
-        </div>
-        <h3 class="subhead">⏰ Deadline</h3>
-        <p class="hint">Submissions close when the deadline passes. Confirm a new one each phase —
-          a week for movement, a day or two for retreats and builds. Confirming a new deadline
-          re-opens submissions.</p>
-        <div class="btnrow">
-          <button id="deadline-plus-week" title="Previous deadline + 1 week (from now if none is set)">+1 week</button>
-          <button id="deadline-plus-2day" title="Previous deadline + 48 hours (from now if none is set)">+48 h</button>
-          <button id="deadline-plus-day" title="Previous deadline + 24 hours (from now if none is set)">+24 h</button>
-          <button id="deadline-clear" title="Remove the deadline — submissions stay open until you confirm a new one">✖ Clear</button>
-        </div>
-        <div class="sandbox-row">
-          <input id="deadline-input" type="datetime-local" title="Pick a custom deadline (your local time)">
-          <button id="deadline-set" title="Set the deadline to the picked date and time">Set</button>
-        </div>
-      </div>
-
-      <!-- standings -->
-      <div id="panel-standings" class="panel">
-        <h2>Standings</h2>
-        <table id="standings"></table>
-      </div>
-
-      <!-- playback -->
+      <!-- playback (replaces the orders panel while stepping through a resolve) -->
       <div id="panel-playback" class="panel" hidden>
         <h2 id="playback-title"></h2>
         <div id="playback-controls" class="btnrow">
@@ -186,9 +153,15 @@
         </div>
       </div>
 
+      <!-- standings -->
+      <details id="panel-standings" class="panel" open>
+        <summary><h2>Standings</h2></summary>
+        <table id="standings"></table>
+      </details>
+
       <!-- history -->
-      <div id="panel-history" class="panel">
-        <h2>History</h2>
+      <details id="panel-history" class="panel" open>
+        <summary><h2>History</h2></summary>
         <select id="history-select"></select>
         <div class="btnrow">
           <button id="btn-replay" title="Step through this past phase again">Replay</button>
@@ -196,7 +169,38 @@
           <button id="btn-redo" title="Redo the last undone phase">⤻ Redo</button>
           <button id="btn-branch" title="Copy the current position into a new practice game">Branch</button>
         </div>
-      </div>
+      </details>
+
+      <!-- move review/publishing (game master, published games only) -->
+      <details id="panel-players" class="panel" open hidden>
+        <summary><h2>👥 Submissions</h2></summary>
+        <p class="hint">Who's submitted for this phase and what's published — use ⚙ Settings to assign players
+          or toggle Auto-Publish. Per power: 📥 publish its submission (overwrites), 📝 publish
+          what's in the order box for it, ✖ un-publish this phase.</p>
+        <div id="players-rows"></div>
+        <div class="btnrow">
+          <button id="players-review" title="Fill the order box with every submission — for your eyes only, nothing is published">🔍 Review submissions</button>
+          <button id="players-publish-all" class="primary" title="Reveal every power's submitted moves to all players (skips powers already published and late edits)">📣 Publish results</button>
+        </div>
+      </details>
+
+      <!-- deadline (game master, published games only) -->
+      <details id="panel-deadline" class="panel" open hidden>
+        <summary><h2>⏰ Deadline</h2></summary>
+        <p class="hint">Submissions close when the deadline passes. Confirm a new one each phase —
+          a week for movement, a day or two for retreats and builds. Confirming a new deadline
+          re-opens submissions.</p>
+        <div class="btnrow">
+          <button id="deadline-plus-week" title="Previous deadline + 1 week (from now if none is set)">+1 week</button>
+          <button id="deadline-plus-2day" title="Previous deadline + 48 hours (from now if none is set)">+48 h</button>
+          <button id="deadline-plus-day" title="Previous deadline + 24 hours (from now if none is set)">+24 h</button>
+          <button id="deadline-clear" title="Remove the deadline — submissions stay open until you confirm a new one">✖ Clear</button>
+        </div>
+        <div class="sandbox-row">
+          <input id="deadline-input" type="datetime-local" title="Pick a custom deadline (your local time)">
+          <button id="deadline-set" title="Set the deadline to the picked date and time">Set</button>
+        </div>
+      </details>
     </aside>
   </div>
 
