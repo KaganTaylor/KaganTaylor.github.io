@@ -62,13 +62,20 @@
     </div>
     <button id="btn-exit-preview" hidden title="Stop viewing the published state and go back to your own position">◀ Back to my position</button>
     <button id="btn-edit" title="Freely place, move and remove units and set supply-center owners">✏ Edit board</button>
-    <div id="topbar-more-wrap">
-      <button id="topbar-more-btn" title="More actions">⋮</button>
-      <div id="topbar-more-menu">
+    <div id="settings-wrap">
+      <button id="settings-btn" title="Game settings">
+        <span class="settings-icon">⚙</span><span class="settings-label">Settings</span>
+      </button>
+      <div id="settings-menu">
         <button id="btn-publish" title="Publish this game as a read-only, shareable link">📣 Publish</button>
         <button id="btn-update-published" hidden title="Push your position to the published link, so every player sees it">☁ Publish changes</button>
         <button id="btn-view-published" hidden title="See the position that's actually live at the published link, without touching your own">👁 View published state</button>
-        <button id="btn-export">Export</button>
+        <button id="btn-export" title="Download this game as a JSON file">📤 Export</button>
+        <button id="btn-set-players" hidden title="Assign each power to the GitHub username that will submit its moves">👥 Set players</button>
+        <label id="autopublish-row" class="settings-toggle-row" hidden title="When the deadline passes: on reveals every submission to everyone immediately, off waits for you to review and publish results">
+          <span>⚡ Autopublish</span>
+          <span class="switch"><input type="checkbox" id="autopublish-toggle"><span class="slider"></span></span>
+        </label>
       </div>
     </div>
   </header>
@@ -128,25 +135,17 @@
         <p class="hint" id="drag-hint">Drag a unit to its destination to write the order · drop on itself to hold · <b>⇧-drop</b> on a unit to support it (or turn on 🤝&nbsp;Support and just drag) · <b>Ctrl-drop</b> a fleet at sea onto a moving army to convoy (or turn on ⚓&nbsp;Convoy) · unordered units hold.</p>
       </div>
 
-      <!-- player assignments + move publishing (game master, published games only) -->
+      <!-- deadline + move review/publishing (game master, published games only) -->
       <div id="panel-players" class="panel" hidden>
-        <h2>👥 Players</h2>
-        <p class="hint">Assign each power to the GitHub username that will submit its moves.
-          Assigned players are locked to their power when they open the game with their token.</p>
+        <h2>👥 Submissions</h2>
+        <p class="hint">Who's submitted for this phase and what's published — use ⚙ Settings to assign players
+          or toggle autopublish. Per power: 📥 publish its submission (overwrites), 📝 publish
+          what's in the order box for it, ✖ un-publish this phase.</p>
         <div id="players-rows"></div>
         <div class="btnrow">
-          <button id="players-save" title="Save the assignments to the published game">💾 Save assignments</button>
           <button id="players-review" title="Fill the order box with every submission — for your eyes only, nothing is published">🔍 Review submissions</button>
           <button id="players-publish-all" class="primary" title="Reveal every power's submitted moves to all players (skips powers already published and late edits)">📣 Publish results</button>
         </div>
-        <h3 class="subhead">⚙ Settings</h3>
-        <div class="sandbox-row">
-          <select id="publish-mode" title="What happens when the deadline passes">
-            <option value="manual">📋 Manual publish — review first</option>
-            <option value="auto">⚡ Auto publish at the deadline</option>
-          </select>
-        </div>
-        <p class="hint" id="publish-mode-hint"></p>
         <h3 class="subhead">⏰ Deadline</h3>
         <p class="hint">Submissions close when the deadline passes. Confirm a new one each phase —
           a week for movement, a day or two for retreats and builds. Confirming a new deadline
@@ -161,8 +160,6 @@
           <input id="deadline-input" type="datetime-local" title="Pick a custom deadline (your local time)">
           <button id="deadline-set" title="Set the deadline to the picked date and time">Set</button>
         </div>
-        <p class="hint">Per power: 📥 publish its submission (overwrites), 📝 publish
-          what's in the order box for it, ✖ un-publish this phase.</p>
       </div>
 
       <!-- standings -->
@@ -211,6 +208,19 @@
 
   <div id="coast-picker" hidden></div>
   <div id="toast" hidden></div>
+
+  <div id="players-modal" class="modal-overlay" hidden>
+    <div class="modal-card">
+      <h2>👥 Set players</h2>
+      <p class="hint">Assign each power to the GitHub username that will submit its moves.
+        Assigned players are locked to their power when they open the game with their token.</p>
+      <div id="players-assign-rows"></div>
+      <div class="btnrow">
+        <button id="players-save" class="primary" title="Save the assignments to the published game">💾 Save assignments</button>
+        <button id="players-modal-close">Close</button>
+      </div>
+    </div>
+  </div>
 </section>
 
 <script type="module" src="js/app.js"></script>

@@ -672,7 +672,17 @@ export class Board {
   // markers). Successful moves slide to their destination, bounced moves
   // lunge toward it and fall back, failed retreats and removals fade out.
   // Resolves when all animations finish.
-  animateFinal(entry) {
+  //
+  // With { reverse: true } — undoing the final confirmation step — every
+  // animation plays back to front instead of snapping the board straight to
+  // its pre-move state. The DOM is still expected to be in the *pre-move*
+  // layout when this is called (same as the forward case: unitsBefore +
+  // dislodged already rendered), so a moved unit's node sits at its origin
+  // with no transform; a reversed move keyframes from "already displaced"
+  // back to "identity", which the browser applies from the very first
+  // animation frame, so nothing visibly snaps before the tween starts. Fades
+  // are similarly flipped (0 → 1, appearing rather than disappearing).
+  animateFinal(entry, { reverse = false } = {}) {
     const anims = [];
     const findUnit = (layer, p) =>
       layer.querySelector(`use[data-prov="${prov(p)}"]`);
@@ -683,6 +693,13 @@ export class Board {
       return { x: b.x - a.x, y: b.y - a.y };
     };
     const ease = 'cubic-bezier(0.45, 0.05, 0.35, 1)';
+    const moveKeyframes = (d) => reverse
+      ? [{ transform: `translate(${d.x}px, ${d.y}px)` }, { transform: 'translate(0px, 0px)' }]
+      : [{ transform: 'translate(0px, 0px)' }, { transform: `translate(${d.x}px, ${d.y}px)` }];
+    const fadeKeyframes = () => reverse
+      ? [{ opacity: 0 }, { opacity: 1 }]
+      : [{ opacity: 1 }, { opacity: 0 }];
+    const fadeEasing = reverse ? 'ease-out' : 'ease-in';
 
     for (const r of entry.results || []) {
       const o = r.order;
@@ -693,16 +710,11 @@ export class Board {
         if (!d) continue;
         if (r.verdict === 'succeeds') {
           anims.push(
-            node.animate(
-              [
-                { transform: 'translate(0px, 0px)' },
-                { transform: `translate(${d.x}px, ${d.y}px)` },
-              ],
-              { duration: ANIM_MS, easing: ease, fill: 'forwards' }
-            )
+            node.animate(moveKeyframes(d), { duration: ANIM_MS, easing: ease, fill: 'forwards' })
           );
         } else if (r.verdict === 'fails' && !o.illegal) {
-          // bounce: advance a third of the way, then fall back
+          // bounce: advance a third of the way, then fall back — the same
+          // lunge-and-return either direction, so it isn't flipped
           anims.push(
             node.animate(
               [
@@ -725,19 +737,13 @@ export class Board {
           const d = delta(prov(o.loc), o.destLoc || o.dest);
           if (!d) continue;
           anims.push(
-            node.animate(
-              [
-                { transform: 'translate(0px, 0px)' },
-                { transform: `translate(${d.x}px, ${d.y}px)` },
-              ],
-              { duration: ANIM_MS, easing: ease, fill: 'forwards' }
-            )
+            node.animate(moveKeyframes(d), { duration: ANIM_MS, easing: ease, fill: 'forwards' })
           );
         } else {
           anims.push(
-            node.animate([{ opacity: 1 }, { opacity: 0 }], {
+            node.animate(fadeKeyframes(), {
               duration: ANIM_MS * 0.7,
-              easing: 'ease-in',
+              easing: fadeEasing,
               fill: 'forwards',
             })
           );
@@ -746,9 +752,9 @@ export class Board {
         const node = findUnit(this.layers.units, o.loc);
         if (node)
           anims.push(
-            node.animate([{ opacity: 1 }, { opacity: 0 }], {
+            node.animate(fadeKeyframes(), {
               duration: ANIM_MS * 0.7,
-              easing: 'ease-in',
+              easing: fadeEasing,
               fill: 'forwards',
             })
           );
@@ -761,9 +767,9 @@ export class Board {
         const node = findUnit(this.layers.dislodged, d.from);
         if (node)
           anims.push(
-            node.animate([{ opacity: 1 }, { opacity: 0 }], {
+            node.animate(fadeKeyframes(), {
               duration: ANIM_MS * 0.7,
-              easing: 'ease-in',
+              easing: fadeEasing,
               fill: 'forwards',
             })
           );
@@ -779,9 +785,9 @@ export class Board {
         const node = findUnit(this.layers.dislodged, d.from);
         if (node)
           anims.push(
-            node.animate([{ opacity: 1 }, { opacity: 0 }], {
+            node.animate(fadeKeyframes(), {
               duration: ANIM_MS * 0.7,
-              easing: 'ease-in',
+              easing: fadeEasing,
               fill: 'forwards',
             })
           );

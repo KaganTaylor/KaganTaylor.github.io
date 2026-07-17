@@ -20,6 +20,10 @@ import {
 
 const $ = (id) => document.getElementById(id);
 
+// coast-suffix labels for the hover tooltip on split-coast provinces
+// (Spain, St Petersburg, Bulgaria)
+const COAST_NAMES = { nc: 'North coast', sc: 'South coast', ec: 'East coast' };
+
 let board;
 let game = null;
 let playback = null; // {entry, step, orders, readonly, animating}
@@ -283,6 +287,8 @@ function refreshAll() {
   $('btn-update-published').disabled = !boardDirty();
   $('btn-view-published').hidden = !(game.published && game.isOwner);
   $('panel-players').hidden = !(game.published && game.isOwner);
+  $('btn-set-players').hidden = !(game.published && game.isOwner);
+  $('autopublish-row').hidden = !(game.published && game.isOwner);
   renderOnlineUI();
   setOrderMode(null);
   prefillOrders();
@@ -697,11 +703,14 @@ function attachBoardHandlers() {
       const base = prov(p);
       const u = unitAt(base);
       const owner = game.scOwners[base];
+      const coastSuffix = p.includes('/') ? p.split('/')[1] : null;
+      const tail = u ? ` - ${u.type === 'A' ? 'Army' : 'Fleet'} ${cap(u.power)}` : (owner ? ` - ${cap(owner)}` : '');
       $('hover-info').textContent =
-        `${provName(p)}${PROVINCES[base].sc ? ' ⭐' : ''}` +
-        (p.includes('/') ? ` — write "${p}"` : '') +
-        (owner ? ` (${cap(owner)})` : '') +
-        (u ? ` — ${u.type === 'A' ? 'Army' : 'Fleet'} ${cap(u.power)}` : '');
+        provName(p) +
+        (coastSuffix ? ` (${COAST_NAMES[coastSuffix] || coastSuffix})` : '') +
+        (coastSuffix ? ` "${p}"` : '') +
+        (PROVINCES[base].sc ? ' ⭐' : '') +
+        tail;
     },
     onDragStart(p) {
       drawLive(prov(p)); // hide this unit's old arrow while dragging
@@ -1152,6 +1161,8 @@ function stepPlayback(delta, opts = {}) {
   if (target === playback.step) return;
   const crossingToFinal = delta > 0 && playback.step <= outcomeStep() && target >= finalStep();
   if (crossingToFinal && !opts.noAnim) return animateToFinal();
+  const crossingFromFinal = delta < 0 && playback.step >= finalStep() && target <= outcomeStep();
+  if (crossingFromFinal && !opts.noAnim) return animateFromFinal();
   playback.step = target;
   renderPlayback();
 }
@@ -1170,6 +1181,30 @@ function animateToFinal() {
     if (playback !== pb) return;
     pb.animating = false;
     pb.step = finalStep();
+    renderPlayback();
+  });
+}
+
+// Undoing the final confirmation step: play the same animation backwards
+// instead of snapping units straight back to their pre-move positions.
+// renderPlayback() for the outcome step already lays the board out exactly
+// as animateToFinal() found it before playing forward (units at their
+// pre-move locations, dislodged units in the dislodged layer) — reusing it
+// here means the reverse tween starts from the same DOM state the forward
+// one did, just interpolating the opposite way.
+function animateFromFinal() {
+  const pb = playback;
+  pb.animating = true;
+  pb.step = outcomeStep();
+  renderPlayback();
+  board.clearOrders();
+  $('pb-step-label').textContent = 'Undoing moves…';
+  $('pb-prev').disabled = true;
+  $('pb-next').disabled = true;
+  board.animateFinal(pb.entry, { reverse: true }).then(() => {
+    if (playback !== pb) return;
+    pb.animating = false;
+    pb.step = outcomeStep();
     renderPlayback();
   });
 }
@@ -1396,6 +1431,9 @@ const STATUS_BADGE = {
 function renderOnlineUI() {
   if (!game) return;
   const hasPlayers = !!(game.published && game.players && Object.values(game.players).some(Boolean));
+  if (document.activeElement !== $('autopublish-toggle')) {
+    $('autopublish-toggle').checked = publishMode() === 'auto';
+  }
   $('submit-row').hidden = !assignedPower();
   $('btn-submit-moves').disabled = deadlinePassed();
   $('online-row').hidden = !hasPlayers;
@@ -1557,12 +1595,6 @@ function bumpDeadline(hours) {
 function renderPlayersPanel() {
   const input = $('deadline-input');
   if (document.activeElement !== input) input.value = game.deadline ? isoToLocalInput(game.deadline) : '';
-  const modeSel = $('publish-mode');
-  if (document.activeElement !== modeSel) modeSel.value = publishMode();
-  $('publish-mode-hint').textContent =
-    publishMode() === 'auto'
-      ? 'When the deadline passes, every player immediately sees all submitted moves and can preview the result — there is no review step.'
-      : 'When the deadline passes, submissions lock and only you see them. 🔍 Review the moves, then 📣 Publish results — or re-open by confirming a new deadline.';
   // 🔍 Review is a manual-mode-only step, and only once the deadline has
   // passed — before that, submissions can still change, and auto mode skips
   // the review step entirely (the deadline reveals everything on its own).
@@ -1581,11 +1613,9 @@ function renderPlayersPanel() {
     const name = document.createElement('span');
     name.className = 'pname';
     name.innerHTML = `<span class="chip" style="background:${POWER_COLORS[p]}"></span>${cap(p)}`;
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.placeholder = 'GitHub username';
-    input.value = (game.players || {})[p] || '';
-    input.dataset.power = p;
+    const login = document.createElement('span');
+    login.className = 'login';
+    login.textContent = (game.players || {})[p] ? '@' + (game.players || {})[p] : '—';
     const status = document.createElement('span');
     status.className = 'pstatus ' + STATUS_BADGE[powerOnlineStatus(p)][1];
     status.textContent = { published: '✓', revealed: '✓', late: '⚠', submitted: '📨', none: '—', unknown: '…' }[powerOnlineStatus(p)];
@@ -1598,7 +1628,7 @@ function renderPlayersPanel() {
       return b;
     };
     row.append(
-      name, input, status,
+      name, login, status,
       mk('📥', `Publish ${cap(p)}'s submitted moves for this phase (overwrites what's published)`,
         () => gmPublishFromComments([p], { force: true })),
       mk('📝', `Publish the order box's ${cap(p)} block for this phase (manual override)`,
@@ -1606,6 +1636,37 @@ function renderPlayersPanel() {
       mk('✖', `Un-publish ${cap(p)} for this phase so they can resubmit`,
         () => gmUnpublish(p)),
     );
+    rows.appendChild(row);
+  }
+}
+
+// "Set players" modal (⚙ Settings) — assigns the GitHub username for each
+// power. Kept separate from the review rows above, which are status/action
+// only; this is the only place the username itself is edited.
+function openPlayersModal() {
+  renderPlayersAssignRows();
+  $('players-modal').hidden = false;
+}
+
+function closePlayersModal() {
+  $('players-modal').hidden = true;
+}
+
+function renderPlayersAssignRows() {
+  const rows = $('players-assign-rows');
+  rows.replaceChildren();
+  for (const p of activePowers()) {
+    const row = document.createElement('div');
+    row.className = 'player-row';
+    const name = document.createElement('span');
+    name.className = 'pname';
+    name.innerHTML = `<span class="chip" style="background:${POWER_COLORS[p]}"></span>${cap(p)}`;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'GitHub username';
+    input.value = (game.players || {})[p] || '';
+    input.dataset.power = p;
+    row.append(name, input);
     rows.appendChild(row);
   }
 }
@@ -1835,7 +1896,7 @@ async function gmUnpublish(power) {
 
 async function savePlayers() {
   const players = {};
-  for (const input of $('players-rows').querySelectorAll('input')) {
+  for (const input of $('players-assign-rows').querySelectorAll('input')) {
     const v = input.value.trim().replace(/^@/, '');
     if (v) players[input.dataset.power] = v;
   }
@@ -1844,6 +1905,7 @@ async function savePlayers() {
   try {
     await updatePublished(game, game.publishedState);
     toast('Player assignments saved to the published game', 'info');
+    closePlayersModal();
     await refreshOnlineStatus();
   } catch (e) {
     toast('Save failed: ' + e.message);
@@ -2067,18 +2129,19 @@ async function init() {
   // and the board pane's inset has to follow it
   new ResizeObserver(updateSheetInset).observe($('sidebar'));
   addEventListener('resize', updateSheetInset);
-  $('topbar-more-btn').onclick = (e) => {
+  $('settings-btn').onclick = (e) => {
     e.stopPropagation();
-    $('topbar-more-menu').classList.toggle('open');
+    $('settings-menu').classList.toggle('open');
   };
-  // picking an action closes the menu (on desktop the menu is always open —
-  // its buttons sit inline in the topbar — and the class is simply unused)
-  for (const b of $('topbar-more-menu').querySelectorAll('button')) {
-    b.addEventListener('click', () => $('topbar-more-menu').classList.remove('open'));
+  // picking an action closes the menu; the autopublish toggle row is a
+  // <label>, not a <button>, so flipping it leaves the menu open
+  for (const b of $('settings-menu').querySelectorAll('button')) {
+    b.addEventListener('click', () => $('settings-menu').classList.remove('open'));
   }
   document.addEventListener('pointerdown', (e) => {
-    const menu = $('topbar-more-menu');
-    if (menu.classList.contains('open') && !menu.contains(e.target) && e.target !== $('topbar-more-btn')) {
+    const menu = $('settings-menu');
+    const btn = $('settings-btn');
+    if (menu.classList.contains('open') && !menu.contains(e.target) && !btn.contains(e.target)) {
       menu.classList.remove('open');
     }
   });
@@ -2101,10 +2164,15 @@ async function init() {
   $('btn-submit-moves').onclick = doSubmitMoves;
   $('btn-load-moves').onclick = doLoadPublishedMoves;
   $('btn-refresh-online').onclick = () => refreshOnlineStatus();
+  $('btn-set-players').onclick = openPlayersModal;
   $('players-save').onclick = savePlayers;
+  $('players-modal-close').onclick = closePlayersModal;
+  $('players-modal').addEventListener('pointerdown', (e) => {
+    if (e.target === $('players-modal')) closePlayersModal();
+  });
   $('players-review').onclick = gmReviewSubmissions;
   $('players-publish-all').onclick = () => gmPublishFromComments(activePowers());
-  $('publish-mode').onchange = (e) => setPublishMode(e.target.value);
+  $('autopublish-toggle').onchange = (e) => setPublishMode(e.target.checked ? 'auto' : 'manual');
   $('deadline-plus-week').onclick = () => bumpDeadline(7 * 24);
   $('deadline-plus-2day').onclick = () => bumpDeadline(48);
   $('deadline-plus-day').onclick = () => bumpDeadline(24);

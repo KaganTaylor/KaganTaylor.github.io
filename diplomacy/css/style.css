@@ -70,9 +70,13 @@ a { color: #7fb4ff; }
   display: flex; align-items: center; gap: 14px;
   padding: 8px 12px; background: #22262e; border-bottom: 1px solid #3a4150;
 }
-#game-name { font-weight: 600; }
-#phase-label { color: #ffd479; font-weight: 600; }
-#hover-info { color: #8892a0; font-size: 0.9em; }
+#game-name { font-weight: 600; flex: none; }
+#phase-label { color: #ffd479; font-weight: 600; flex: none; }
+#hover-info {
+  color: #8892a0; font-size: 0.9em;
+  min-width: 0; max-width: 320px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
+}
 #topbar .spacer { flex: 1; }
 
 #main { flex: 1; display: flex; min-height: 0; }
@@ -111,13 +115,14 @@ a { color: #7fb4ff; }
 #submission-board .st-none { color: #77808e; }
 #submission-board .st-submitted { color: #ffc46b; }
 #submission-board .st-published { color: #6fce7f; }
-#players-rows { display: flex; flex-direction: column; gap: 6px; }
+#players-rows, #players-assign-rows { display: flex; flex-direction: column; gap: 6px; }
 .panel .subhead { font-size: 0.95rem; margin: 12px 0 4px; color: #aab3c0; }
 #deadline-info { margin: 4px 0; }
 #deadline-info.past { color: #ffc46b; }
 .player-row { display: flex; gap: 6px; align-items: center; }
 .player-row .pname { width: 72px; flex: none; font-size: 0.9em; }
 .player-row input { flex: 1; min-width: 0; }
+.player-row .login { flex: 1; min-width: 0; color: #8892a0; font-size: 0.85em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .player-row button { padding: 6px 8px; flex: none; }
 .player-row .pstatus { flex: none; font-size: 0.85em; width: 1.4em; text-align: center; }
 
@@ -165,14 +170,51 @@ a { color: #7fb4ff; }
 
 #history-select { width: 100%; }
 
-/* ---------- topbar overflow menu ---------- */
-/* desktop: the menu's buttons just sit inline in the topbar as before.
-   `display: contents` dissolves the wrapper, so its `position: relative` does
-   nothing here — on mobile the wrapper is restored to a real box (below) so
-   the drop-down anchors to the ⋮ button instead of to the viewport. */
-#topbar-more-wrap { position: relative; display: contents; }
-#topbar-more-btn { display: none; }
-#topbar-more-menu { display: contents; }
+/* ---------- settings dropdown ---------- */
+#settings-wrap { position: relative; flex: none; }
+#settings-btn { display: inline-flex; align-items: center; gap: 6px; }
+#settings-menu {
+  display: none;
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 25;
+  background: #22262e; border: 1px solid #454c58; border-radius: 8px;
+  padding: 6px; flex-direction: column; gap: 6px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.5); min-width: 210px;
+}
+#settings-menu.open { display: flex; }
+#settings-menu button { text-align: left; width: 100%; }
+.settings-toggle-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 6px 12px; cursor: pointer; border-radius: 6px;
+}
+.settings-toggle-row:hover { background: #2c313a; }
+
+/* small toggle switch, used for ⚡ Autopublish */
+.switch { position: relative; display: inline-block; width: 36px; height: 20px; flex: none; }
+.switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+.switch .slider {
+  position: absolute; inset: 0; background: #454c58; border-radius: 20px; transition: background .15s;
+  pointer-events: none;
+}
+.switch .slider::before {
+  content: ""; position: absolute; width: 14px; height: 14px; left: 3px; top: 3px;
+  background: #e2e6ec; border-radius: 50%; transition: transform .15s;
+}
+.switch input:checked + .slider { background: #3f8f5e; }
+.switch input:checked + .slider::before { transform: translateX(16px); }
+
+/* ---------- modal overlay (⚙ Settings → Set players) ---------- */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 50;
+  background: rgba(10, 11, 14, 0.6);
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px;
+}
+.modal-card {
+  background: #22262e; border: 1px solid #454c58; border-radius: 10px;
+  padding: 18px; max-width: 460px; width: 100%; max-height: 80vh; overflow-y: auto;
+  box-shadow: 0 8px 30px rgba(0,0,0,.5);
+}
+.modal-card h2 { margin: 0 0 8px; }
 
 /* ---------- mobile tab bar (hidden on desktop) ---------- */
 #mobile-tabbar { display: none; }
@@ -192,6 +234,7 @@ a { color: #7fb4ff; }
   #topbar { gap: 8px; padding: 8px; flex-wrap: nowrap; }
   #hover-info { display: none; }
   #btn-edit { display: none; } /* superseded by the mobile Edit tab */
+  .settings-label { display: none; } /* icon-only ⚙ button on mobile */
 
   /* Lifted out of the topbar and parked over the map's top-right corner: big
      thumb-sized targets that stay put while panning/zooming, sitting clear of
@@ -210,19 +253,6 @@ a { color: #7fb4ff; }
   .mode-btn .mode-icon { font-size: 20px; line-height: 1; }
   .mode-btn .mode-label { font-size: 11px; color: #aab3c0; }
   .mode-btn[aria-pressed="true"] .mode-label { color: #dcecff; }
-
-  /* a real box again, so the absolutely-positioned menu below hangs off the
-     ⋮ button rather than off the page (which put it below the viewport) */
-  #topbar-more-wrap { display: block; position: relative; flex: none; }
-  #topbar-more-btn { display: inline-flex; align-items: center; justify-content: center; }
-  #topbar-more-menu {
-    display: none;
-    position: absolute; right: 0; top: calc(100% + 6px); z-index: 25;
-    background: #22262e; border: 1px solid #454c58; border-radius: 8px;
-    padding: 6px; flex-direction: column; gap: 6px;
-    box-shadow: 0 4px 16px rgba(0,0,0,.5); min-width: 180px;
-  }
-  #topbar-more-menu.open { display: flex; }
 
   /* the tab bar is fixed (out of flow), so #main has to reserve its height or
      the board runs underneath it */
