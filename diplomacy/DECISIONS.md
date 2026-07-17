@@ -142,3 +142,29 @@ Submissions are cleartext. Real pre-deadline secrecy on public infrastructure wo
 Where they live differs by size, because the constraints differ. On desktop they are ordinary topbar buttons next to ✏ Edit board. On mobile the topbar has no room and, more importantly, the toggle has to be reachable *while the map is being used* — so they are lifted out of the flow and floated over the map's top-right corner as two thumb-sized targets, below the ⋮ button and clear of it (`--topbar-h`, measured in `app.js`, keeps them under a topbar whose height depends on the phone).
 
 They are **one-shot**: a mode switches itself off as soon as an order is written. Leaving it armed would silently turn the *next* intended move into another support, which is the kind of thing you only notice after resolving. A *failed* drop (nothing there to support, dropping onto a non-fleet) leaves the mode on, so the drag can just be retried. The toggles are hidden outside movement orders — during edit mode, playback, retreats, builds, and for read-only spectators — where they would mean nothing.
+
+---
+
+## Submissions are hidden by default, not just gated
+
+Who's submitted, and their actual order text, used to live in a permanent sidebar section (`#panel-players`) and a small status table every player could see in the Orders panel. Both are gone. The status table was visible to *everyone*, not just the GM — a real privacy leak, since a game where players can see their opponents' submission timing is a worse game (it turns "did they submit yet" into a signal). And the GM's own review tools sat open on the main screen at all times, whether or not there was anything to review.
+
+Both now live behind one shared `#submissions-modal`, reachable two ways, both GM-only: **⏰ Deadline → 🔍 Review submitted orders** (the expected per-phase step — only really useful once there's something to review) and **⚙ Settings → 🔍 Submissions** (ungated by the deadline, for the "something's wrong, check one player's order" case a GM occasionally needs regardless of where the clock stands). Neither is shown unless the GM deliberately opens it — the point isn't just *who* can see it, but that a GM who doesn't want to know isn't confronted with it by default either. `renderSubmissionsModal()` only runs while the modal is actually open (checked in `renderOnlineUI()`), rather than on every render pass, since it's no longer part of the always-visible page.
+
+---
+
+## The deadline countdown is one urgency value, read in three places
+
+`deadlineUrgency()` (`js/app.js`) is the single `'none' | 'warn' | 'danger'` classification — no deadline set, counting down, or passed — behind every place the app signals it: the topbar's always-visible `DD:HH:MM:SS` chip (ticking on its own 1 s interval, deliberately separate from the existing 60 s online-status poll so a per-second update doesn't imply a per-second network check), the sidebar's `#panel-deadline` box (a subtle background/border tint), and the Orders panel's `#deadline-info` hint text. Three call sites reading one function, rather than three places independently comparing `Date.now()` against the deadline, is what keeps "orders are open" from ever disagreeing with itself across the page.
+
+The countdown lives in the topbar — not just the sidebar, where the old deadline text was easy to miss — because it has to be legible to every viewer, GM or player, on both mobile and desktop, and it's the one piece of state that changes every second regardless of anyone's actions. Orders are treated as closed both before any deadline is ever set and after one passes: with no deadline there is nothing to have been "on time" against, so leaving submission open in that state was really just a confusing default, not a real allowance.
+
+---
+
+## Debug "view as player" is safe because submissions are keyed by login, not by claim
+
+`⚙ Settings → 🕵 View as` lets the GM preview and test the game exactly as one assigned player would, including a real `📤 Submit moves` — without a second GitHub account. That only works safely because of a property the online-play design already had: a submission comment is found by the *submitter's actual GitHub login* (`findSubmission`, `js/publish.js`), never by the `power` field inside its payload. A GM debug-testing as France still submits under their own login, which is necessarily a different comment object than the real France player's — so a debug submission can never overwrite, shadow, or be mistaken for a real player's comment, no matter which power the GM claims to be. If claim-based lookup were used instead (trust the `power` field in the payload), debug submissions would be indistinguishable from real ones and this feature would be unsafe to build at all.
+
+The one comment a debug session *can* touch is the GM's own — if they happen to also be a real assigned player elsewhere, or from a previous test — so `enterDebugView()` captures it byte-for-byte (`{commentId, body}`) before doing anything, and `exitDebugView()` either restores that exact body or, if none existed, deletes whatever a debug submit created. This is deliberately implemented as a real GitHub comment (through the same `submitOrders()` path a real player uses) rather than a mocked/local-only submission, specifically so the GM is testing the real network path, not a simulation of it — the entire point of the feature is to catch bugs in the actual submit flow.
+
+Because leaving a debug session open by navigating away (🏠 Home, or opening a different game) would otherwise strand a stray comment on the old game's gist, both paths run the same restore-or-delete cleanup (`cleanupDebugSubmission()`) as a best-effort safety net, independent of `exitDebugView()`'s own toast/UI handling — cleanup is a pure network operation against whichever gist/captured-state is passed in, not tied to whatever `game` happens to be current when it runs.

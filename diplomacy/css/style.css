@@ -50,6 +50,11 @@ a { color: #7fb4ff; }
 .badge { font-size: 0.8em; padding: 2px 8px; border-radius: 10px; }
 .badge.published { background: #1f2b40; color: #8fb4ea; border: 1px solid #3f5c8f; }
 .badge.sandbox { background: #2b2010; color: #e0b070; border: 1px solid #8f6a3f; }
+.badge.neutral { background: #262a31; color: #8892a0; border: 1px solid #3a4150; }
+.badge.warn { background: #3a2f10; color: #ffc46b; border: 1px solid #8f6a3f; }
+.badge.danger { background: #402b2b; color: #ff8484; border: 1px solid #7a4444; }
+.badge.debug { background: #2b2040; color: #c9a8ff; border: 1px solid #6a4f99; }
+#deadline-countdown { font-variant-numeric: tabular-nums; font-family: Consolas, ui-monospace, monospace; flex: none; }
 .filebtn {
   display: inline-block; text-align: center;
   background: #2c313a; border: 1px solid #454c58; border-radius: 6px;
@@ -113,15 +118,15 @@ details.panel:not([open]) summary { margin-bottom: 0; }
 #submit-row { align-items: center; }
 #submit-status { align-self: center; }
 #submit-status.done { color: #6fce7f; }
-#submission-board { width: 100%; border-collapse: collapse; font-size: 0.85em; margin: 6px 0; }
-#submission-board td { padding: 2px 6px; }
-#submission-board .login { color: #8892a0; }
-#submission-board .st-none { color: #77808e; }
-#submission-board .st-submitted { color: #ffc46b; }
-#submission-board .st-published { color: #6fce7f; }
-#players-rows, #players-assign-rows { display: flex; flex-direction: column; gap: 6px; }
+#submissions-rows, #players-assign-rows { display: flex; flex-direction: column; gap: 6px; }
+.pstatus.st-none { color: #77808e; }
+.pstatus.st-submitted { color: #ffc46b; }
+.pstatus.st-published { color: #6fce7f; }
 #deadline-info { margin: 4px 0; }
-#deadline-info.past { color: #ffc46b; }
+#deadline-info.warn { color: #ffc46b; }
+#deadline-info.past { color: #ff8484; }
+#panel-deadline.deadline-warn { background: #201d10; border-radius: 8px; box-shadow: inset 3px 0 0 #8f6a3f; padding-left: 8px; }
+#panel-deadline.deadline-danger { background: #241717; border-radius: 8px; box-shadow: inset 3px 0 0 #7a4444; padding-left: 8px; }
 .player-row { display: flex; gap: 6px; align-items: center; }
 .player-row .pname { width: 72px; flex: none; font-size: 0.9em; }
 .player-row input { flex: 1; min-width: 0; }
@@ -234,8 +239,17 @@ details.panel:not([open]) summary { margin-bottom: 0; }
   }
   button, .filebtn, select { min-height: 44px; }
 
-  #topbar { gap: 8px; padding: 8px; flex-wrap: nowrap; }
+  #topbar { gap: 6px; padding: 8px; flex-wrap: nowrap; }
   #hover-info { display: none; }
+  /* The countdown's DD:HH:MM:SS must stay whole (that's the whole point of
+     the format), so it's never truncated. #debug-view-banner instead drops
+     its label text down to just the 🕵 icon — there isn't room for both the
+     full countdown and a full debug label alongside game name/phase/⚙
+     Settings on a phone screen, and ⚙ Settings (the only way to exit debug
+     view) must never be the thing that gets pushed off the edge. */
+  #deadline-countdown { font-size: 0.75em; padding: 2px 4px; flex: none; white-space: nowrap; }
+  #debug-view-banner { font-size: 0.75em; padding: 2px 4px; flex: none; }
+  #debug-view-banner .debug-view-label { display: none; }
   #btn-edit { display: none; } /* superseded by the mobile Edit tab */
   .settings-label { display: none; } /* icon-only ⚙ button on mobile */
 

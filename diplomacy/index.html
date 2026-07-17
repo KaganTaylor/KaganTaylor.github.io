@@ -44,8 +44,10 @@
     <button id="btn-home" title="Home — back to the game menu" aria-label="Home">🏠</button>
     <span id="game-name"></span>
     <span id="phase-label"></span>
+    <span id="deadline-countdown" class="badge" hidden title="Whether orders are open for submission"></span>
     <span id="readonly-badge" class="badge published" hidden>👁 Published — read only</span>
     <span id="published-preview-banner" class="badge published" hidden>👁 Viewing published state</span>
+    <span id="debug-view-banner" class="badge debug" hidden>🕵<span class="debug-view-label"> Viewing as <span id="debug-view-power"></span> (debug)</span></span>
     <span id="hover-info"></span>
     <span class="spacer"></span>
     <!-- order-mode toggles: a tappable stand-in for ⇧-drop / Ctrl-drop, so a
@@ -72,10 +74,16 @@
         <button id="btn-view-published" hidden title="See the position that's actually live at the published link, without touching your own">👁 View published state</button>
         <button id="btn-export" title="Download this game as a JSON file">📤 Export</button>
         <button id="btn-set-players" hidden title="Assign each power to the GitHub username that will submit its moves">👥 Set players</button>
+        <button id="btn-submissions" hidden title="See who's submitted and what's published for this phase — an edge-case check, not part of the normal flow">🔍 Submissions</button>
         <label id="autopublish-row" class="settings-toggle-row" hidden title="When the deadline passes: on reveals every submission to everyone immediately, off waits for you to review and publish results">
           <span>⚡ Auto-Publish</span>
           <span class="switch"><input type="checkbox" id="autopublish-toggle"><span class="slider"></span></span>
         </label>
+        <div id="view-as-row" class="settings-toggle-row" hidden title="Preview and test the game exactly as one assigned player would, without needing their GitHub login">
+          <span>🕵 View as</span>
+          <select id="debug-power-select"><option value="">— pick a power —</option></select>
+        </div>
+        <button id="btn-exit-debug-view" hidden title="Exit debug view and clean up any test submission">🕵 Exit debug view</button>
       </div>
     </div>
   </header>
@@ -119,7 +127,6 @@
         </div>
         <div id="online-row" hidden>
           <div id="deadline-info" class="hint"></div>
-          <table id="submission-board" title="Who has submitted for the current phase, and whose moves are published"></table>
           <div class="btnrow">
             <button id="btn-load-moves" title="Fill the order box with every power's published moves for the current phase">⬇ Load published moves</button>
             <button id="btn-refresh-online" title="Re-check submissions and published moves">🔄</button>
@@ -171,19 +178,6 @@
         </div>
       </details>
 
-      <!-- move review/publishing (game master, published games only) -->
-      <details id="panel-players" class="panel" open hidden>
-        <summary><h2>👥 Submissions</h2></summary>
-        <p class="hint">Who's submitted for this phase and what's published — use ⚙ Settings to assign players
-          or toggle Auto-Publish. Per power: 📥 publish its submission (overwrites), 📝 publish
-          what's in the order box for it, ✖ un-publish this phase.</p>
-        <div id="players-rows"></div>
-        <div class="btnrow">
-          <button id="players-review" title="Fill the order box with every submission — for your eyes only, nothing is published">🔍 Review submissions</button>
-          <button id="players-publish-all" class="primary" title="Reveal every power's submitted moves to all players (skips powers already published and late edits)">📣 Publish results</button>
-        </div>
-      </details>
-
       <!-- deadline (game master, published games only) -->
       <details id="panel-deadline" class="panel" open hidden>
         <summary><h2>⏰ Deadline</h2></summary>
@@ -199,6 +193,9 @@
         <div class="sandbox-row">
           <input id="deadline-input" type="datetime-local" title="Pick a custom deadline (your local time)">
           <button id="deadline-set" title="Set the deadline to the picked date and time">Set</button>
+        </div>
+        <div class="btnrow">
+          <button id="deadline-review-btn" title="See who's submitted, review submissions, force-publish or un-publish a power">🔍 Review submitted orders</button>
         </div>
       </details>
     </aside>
@@ -222,6 +219,24 @@
       <div class="btnrow">
         <button id="players-save" class="primary" title="Save the assignments to the published game">💾 Save assignments</button>
         <button id="players-modal-close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- who's submitted / what's published, and per-power overrides — a game
+       master action, reached from ⚙ Settings (any time) or ⏰ Deadline
+       (once there's something to review); never shown unprompted -->
+  <div id="submissions-modal" class="modal-overlay" hidden>
+    <div class="modal-card">
+      <h2>🔍 Submissions</h2>
+      <p class="hint">Who's submitted for this phase and what's published — use ⚙ Settings to assign players
+        or toggle Auto-Publish. Per power: 📥 publish its submission (overwrites), 📝 publish
+        what's in the order box for it, ✖ un-publish this phase.</p>
+      <div id="submissions-rows"></div>
+      <div class="btnrow">
+        <button id="submissions-review" title="Fill the order box with every submission — for your eyes only, nothing is published">🔍 Review submissions</button>
+        <button id="submissions-publish-all" class="primary" title="Reveal every power's submitted moves to all players (skips powers already published and late edits)">📣 Publish results</button>
+        <button id="submissions-modal-close">Close</button>
       </div>
     </div>
   </div>

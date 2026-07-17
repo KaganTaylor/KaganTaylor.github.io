@@ -178,6 +178,36 @@ export async function submitOrders(gistId, payload) {
   return { login, submission };
 }
 
+// Raw PATCH of a comment's body, bypassing the {power,...} payload wrapping
+// submitOrders() does — used to restore a comment to an exact prior body
+// (the GM debug "view as player" cleanup path in app.js).
+export async function updateCommentBody(gistId, commentId, body) {
+  const token = getToken();
+  if (!token) throw new Error('no GitHub token set');
+  await ghFetch(`${API}/gists/${gistId}/comments/${commentId}`, {
+    method: 'PATCH',
+    headers: { Authorization: `token ${token}`, Accept: 'application/vnd.github+json' },
+    body: JSON.stringify({ body }),
+  });
+}
+
+// Deletes a comment (a debug-mode submission with no prior comment to
+// restore). DELETE returns 204 with no body, so this bypasses ghFetch; a 404
+// means it's already gone, which counts as success.
+export async function deleteComment(gistId, commentId) {
+  const token = getToken();
+  if (!token) throw new Error('no GitHub token set');
+  const res = await fetch(`${API}/gists/${gistId}/comments/${commentId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `token ${token}`, Accept: 'application/vnd.github+json' },
+  });
+  if (!res.ok && res.status !== 404) {
+    let msg = res.statusText;
+    try { msg = (await res.json()).message || msg; } catch { /* ignore */ }
+    throw new Error(`${res.status} ${msg}`);
+  }
+}
+
 // Full gist JSON (files + metadata). Public — no auth needed.
 export function fetchGist(gistId) {
   return ghFetch(`${API}/gists/${gistId}`);

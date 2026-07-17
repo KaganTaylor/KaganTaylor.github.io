@@ -14,7 +14,7 @@ import { PROVINCES, POWERS } from './map-data.js';
 import {
   getToken, setToken, publishGame, updatePublished, fetchPublished,
   getAuthenticatedLogin, extractGistId,
-  listComments, findSubmission, submitOrders,
+  listComments, findSubmission, submitOrders, updateCommentBody, deleteComment,
   fetchGist, readMovesFiles, readGameFile, writeMovesFiles, upsertMovesEntry,
 } from './publish.js';
 
@@ -44,6 +44,16 @@ let hiddenOrdersText = '';
 // comments, the published moves-<power>.json files, and this browser's
 // GitHub login. Refetched on load and after every submit/publish action.
 let online = { comments: null, moves: null, login: null, restored: false };
+
+// GM-only "view as player" debug mode (⚙ Settings → 🕵 View as). debugPower is
+// the power currently being impersonated, or null. debugCapturedComment holds
+// the GM's own gist comment exactly as it was before debugging started —
+// {commentId, body}, or null if they had none — so exitDebugView() can put it
+// back (or delete a comment a debug submit created) without ever touching a
+// real player's own comment (submissions are matched by GitHub login, and the
+// GM's login is never a real player's login unless the GM is that player too).
+let debugPower = null;
+let debugCapturedComment = null;
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -207,9 +217,21 @@ function uniqueName(base) {
 // ---------------------------------------------------------------------------
 // A published game can only be advanced by the browser that published it
 // (holds the token that created its gist). Everyone else gets a live,
-// branchable, but non-editable view of the position.
+// branchable, but non-editable view of the position. A GM in 🕵 debug "view
+// as player" mode is deliberately treated as read-only too, for the same
+// reason: it's supposed to be a faithful simulation of what that player sees.
 function isReadOnly() {
-  return !!(game && game.published && !game.isOwner);
+  return !!debugPower || !!(game && game.published && !game.isOwner);
+}
+
+// True only for the real game master, and only outside debug view — the gate
+// on every GM-only control (Publish changes, Deadline panel, Submissions,
+// Set players, Auto-Publish). Kept separate from the raw game.isOwner fact
+// (still used as-is for identity/permission purposes, e.g. loadPublishedGame)
+// so debug view can hide the GM's own admin controls without touching who
+// actually owns the game.
+function isOwnerView() {
+  return !!(game && game.isOwner && !debugPower);
 }
 
 // True once the game master's local position (resolves, undos, redos, board
@@ -219,24 +241,25 @@ function isReadOnly() {
 // GM can sketch out their own plan without it looking like a change to
 // publish. See state.js boardSnapshot().
 function boardDirty() {
-  if (!game || !game.published || !game.isOwner) return false;
+  if (!game || !game.published || !isOwnerView()) return false;
   if (!game.publishedState) return true;
   return JSON.stringify(S.boardSnapshot(game)) !== JSON.stringify(game.publishedState);
 }
 
 // Viewers of a published game pick the country they play; order entry
 // (typing and dragging) then works for that power only, and "📋 Copy
-// orders" hands them their order block to email to the game master.
+// orders" hands them their order block to email to the game master. A GM
+// debugging as a power is locked to it the same way a real player would be.
 // Empty string = spectating / no country chosen.
 function myCountry() {
-  return (isReadOnly() && game.myCountry) || '';
+  return debugPower || (isReadOnly() && game.myCountry) || '';
 }
 
 // The power the GM assigned to this browser's GitHub account (game.players
 // maps power → login). An assigned player is locked to that power for the
 // whole game — on every device, since the token resolves to the same login.
 function assignedPower() {
-  return (isReadOnly() && game.assignedPower) || '';
+  return debugPower || (isReadOnly() && game.assignedPower) || '';
 }
 
 // Does a submission/published entry belong to the phase on the table now?
@@ -245,9 +268,16 @@ function matchesPhase(s) {
 }
 
 function openGame(g) {
+  // best-effort cleanup if a debug session on the PREVIOUS game was left
+  // open — normally exitDebugView() already did this before navigating away
+  if (debugPower && game && game.gistId) {
+    cleanupDebugSubmission(game.gistId, debugCapturedComment).catch(() => {});
+  }
   game = g;
   playback = null;
   publishedPreview = null;
+  debugPower = null;
+  debugCapturedComment = null;
   online = { comments: null, moves: null, login: null, restored: false };
   S.saveGame(game);
   showScreen('game-screen');
@@ -283,13 +313,18 @@ function refreshAll() {
   $('btn-undo').disabled = (ro && !localResolve) || !game.history.length;
   $('btn-redo').disabled = ro || !(game.redoStack && game.redoStack.length);
   $('btn-publish').hidden = ro || !!game.published;
-  $('btn-update-published').hidden = !(game.published && game.isOwner);
+  $('btn-update-published').hidden = !(game.published && isOwnerView());
   $('btn-update-published').disabled = !boardDirty();
-  $('btn-view-published').hidden = !(game.published && game.isOwner);
-  $('panel-players').hidden = !(game.published && game.isOwner);
-  $('panel-deadline').hidden = !(game.published && game.isOwner);
-  $('btn-set-players').hidden = !(game.published && game.isOwner);
-  $('autopublish-row').hidden = !(game.published && game.isOwner);
+  $('btn-view-published').hidden = !(game.published && isOwnerView());
+  $('panel-deadline').hidden = !(game.published && isOwnerView());
+  if (game.published && isOwnerView()) {
+    const input = $('deadline-input');
+    if (document.activeElement !== input) input.value = game.deadline ? isoToLocalInput(game.deadline) : '';
+  }
+  $('btn-set-players').hidden = !(game.published && isOwnerView());
+  $('btn-submissions').hidden = !(game.published && isOwnerView());
+  $('autopublish-row').hidden = !(game.published && isOwnerView());
+  renderViewAsControls();
   renderOnlineUI();
   setOrderMode(null);
   prefillOrders();
@@ -930,7 +965,7 @@ function editApply() {
   board.setUnits(game.units, game.step === 'retreat' && game.pending ? game.pending.dislodged : []);
   renderStandings();
   onOrdersChanged();
-  if (game.published && game.isOwner) $('btn-update-published').disabled = !boardDirty();
+  if (game.published && isOwnerView()) $('btn-update-published').disabled = !boardDirty();
 }
 
 function editClick(p, ev) {
@@ -1376,6 +1411,12 @@ function deadlinePassed() {
   return !!d && d.getTime() <= Date.now();
 }
 
+// Orders can only be submitted while a deadline is set and hasn't passed yet
+// — with no deadline at all there is nothing to be "on time" against.
+function ordersOpen() {
+  return !!game.deadline && !deadlinePassed();
+}
+
 // In auto mode a comment edited after the deadline is void — judged by
 // GitHub's own updated_at stamp, never the client-claimed submittedAt.
 function submissionOnTime(found) {
@@ -1436,7 +1477,7 @@ function renderOnlineUI() {
     $('autopublish-toggle').checked = publishMode() === 'auto';
   }
   $('submit-row').hidden = !assignedPower();
-  $('btn-submit-moves').disabled = deadlinePassed();
+  $('btn-submit-moves').disabled = !ordersOpen();
   $('online-row').hidden = !hasPlayers;
   if (isReadOnly() && !playback) {
     // keep the local-preview Resolve in step with the deadline ticking over
@@ -1445,11 +1486,12 @@ function renderOnlineUI() {
     $('btn-resolve-final').hidden = !localResolve;
   }
   renderSubmitStatus();
-  if (hasPlayers) {
-    renderDeadlineInfo();
-    renderSubmissionBoard();
-  }
-  if (game.published && game.isOwner) renderPlayersPanel();
+  updateDeadlineCountdown();
+  if (hasPlayers) renderDeadlineInfo();
+  // only re-render the submissions modal's contents while it's actually open —
+  // it's no longer part of the always-visible sidebar, so there's no need to
+  // keep it in step on every poll otherwise
+  if (game.published && isOwnerView() && !$('submissions-modal').hidden) renderSubmissionsModal();
 }
 
 function renderSubmitStatus() {
@@ -1474,6 +1516,10 @@ function renderSubmitStatus() {
     el.textContent = 'Deadline passed — submissions are closed';
     return;
   }
+  if (!game.deadline) {
+    el.textContent = "No deadline set yet — ask your game master, then you can submit";
+    return;
+  }
   const found = online.comments && online.login && findSubmission(online.comments, online.login);
   const s = found && found.submission;
   if (s && matchesPhase(s) && s.power === p) {
@@ -1482,21 +1528,6 @@ function renderSubmitStatus() {
   } else {
     el.textContent = 'Not submitted for this phase yet';
     el.classList.remove('done');
-  }
-}
-
-function renderSubmissionBoard() {
-  const table = $('submission-board');
-  table.replaceChildren();
-  for (const p of activePowers()) {
-    const login = (game.players || {})[p];
-    if (!login) continue;
-    const [label, cls] = STATUS_BADGE[powerOnlineStatus(p)];
-    const tr = document.createElement('tr');
-    tr.innerHTML =
-      `<td><span class="chip" style="background:${POWER_COLORS[p]}"></span>${cap(p)}</td>` +
-      `<td class="login">@${escapeHtml(login)}</td><td class="${cls}">${label}</td>`;
-    table.appendChild(tr);
   }
 }
 
@@ -1520,27 +1551,88 @@ function fmtCountdown(ms) {
   return `${m}m`;
 }
 
+// 'none' (no deadline set), 'warn' (counting down) or 'danger' (passed) — the
+// single source of truth behind every red/yellow deadline indicator: the
+// topbar countdown chip, this panel, and the sidebar #panel-deadline box.
+function deadlineUrgency() {
+  const d = deadlineDate();
+  if (!d) return 'none';
+  return d.getTime() - Date.now() > 0 ? 'warn' : 'danger';
+}
+
 function renderDeadlineInfo() {
   const el = $('deadline-info');
   const d = deadlineDate();
-  el.classList.remove('past');
+  const urgency = deadlineUrgency();
+  el.classList.remove('past', 'warn');
   if (!d) {
-    el.textContent = game.isOwner
-      ? '⏰ No deadline set — submissions stay open until you confirm one below'
-      : '⏰ No deadline set yet — ask your game master';
+    el.textContent = isOwnerView()
+      ? '⏰ No deadline set — submissions stay closed until you confirm one below'
+      : '⏰ No deadline set yet — ask your game master; submissions are closed until then';
     return;
   }
   const when = d.toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-  if (d - Date.now() > 0) {
+  if (urgency === 'warn') {
     el.textContent = `⏰ Deadline: ${when} (in ${fmtCountdown(d - Date.now())})`;
+    el.classList.add('warn');
   } else {
     el.textContent =
       publishMode() === 'auto'
         ? `⏰ Deadline passed (${when}) — all submissions are revealed. ⬇ Load them, then Resolve to preview the result`
-        : game.isOwner
+        : isOwnerView()
           ? `⏰ Deadline passed (${when}) — 🔍 review the submissions, then 📣 publish results or re-open with a new deadline`
           : `⏰ Deadline passed (${when}) — the game master is reviewing the results`;
     el.classList.add('past');
+  }
+}
+
+// Zero-padded DD:HH:MM:SS — always four segments, unlike the looser
+// fmtCountdown() above, so the topbar chip has a fixed width and reads at a
+// glance regardless of how much time is left.
+function fmtCountdownDHMS(ms) {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const pad = (n) => String(n).padStart(2, '0');
+  const d = Math.floor(totalSec / 86400);
+  const h = Math.floor((totalSec % 86400) / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  return `${pad(d)}:${pad(h)}:${pad(m)}:${pad(s)}`;
+}
+
+// Ticks the topbar countdown chip — visible to every viewer (GM and players
+// alike) of a published game with players assigned, so it's always clear
+// whether orders are open, closing soon, or closed. Cheap text/class update
+// only; called from a 1s interval plus on-demand from refreshAll()/renderOnlineUI().
+function updateDeadlineCountdown() {
+  const chip = $('deadline-countdown');
+  const panel = $('panel-deadline');
+  const hasPlayers = !!(game && game.published && game.players && Object.values(game.players).some(Boolean));
+  panel.classList.remove('deadline-warn', 'deadline-danger');
+  if (!hasPlayers) {
+    chip.hidden = true;
+    return;
+  }
+  chip.hidden = false;
+  chip.classList.remove('neutral', 'warn', 'danger');
+  const urgency = deadlineUrgency();
+  // Kept short (esp. the none/danger text) so it never wraps or overflows
+  // the topbar on a narrow phone screen — the full explanation is one tap/
+  // hover away in the title attribute.
+  if (urgency === 'none') {
+    chip.textContent = '⏳ Orders closed';
+    chip.title = "Your game master hasn't confirmed a deadline yet — submissions open once they do";
+    chip.classList.add('neutral');
+  } else if (urgency === 'warn') {
+    const d = deadlineDate();
+    chip.textContent = `⏰ ${fmtCountdownDHMS(d.getTime() - Date.now())}`;
+    chip.title = `Orders open — deadline: ${d.toLocaleString()}`;
+    chip.classList.add('warn');
+    panel.classList.add('deadline-warn');
+  } else {
+    chip.textContent = '⏰ Orders closed';
+    chip.title = 'The deadline has passed — submissions are closed until the game master confirms a new one';
+    chip.classList.add('danger');
+    panel.classList.add('deadline-danger');
   }
 }
 
@@ -1593,20 +1685,18 @@ function bumpDeadline(hours) {
 }
 
 // ---- player assignments ----------------------------------------------------
-function renderPlayersPanel() {
-  const input = $('deadline-input');
-  if (document.activeElement !== input) input.value = game.deadline ? isoToLocalInput(game.deadline) : '';
+function renderSubmissionsModal() {
   // 🔍 Review is a manual-mode-only step, and only once the deadline has
   // passed — before that, submissions can still change, and auto mode skips
   // the review step entirely (the deadline reveals everything on its own).
-  const reviewBtn = $('players-review');
+  const reviewBtn = $('submissions-review');
   reviewBtn.hidden = publishMode() === 'auto';
   reviewBtn.disabled = !deadlinePassed();
   reviewBtn.title = deadlinePassed()
     ? 'Fill the order box with every submission — for your eyes only, nothing is published'
     : 'Available once the deadline passes';
-  $('players-publish-all').disabled = !deadlinePassed();
-  const rows = $('players-rows');
+  $('submissions-publish-all').disabled = !deadlinePassed();
+  const rows = $('submissions-rows');
   rows.replaceChildren();
   for (const p of activePowers()) {
     const row = document.createElement('div');
@@ -1638,6 +1728,106 @@ function renderPlayersPanel() {
         () => gmUnpublish(p)),
     );
     rows.appendChild(row);
+  }
+}
+
+// Submissions modal (⚙ Settings → 🔍 Submissions, or ⏰ Deadline → 🔍 Review
+// submitted orders) — who's submitted and what's published, game-master only.
+// Deliberately not part of the always-visible sidebar: players never see it,
+// and the GM only sees it when they deliberately open it.
+function openSubmissionsModal() {
+  renderSubmissionsModal(); // show what we already have immediately...
+  $('submissions-modal').hidden = false;
+  refreshOnlineStatus(); // ...then refresh; its renderOnlineUI() re-renders the modal since it's now open
+}
+
+function closeSubmissionsModal() {
+  $('submissions-modal').hidden = true;
+}
+
+// ---- 🕵 view as player (GM debug mode) -------------------------------------
+// Lets the GM preview and exercise the game exactly as one assigned player
+// would — including a real 📤 Submit moves — without a second GitHub account.
+// Safe by construction: submissions are matched by GitHub login
+// (findSubmission), so a debug submission (posted under the GM's own login)
+// can never overwrite a different real player's comment. The only comment it
+// can touch is the GM's own — captured verbatim before debugging starts and
+// restored (or deleted, if none existed) in exitDebugView().
+
+// Populates and shows/hides the Settings-menu "View as" picker / "Exit debug
+// view" button. Called from refreshAll() so it stays in sync with published
+// state and player assignments.
+function renderViewAsControls() {
+  const row = $('view-as-row');
+  const exitBtn = $('btn-exit-debug-view');
+  const banner = $('debug-view-banner');
+  const assignedPowers = activePowers().filter((p) => (game.players || {})[p]);
+  const canDebug = !!(game && game.published && game.isOwner && assignedPowers.length);
+  row.hidden = !canDebug || !!debugPower;
+  if (!row.hidden) {
+    const sel = $('debug-power-select');
+    const prev = sel.value;
+    sel.replaceChildren(new Option('— pick a power —', ''));
+    for (const p of assignedPowers) sel.appendChild(new Option(cap(p), p));
+    sel.value = assignedPowers.includes(prev) ? prev : '';
+  }
+  exitBtn.hidden = !debugPower;
+  exitBtn.textContent = debugPower ? `🕵 Exit debug view (${cap(debugPower)})` : '🕵 Exit debug view';
+  banner.hidden = !debugPower;
+  if (debugPower) {
+    $('debug-view-power').textContent = cap(debugPower);
+    banner.title = `Game master debug view — simulating ${cap(debugPower)}. Exit from ⚙ Settings.`;
+  }
+}
+
+async function enterDebugView(power) {
+  if (!power || !game || !game.isOwner || !game.gistId) return;
+  try {
+    const comments = await listComments(game.gistId);
+    const login = await getAuthenticatedLogin(getToken());
+    const mine = login && comments.find((c) => c.user && c.user.login.toLowerCase() === login.toLowerCase());
+    debugCapturedComment = mine ? { commentId: mine.id, body: mine.body } : null;
+    debugPower = power;
+    game.myCountry = power; // locks the country-select / order box to this power, like a real assigned player
+    toast(`🕵 Viewing as ${cap(power)} — a real 📤 Submit will post for real, then be cleaned up on exit`, 'info');
+    refreshAll(); // also re-runs prefillOrders(), which locks the box to this power via myCountry()
+  } catch (e) {
+    toast('Could not enter debug view: ' + e.message);
+  }
+}
+
+// Restores the GM's own comment to what it was before debugging (or deletes
+// it if it didn't exist), against whichever gist/captured-state is passed in
+// — a pure network op, independent of the current `game`/`debugPower`
+// globals, so it can also run as a fire-and-forget safety net when the GM
+// navigates away from a debug session without explicitly exiting it first
+// (see openGame() and 🏠 Home).
+async function cleanupDebugSubmission(gistId, captured) {
+  const comments = await listComments(gistId);
+  const login = await getAuthenticatedLogin(getToken());
+  const mine = login && comments.find((c) => c.user && c.user.login.toLowerCase() === login.toLowerCase());
+  if (captured) {
+    if (mine && mine.id === captured.commentId && mine.body !== captured.body) {
+      await updateCommentBody(gistId, mine.id, captured.body);
+    }
+  } else if (mine) {
+    await deleteComment(gistId, mine.id);
+  }
+}
+
+async function exitDebugView() {
+  const power = debugPower;
+  if (!power) return;
+  try {
+    await cleanupDebugSubmission(game.gistId, debugCapturedComment);
+    toast(`Exited debug view (${cap(power)}) — any test submission was cleaned up`, 'info');
+  } catch (e) {
+    toast(`Exited debug view, but cleanup failed (${e.message}) — check the gist's comments manually`);
+  } finally {
+    debugPower = null;
+    debugCapturedComment = null;
+    refreshAll();
+    refreshOnlineStatus();
   }
 }
 
@@ -1736,8 +1926,13 @@ function maybeRestoreSubmission() {
 async function doSubmitMoves() {
   const power = assignedPower();
   if (!power) return;
-  if (deadlinePassed())
-    return toast('The deadline has passed — ask your game master to re-open with a new deadline');
+  if (!ordersOpen()) {
+    return toast(
+      game.deadline
+        ? 'The deadline has passed — ask your game master to re-open with a new deadline'
+        : "Your game master hasn't set a deadline yet — submissions open once they confirm one"
+    );
+  }
   if (!getToken() && !askToken()) return;
   // only this player's block is submitted, whatever view the box is in
   const block = powerBlockText(power);
@@ -1758,7 +1953,7 @@ async function doSubmitMoves() {
     toast('Submit failed: ' + e.message);
     if (isAuthError(e)) askToken();
   } finally {
-    btn.disabled = deadlinePassed();
+    btn.disabled = !ordersOpen();
   }
 }
 
@@ -1800,6 +1995,7 @@ async function gmReviewSubmissions() {
     }
     if (!blocks.length) return toast('No submissions for this phase yet');
     applyOrdersText(blocks.join('\n'));
+    closeSubmissionsModal(); // get out of the way so the GM can see/edit the order box
     toast(`Loaded ${blocks.length} submission${blocks.length === 1 ? '' : 's'} for review — nothing is published yet`, 'info');
   } catch (e) {
     toast('Could not load submissions: ' + e.message);
@@ -2108,6 +2304,11 @@ async function init() {
   $('btn-sandbox').onclick = () => openGame(S.sandboxGame(uniqueName(($('new-name').value.trim() || 'Sandbox'))));
   $('import-file').onchange = (e) => e.target.files[0] && importFile(e.target.files[0]);
   $('btn-home').onclick = () => {
+    if (debugPower && game && game.gistId) {
+      cleanupDebugSubmission(game.gistId, debugCapturedComment).catch(() => {});
+      debugPower = null;
+      debugCapturedComment = null;
+    }
     playback = null;
     publishedPreview = null;
     renderHome();
@@ -2175,8 +2376,20 @@ async function init() {
   $('players-modal').addEventListener('pointerdown', (e) => {
     if (e.target === $('players-modal')) closePlayersModal();
   });
-  $('players-review').onclick = gmReviewSubmissions;
-  $('players-publish-all').onclick = () => gmPublishFromComments(activePowers());
+  $('btn-submissions').onclick = openSubmissionsModal;
+  $('deadline-review-btn').onclick = openSubmissionsModal;
+  $('debug-power-select').onchange = (e) => {
+    const power = e.target.value;
+    e.target.value = '';
+    if (power) enterDebugView(power);
+  };
+  $('btn-exit-debug-view').onclick = exitDebugView;
+  $('submissions-modal-close').onclick = closeSubmissionsModal;
+  $('submissions-modal').addEventListener('pointerdown', (e) => {
+    if (e.target === $('submissions-modal')) closeSubmissionsModal();
+  });
+  $('submissions-review').onclick = gmReviewSubmissions;
+  $('submissions-publish-all').onclick = () => gmPublishFromComments(activePowers());
   $('autopublish-toggle').onchange = (e) => setPublishMode(e.target.checked ? 'auto' : 'manual');
   $('deadline-plus-week').onclick = () => bumpDeadline(7 * 24);
   $('deadline-plus-2day').onclick = () => bumpDeadline(48);
@@ -2254,6 +2467,12 @@ async function init() {
   setInterval(() => {
     if (game && game.published && !playback) renderOnlineUI();
   }, 60000);
+
+  // the topbar countdown chip ticks every second on its own — far cheaper
+  // than a full renderOnlineUI(), and it's the one place a second matters
+  setInterval(() => {
+    if (game && game.published && !playback) updateDeadlineCountdown();
+  }, 1000);
 
   renderHome();
   showScreen('home-screen');
