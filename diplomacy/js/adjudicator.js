@@ -116,12 +116,12 @@ const FAILS = false;
 //            support-hold, else destination of supported move
 //   convoy:  target.loc = convoyed army's location, dest = its destination
 //
-// opts.strictSupportHold (house rule, default off): a support-hold counts only
-//   for a unit that was ORDERED to hold or convoy. A unit ordered to support
-//   cannot be supported ("you cannot receive support while giving support"),
-//   and a unit ordered to move cannot be supported even when the move is
-//   void/failed and falls back to a hold. Only hold support is affected;
-//   support for a move is unchanged. See the supportsFor() hold branch below.
+// opts.strictSupportHold (house rule, default off): a unit that is itself
+//   giving support cannot receive support-hold ("you cannot receive support
+//   while giving support"). Everything else — including whether a unit
+//   ordered to move can be supported — is identical to standard rules. Only
+//   hold support is affected; support for a move is unchanged. See the
+//   supportsFor() hold branch below.
 //
 // Returns {results, dislodged, standoffs, unitsAfter}
 // ---------------------------------------------------------------------------
@@ -312,13 +312,14 @@ export function adjudicateMovement(units, orders, opts = {}) {
         return true;
       }
       // hold support: any unit not (effectively) ordered to move can receive
-      // it — void move orders count as holds (DATC 6.D.28-32). Under the
-      // strict support-hold house rule, a support-hold counts only for a unit
-      // that was ORDERED to hold or convoy: a unit ordered to move (even a
-      // void/failed move that falls back to a hold) or ordered to support
-      // cannot be supported — you cannot receive support while giving support,
-      // and you cannot prop up a move you tried to make.
-      if (strictSupportHold && m.kind !== 'hold' && m.kind !== 'convoy') return false;
+      // it — a void move order counts as a hold and CAN be supported (DATC
+      // 6.D.28-32), the same in both rulesets. (A real move that merely
+      // bounces keeps effKind 'move' and is handled by the branch above, so
+      // it never receives support-hold — again in both rulesets.) The strict
+      // support-hold house rule adds exactly one restriction: a unit that is
+      // itself giving support cannot be supported ("you cannot receive
+      // support while giving support").
+      if (strictSupportHold && m.effKind === 'support') return false;
       return !s.target.dest;
     });
 

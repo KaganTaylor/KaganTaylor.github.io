@@ -1,9 +1,11 @@
 // Tests for the "strict support-hold" house rule (Game settings → Support
 // house-rule). Under the rule a unit that is itself giving support cannot
 // receive support-hold — "you cannot receive support while giving support" —
-// so a supported supporter is easier to dislodge. Only hold support is
-// affected; support for a move, and hold support to holding/convoying units,
-// are unchanged. Each case is run BOTH ways to pin the difference down.
+// so a supported supporter is easier to dislodge. That is the ONLY difference
+// from standard: hold support to holding/convoying units, the fact that a unit
+// ordered to move never receives support-hold, and the DATC treatment of void
+// orders are all identical in both rulesets. Each case is run BOTH ways to pin
+// the difference down.
 //
 // Runs in the browser (strict.html) and under Node (`node test/strict-support.js`).
 
@@ -77,7 +79,29 @@ const CASES = [
     },
   },
   {
-    id: 'void/failed move cannot receive support-hold (strict) — dislodged',
+    id: 'a real (bounced) move cannot receive support-hold — dislodged, both ways',
+    units: ['FRANCE A Bur', 'FRANCE A Pic', 'FRANCE A Mar', 'GERMANY A Mun', 'GERMANY A Ruh'],
+    orders: [
+      'FRANCE: A Bur - Mar',          // adjacent move, bounces off a holding Mar
+      'FRANCE: A Pic S A Bur',        // support-hold to a unit ordered to move
+      'FRANCE: A Mar H',
+      'GERMANY: A Mun - Bur',
+      'GERMANY: A Ruh S A Mun - Bur', // attack strength 2 on Bur
+    ],
+    // A unit ordered to move keeps effKind 'move' and never receives
+    // support-hold — the same in both rulesets. Bur bounces off Mar, gets no
+    // support, holds at strength 1, and is dislodged by Mun (strength 2).
+    standard: {
+      survivors: ['france A pic', 'france A mar', 'germany A bur', 'germany A ruh'],
+      dislodged: ['france A bur'],
+    },
+    strict: {
+      survivors: ['france A pic', 'france A mar', 'germany A bur', 'germany A ruh'],
+      dislodged: ['france A bur'],
+    },
+  },
+  {
+    id: 'a void/illegal move still receives support-hold (DATC 6.D.28-32) — both ways',
     units: ['FRANCE A Bur', 'FRANCE A Pic', 'GERMANY A Mun', 'GERMANY A Ruh'],
     orders: [
       'FRANCE: A Bur - Lon',          // illegal (not adjacent, no convoy) → holds
@@ -85,15 +109,16 @@ const CASES = [
       'GERMANY: A Mun - Bur',
       'GERMANY: A Ruh S A Mun - Bur', // attack strength 2
     ],
+    // A void order counts as a hold and CAN be supported — required by DATC and
+    // unchanged by the strict house rule (which only restricts support-givers).
+    // Bur holds at strength 2 vs the attack's strength 2, so it survives.
     standard: {
-      // void move counts as a hold and takes Pic's support → holds, str 2 v 2
       survivors: ['france A bur', 'france A pic', 'germany A mun', 'germany A ruh'],
       dislodged: [],
     },
     strict: {
-      // ordered to move → Pic's support-hold is void → Bur holds at strength 1
-      survivors: ['france A pic', 'germany A bur', 'germany A ruh'],
-      dislodged: ['france A bur'],
+      survivors: ['france A bur', 'france A pic', 'germany A mun', 'germany A ruh'],
+      dislodged: [],
     },
   },
   {

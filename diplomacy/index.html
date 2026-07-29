@@ -72,6 +72,7 @@
         <button id="btn-publish" title="Publish this game as a read-only, shareable link">📣 Publish</button>
         <button id="btn-update-published" hidden title="Push your position to the published link, so every player sees it">☁ Publish changes</button>
         <button id="btn-view-published" hidden title="See the position that's actually live at the published link, without touching your own">👁 View published state</button>
+        <button id="btn-game-settings" title="Victory thresholds and support house-rule for this game">🎲 Game settings</button>
         <button id="btn-export" title="Download this game as a JSON file">📤 Export</button>
         <button id="btn-set-players" hidden title="Assign each power to the GitHub username that will submit its moves">👥 Set players</button>
         <button id="btn-submissions" hidden title="See who's submitted and what's published for this phase — an edge-case check, not part of the normal flow">🔍 Submissions</button>
@@ -162,7 +163,7 @@
 
       <!-- standings -->
       <details id="panel-standings" class="panel" open>
-        <summary><h2>Standings <button id="btn-game-settings" class="settings-btn" title="Game settings — victory thresholds and house rules">🎲 Game settings</button></h2></summary>
+        <summary><h2>Standings</h2></summary>
         <div id="win-thresholds" class="hint"></div>
         <table id="standings"></table>
       </details>
@@ -266,8 +267,8 @@
       </span>
     </label>
     <p class="hint" id="set-support-explain" hidden>
-      <b>Standard:</b> the normal rules — a support-hold may be given to any unit that stays in its province, including a unit that is giving support or whose move order failed.<br>
-      <b>Strict support-hold:</b> a support-hold may only be given to a unit that ordered hold or convoy. A unit that is giving support cannot be supported ("you cannot receive support while giving support"), and a unit that ordered a move cannot be supported even if that move fails. Supporting units are easier to dislodge.
+      <b>Standard:</b> Support-hold may be given to any unit not ordered to move from its province. Support-move must exactly match another order.<br>
+      <b>Strict support-hold:</b> Support-hold can only be given to units ordered to hold or convoy. Units giving support cannot themselves receive support.
     </p>
     <div class="btnrow modal-actions">
       <button type="button" id="set-cancel">Cancel</button>

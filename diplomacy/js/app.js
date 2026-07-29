@@ -1251,6 +1251,27 @@ function endPlayback() {
   refreshAll();
 }
 
+// "Continue ➜" finishes the step-through and advances to the next phase. If
+// the moves haven't been animated yet — the common case, where the GM clicks
+// Continue straight from the resolution screen without stepping to the final
+// position — play the movement animation first, then move on. (Stepping to the
+// final position with ▶ / ⏭ / → already animates, so if we're there, just go.)
+function continuePlayback() {
+  if (!playback || playback.animating) return;
+  if (playback.step >= finalStep()) return endPlayback();
+  const pb = playback;
+  pb.animating = true;
+  pb.step = outcomeStep();
+  renderPlayback();
+  board.clearOrders(); // arrows disappear as the moves execute
+  $('pb-step-label').textContent = 'Executing moves…';
+  $('pb-next').disabled = true;
+  board.animateFinal(pb.entry).then(() => {
+    if (playback !== pb) return;
+    endPlayback();
+  });
+}
+
 function copyResults() {
   const entry = playback ? playback.entry : null;
   if (!entry) return;
@@ -2509,7 +2530,7 @@ async function init() {
   $('pb-prev').onclick = () => stepPlayback(-1);
   $('pb-start').onclick = () => stepPlayback(-999);
   $('pb-end').onclick = () => stepPlayback(999);
-  $('pb-continue').onclick = endPlayback;
+  $('pb-continue').onclick = continuePlayback;
   $('pb-back-current').onclick = endPlayback;
   $('pb-copy').onclick = copyResults;
   document.addEventListener('keydown', (e) => {
