@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Strict support-hold — running…</title>
+<style>
+  body { font-family: ui-monospace, Consolas, monospace; margin: 2rem; background: #14171c; color: #d8dee6; }
+  .pass { color: #6fce7f; }
+  .fail { color: #ff7676; }
+  h1 { font-size: 1.2rem; }
+  pre { white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1 id="headline">Running…</h1>
+<pre id="out"></pre>
+<script type="module">
+import { runStrictTests } from './strict-support.js';
+const headline = document.getElementById('headline');
+const out = document.getElementById('out');
+try {
+  const { total, pass, failures } = runStrictTests();
+  headline.textContent = `Strict support-hold: ${pass}/${total} passed`;
+  headline.className = pass === total ? 'pass' : 'fail';
+  out.textContent = failures.map((f) => `FAIL ${f.id}\n   ${f.notes.join('\n   ')}`).join('\n');
+  document.title = `Strict ${pass}/${total}`;
+} catch (e) {
+  headline.textContent = 'RUNNER ERROR';
+  headline.className = 'fail';
+  out.textContent = e.stack || String(e);
+}
+document.body.dataset.done = '1';
+</script>
+</body>
+</html>

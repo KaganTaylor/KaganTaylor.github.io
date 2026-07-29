@@ -16,6 +16,23 @@ import {
 
 const STORE_KEY = 'diplomacysim:games';
 
+// GM-configurable, game-wide settings (see the 🎲 Game settings dialog).
+//   soloWin / coalitionWin: SC thresholds shown next to the standings.
+//   supportRule: 'standard' | 'strict' — the strict support-hold house rule
+//   (a supporting unit cannot itself be supported; see adjudicateMovement()).
+export const DEFAULT_SETTINGS = { soloWin: 18, coalitionWin: 18, supportRule: 'standard' };
+
+// Settings for a game, with any missing field filled from the defaults, so
+// old games (and games published before settings existed) behave sanely.
+export function gameSettings(g) {
+  return { ...DEFAULT_SETTINGS, ...((g && g.settings) || {}) };
+}
+
+// The adjudication options a game's settings imply.
+export function movementOpts(g) {
+  return { strictSupportHold: gameSettings(g).supportRule === 'strict' };
+}
+
 export function newGame(name) {
   const units = [];
   for (const [power, us] of Object.entries(START_UNITS)) {
@@ -27,6 +44,7 @@ export function newGame(name) {
     season: 'spring',
     year: 1901,
     step: 'movement', // movement | retreat | adjustment
+    settings: { ...DEFAULT_SETTINGS },
     units,
     scOwners: { ...START_OWNERS },
     pending: null, // retreat context: {dislodged, standoffs}
@@ -77,7 +95,7 @@ export function resolvePhase(g, orders, ordersText) {
   };
 
   if (g.step === 'movement') {
-    const out = adjudicateMovement(g.units, orders);
+    const out = adjudicateMovement(g.units, orders, movementOpts(g));
     entry.results = out.results.map(stripResult);
     entry.dislodged = out.dislodged;
     entry.standoffs = out.standoffs;

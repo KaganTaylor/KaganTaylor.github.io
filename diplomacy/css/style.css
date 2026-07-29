@@ -152,6 +152,34 @@ details.panel:not([open]) summary { margin-bottom: 0; }
 }
 #standings tr.head td { color: #8892a0; font-size: 0.85em; padding-top: 0; }
 
+/* ---------- game settings ---------- */
+.settings-btn {
+  font-size: 0.72rem; font-weight: normal; padding: 3px 8px;
+  vertical-align: middle; margin-left: 6px;
+}
+#win-thresholds { margin: -2px 0 8px; color: #ffd479; }
+dialog.modal {
+  background: #22262e; color: #e2e6ec;
+  border: 1px solid #454c58; border-radius: 12px;
+  padding: 20px 22px; max-width: 440px; width: calc(100% - 32px);
+  box-shadow: 0 8px 32px rgba(0,0,0,.6);
+}
+dialog.modal::backdrop { background: rgba(0,0,0,.55); }
+dialog.modal h2 { margin: 0 0 14px; font-size: 1.1rem; }
+.setting-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin: 10px 0;
+}
+.setting-row > span:first-child { flex: 1; }
+.setting-row input[type="number"] { width: 76px; text-align: right; }
+.setting-field { display: inline-flex; align-items: center; gap: 6px; }
+.help-q {
+  width: 26px; height: 26px; flex: none; padding: 0; border-radius: 50%;
+  font-weight: 700; line-height: 1; text-align: center;
+}
+#set-support-explain { line-height: 1.5; }
+.modal-actions { justify-content: flex-end; margin: 16px 0 0; }
+
 #coast-picker {
   position: fixed; z-index: 30; background: #22262e; border: 1px solid #454c58;
   border-radius: 8px; padding: 6px; display: flex; gap: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.5);

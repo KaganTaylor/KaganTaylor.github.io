@@ -274,6 +274,7 @@ function openGame(g) {
     cleanupDebugSubmission(game.gistId, debugCapturedComment).catch(() => {});
   }
   game = g;
+  g.settings = S.gameSettings(g); // fill defaults for games saved before settings existed
   playback = null;
   publishedPreview = null;
   debugPower = null;
@@ -560,7 +561,7 @@ function validateOrders(orders) {
   };
   try {
     if (game.step === 'movement') {
-      const out = adjudicateMovement(game.units, orders);
+      const out = adjudicateMovement(game.units, orders, S.movementOpts(game));
       for (const inv of out.invalid) flag(inv.order, inv.reason);
       for (const r of out.results) {
         const o = r.order;
@@ -1081,7 +1082,7 @@ function partialVerdicts(entry, revealedOrders) {
   const map = new Map();
   let out;
   if (entry.step === 'movement') {
-    out = adjudicateMovement(entry.unitsBefore, revealedOrders);
+    out = adjudicateMovement(entry.unitsBefore, revealedOrders, S.movementOpts(game));
   } else if (entry.step === 'retreat') {
     out = adjudicateRetreats(entry.dislodged, entry.unitsBefore, revealedOrders);
   } else {
@@ -1281,6 +1282,14 @@ function copyResults() {
 // standings
 // ---------------------------------------------------------------------------
 function renderStandings() {
+  const s = S.gameSettings(game);
+  const th = $('win-thresholds');
+  if (th) {
+    th.textContent =
+      s.soloWin === s.coalitionWin
+        ? `🏆 Win: ${s.soloWin} SCs (solo & coalition)`
+        : `🏆 Solo win: ${s.soloWin} SCs · Coalition win: ${s.coalitionWin} SCs`;
+  }
   const table = $('standings');
   table.replaceChildren();
   const sc = {}, un = {};
@@ -1298,6 +1307,56 @@ function renderStandings() {
       `<td><span class="chip" style="background:${POWER_COLORS[p]}"></span>${cap(p)}</td>` +
       `<td class="num">${sc[p] || 0}</td><td class="num">${un[p] || 0}</td>`;
     table.appendChild(tr);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 🎲 game settings dialog (win thresholds + support house-rule)
+// ---------------------------------------------------------------------------
+const clampInt = (v, lo, hi, def) => {
+  const n = Math.round(+v);
+  return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : def;
+};
+
+function openGameSettings() {
+  if (!game) return;
+  const s = S.gameSettings(game);
+  $('set-solo-win').value = s.soloWin;
+  $('set-coalition-win').value = s.coalitionWin;
+  $('set-support-rule').value = s.supportRule;
+  // players (read-only viewers) may inspect the rules but not change them
+  const ro = isReadOnly();
+  for (const id of ['set-solo-win', 'set-coalition-win', 'set-support-rule'])
+    $(id).disabled = ro;
+  $('set-save').hidden = ro;
+  $('set-cancel').textContent = ro ? 'Close' : 'Cancel';
+  $('set-support-explain').hidden = true;
+  $('game-settings-dialog').showModal();
+}
+
+async function saveGameSettings() {
+  const prev = S.gameSettings(game);
+  game.settings = {
+    soloWin: clampInt($('set-solo-win').value, 1, 34, 18),
+    coalitionWin: clampInt($('set-coalition-win').value, 1, 34, 18),
+    supportRule: $('set-support-rule').value === 'strict' ? 'strict' : 'standard',
+  };
+  S.saveGame(game);
+  $('game-settings-dialog').close();
+  renderStandings();
+  onOrdersChanged(); // re-validate: a rule change can flip which orders work
+  if (prev.supportRule !== game.settings.supportRule && game.history.length)
+    toast('Support rule changed — it applies to future resolutions only', 'info');
+  else toast('Game settings saved', 'info');
+  // push to the published gist so every player sees the same rules; the
+  // board override keeps the GM's in-progress position out of it
+  if (game.published && game.isOwner) {
+    try {
+      await updatePublished(game, game.publishedState);
+    } catch (e) {
+      toast('Saved locally, but could not publish the change: ' + e.message);
+      if (isAuthError(e)) askToken();
+    }
   }
 }
 
@@ -1880,6 +1939,10 @@ async function refreshOnlineStatus() {
     if (fresh && !g.isOwner) {
       g.deadline = fresh.deadline || null;
       g.publishMode = fresh.publishMode || null;
+      // the GM owns the rules — pick up any change so every player's board,
+      // standings reminder, and local previews match the GM's resolution
+      if (fresh.settings) g.settings = { ...S.DEFAULT_SETTINGS, ...fresh.settings };
+      renderStandings();
     }
     online.moves = moves;
     online.comments = comments;
@@ -2460,6 +2523,14 @@ async function init() {
   $('btn-undo').onclick = undoPhase;
   $('btn-redo').onclick = redoPhase;
   $('btn-branch').onclick = branchCurrent;
+
+  $('btn-game-settings').onclick = openGameSettings;
+  $('set-cancel').onclick = () => $('game-settings-dialog').close();
+  $('game-settings-form').onsubmit = (e) => { e.preventDefault(); saveGameSettings(); };
+  $('set-support-help').onclick = () => {
+    const el = $('set-support-explain');
+    el.hidden = !el.hidden;
+  };
 
   // tick the deadline countdown — and, in auto-publish games, flip the UI
   // over to the reveal — while a published game sits open. Render-only; the

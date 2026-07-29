@@ -116,9 +116,17 @@ const FAILS = false;
 //            support-hold, else destination of supported move
 //   convoy:  target.loc = convoyed army's location, dest = its destination
 //
+// opts.strictSupportHold (house rule, default off): a support-hold counts only
+//   for a unit that was ORDERED to hold or convoy. A unit ordered to support
+//   cannot be supported ("you cannot receive support while giving support"),
+//   and a unit ordered to move cannot be supported even when the move is
+//   void/failed and falls back to a hold. Only hold support is affected;
+//   support for a move is unchanged. See the supportsFor() hold branch below.
+//
 // Returns {results, dislodged, standoffs, unitsAfter}
 // ---------------------------------------------------------------------------
-export function adjudicateMovement(units, orders) {
+export function adjudicateMovement(units, orders, opts = {}) {
+  const strictSupportHold = !!opts.strictSupportHold;
   const board = new Map(); // province -> unit
   for (const u of units) board.set(prov(u.loc), u);
 
@@ -304,7 +312,13 @@ export function adjudicateMovement(units, orders) {
         return true;
       }
       // hold support: any unit not (effectively) ordered to move can receive
-      // it — void move orders count as holds (DATC 6.D.28-32)
+      // it — void move orders count as holds (DATC 6.D.28-32). Under the
+      // strict support-hold house rule, a support-hold counts only for a unit
+      // that was ORDERED to hold or convoy: a unit ordered to move (even a
+      // void/failed move that falls back to a hold) or ordered to support
+      // cannot be supported — you cannot receive support while giving support,
+      // and you cannot prop up a move you tried to make.
+      if (strictSupportHold && m.kind !== 'hold' && m.kind !== 'convoy') return false;
       return !s.target.dest;
     });
 

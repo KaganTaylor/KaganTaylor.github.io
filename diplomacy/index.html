@@ -35,7 +35,7 @@
         </div>
       </div>
     </div>
-    <p class="credits">Map: jDip (GPL) · Rules engine validated against the 167 Diplomacy Adjudicator Test Cases · <a href="test/datc.html">run the tests</a> · <button id="btn-token" class="linklike" title="Change or clear the GitHub personal access token used for publishing">🔑 GitHub token</button></p>
+    <p class="credits">Map: jDip (GPL) · Rules engine validated against the 167 Diplomacy Adjudicator Test Cases · <a href="test/datc.html">run the tests</a> · <a href="test/strict.html">strict-support tests</a> · <button id="btn-token" class="linklike" title="Change or clear the GitHub personal access token used for publishing">🔑 GitHub token</button></p>
   </div>
 </section>
 
@@ -162,7 +162,8 @@
 
       <!-- standings -->
       <details id="panel-standings" class="panel" open>
-        <summary><h2>Standings</h2></summary>
+        <summary><h2>Standings <button id="btn-game-settings" class="settings-btn" title="Game settings — victory thresholds and house rules">🎲 Game settings</button></h2></summary>
+        <div id="win-thresholds" class="hint"></div>
         <table id="standings"></table>
       </details>
 
@@ -241,6 +242,39 @@
     </div>
   </div>
 </section>
+
+<dialog id="game-settings-dialog" class="modal">
+  <form id="game-settings-form">
+    <h2>🎲 Game settings</h2>
+    <label class="setting-row">
+      <span>SCs for solo win</span>
+      <input id="set-solo-win" type="number" min="1" max="34" value="18">
+    </label>
+    <label class="setting-row">
+      <span>SCs for coalition win</span>
+      <input id="set-coalition-win" type="number" min="1" max="34" value="18">
+    </label>
+    <p class="hint">These two numbers are shown next to the standings to remind players of this game's victory thresholds. They do not change adjudication.</p>
+    <label class="setting-row">
+      <span>Support house-rule</span>
+      <span class="setting-field">
+        <select id="set-support-rule">
+          <option value="standard">Standard</option>
+          <option value="strict">Strict support-hold</option>
+        </select>
+        <button type="button" id="set-support-help" class="help-q" title="What's the difference?" aria-label="Explain the support house-rule">?</button>
+      </span>
+    </label>
+    <p class="hint" id="set-support-explain" hidden>
+      <b>Standard:</b> the normal rules — a support-hold may be given to any unit that stays in its province, including a unit that is giving support or whose move order failed.<br>
+      <b>Strict support-hold:</b> a support-hold may only be given to a unit that ordered hold or convoy. A unit that is giving support cannot be supported ("you cannot receive support while giving support"), and a unit that ordered a move cannot be supported even if that move fails. Supporting units are easier to dislodge.
+    </p>
+    <div class="btnrow modal-actions">
+      <button type="button" id="set-cancel">Cancel</button>
+      <button type="submit" id="set-save" class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
 
 <script type="module" src="js/app.js"></script>
 </body>
