@@ -1,4 +1,4 @@
-import { Board, POWER_COLORS } from './render.js';
+import { Board, POWER_COLORS, ARROW_COLORS } from './render.js';
 import * as S from './state.js';
 import { parseOrders, parseOrderLine, normalizePower } from './parser.js';
 import {
@@ -596,7 +596,7 @@ function drawLive(excludeProv = null) {
     // a convoy that cannot exist is a void order (the unit holds) — no
     // arrow at all; the warning below the order box explains why
     if (reason === 'no convoy possible' && o.kind === 'move') continue;
-    board.drawOrder(o, reason ? '#e05252' : POWER_COLORS[o.power] || '#888');
+    board.drawOrder(o, reason ? '#e05252' : ARROW_COLORS[o.power] || '#888');
   }
 }
 
@@ -1111,7 +1111,7 @@ function startPlayback(entry, readonly) {
     const li = document.createElement('li');
     li.textContent = `${cap(r.order.power)}: ${fmtOrder(r.order)}`;
     li.style.listStyle = 'none';
-    li.style.borderLeft = `4px solid ${POWER_COLORS[r.order.power] || '#888'}`;
+    li.style.borderLeft = `4px solid ${ARROW_COLORS[r.order.power] || '#888'}`;
     li.style.paddingLeft = '6px';
     li.style.cursor = 'pointer';
     li.title = 'Jump to this order';
@@ -1152,7 +1152,7 @@ function renderPlayback() {
       const o = orders[i].order;
       const v = verdictByProv.get(prov(o.loc));
       const failed = v === 'fails' || v === 'invalid';
-      board.drawOrder(o, failed ? '#e05252' : POWER_COLORS[o.power] || '#888');
+      board.drawOrder(o, failed ? '#e05252' : ARROW_COLORS[o.power] || '#888');
     }
     if (step >= outcomeStep()) {
       for (const r of entry.results) {
@@ -1189,61 +1189,18 @@ function renderPlayback() {
     }
   }
   $('pb-prev').disabled = step === 0;
-  $('pb-next').disabled = step >= finalStep();
+  // Forward stepping stops at the resolution reveal (outcomeStep) — the final
+  // move animation is played only by "Continue", never by stepping.
+  $('pb-next').disabled = step >= outcomeStep();
 }
 
-function stepPlayback(delta, opts = {}) {
+function stepPlayback(delta) {
   if (!playback || playback.animating) return;
-  const target = Math.max(0, Math.min(finalStep(), playback.step + delta));
+  // clamp to [0, outcomeStep]: the reveal is as far as stepping goes.
+  const target = Math.max(0, Math.min(outcomeStep(), playback.step + delta));
   if (target === playback.step) return;
-  const crossingToFinal = delta > 0 && playback.step <= outcomeStep() && target >= finalStep();
-  if (crossingToFinal && !opts.noAnim) return animateToFinal();
-  const crossingFromFinal = delta < 0 && playback.step >= finalStep() && target <= outcomeStep();
-  if (crossingFromFinal && !opts.noAnim) return animateFromFinal();
   playback.step = target;
   renderPlayback();
-}
-
-// Show the outcome briefly, then let every unit glide to its destination
-// (simultaneous movement — bounced units lunge and fall back).
-function animateToFinal() {
-  const pb = playback;
-  pb.animating = true;
-  pb.step = outcomeStep();
-  renderPlayback();
-  board.clearOrders(); // arrows disappear as the moves execute
-  $('pb-step-label').textContent = 'Executing moves…';
-  $('pb-next').disabled = true;
-  board.animateFinal(pb.entry).then(() => {
-    if (playback !== pb) return;
-    pb.animating = false;
-    pb.step = finalStep();
-    renderPlayback();
-  });
-}
-
-// Undoing the final confirmation step: play the same animation backwards
-// instead of snapping units straight back to their pre-move positions.
-// renderPlayback() for the outcome step already lays the board out exactly
-// as animateToFinal() found it before playing forward (units at their
-// pre-move locations, dislodged units in the dislodged layer) — reusing it
-// here means the reverse tween starts from the same DOM state the forward
-// one did, just interpolating the opposite way.
-function animateFromFinal() {
-  const pb = playback;
-  pb.animating = true;
-  pb.step = outcomeStep();
-  renderPlayback();
-  board.clearOrders();
-  $('pb-step-label').textContent = 'Undoing moves…';
-  $('pb-prev').disabled = true;
-  $('pb-next').disabled = true;
-  board.animateFinal(pb.entry, { reverse: true }).then(() => {
-    if (playback !== pb) return;
-    pb.animating = false;
-    pb.step = outcomeStep();
-    renderPlayback();
-  });
 }
 
 function endPlayback() {
@@ -1251,14 +1208,11 @@ function endPlayback() {
   refreshAll();
 }
 
-// "Continue ➜" finishes the step-through and advances to the next phase. If
-// the moves haven't been animated yet — the common case, where the GM clicks
-// Continue straight from the resolution screen without stepping to the final
-// position — play the movement animation first, then move on. (Stepping to the
-// final position with ▶ / ⏭ / → already animates, so if we're there, just go.)
+// "Continue ➜" is the only control that plays the move animation: stepping
+// (▶ / → / ⏭ Skip to final order) stops at the resolution reveal. Continue
+// plays every unit's move to its destination, then advances to the next phase.
 function continuePlayback() {
   if (!playback || playback.animating) return;
-  if (playback.step >= finalStep()) return endPlayback();
   const pb = playback;
   pb.animating = true;
   pb.step = outcomeStep();

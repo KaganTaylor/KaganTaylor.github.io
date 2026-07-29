@@ -52,11 +52,13 @@ const CASES = [
     standard: {
       survivors: ['france A gas', 'france A bur', 'france A pic', 'germany A mun', 'germany A ruh'],
       dislodged: [],
+      supVerdicts: { pic: 'succeeds' }, // Bur isn't moving → support-hold counts
     },
     strict: {
       // Pic's support-hold to Bur is void → Bur holds at strength 1, loses to 2
       survivors: ['france A gas', 'france A pic', 'germany A bur', 'germany A ruh'],
       dislodged: ['france A bur'],
+      supVerdicts: { pic: 'fails' }, // Bur is giving support → can't be supported
     },
   },
   {
@@ -94,10 +96,12 @@ const CASES = [
     standard: {
       survivors: ['france A pic', 'france A mar', 'germany A bur', 'germany A ruh'],
       dislodged: ['france A bur'],
+      supVerdicts: { pic: 'fails' }, // Bur is ordered to move → support wasted
     },
     strict: {
       survivors: ['france A pic', 'france A mar', 'germany A bur', 'germany A ruh'],
       dislodged: ['france A bur'],
+      supVerdicts: { pic: 'fails' },
     },
   },
   {
@@ -115,10 +119,31 @@ const CASES = [
     standard: {
       survivors: ['france A bur', 'france A pic', 'germany A mun', 'germany A ruh'],
       dislodged: [],
+      supVerdicts: { pic: 'succeeds' }, // void order = hold → support counts (✓)
     },
     strict: {
       survivors: ['france A bur', 'france A pic', 'germany A mun', 'germany A ruh'],
       dislodged: [],
+      supVerdicts: { pic: 'succeeds' },
+    },
+  },
+  {
+    id: 'an unmatched support-move shows as failed — both ways',
+    units: ['FRANCE A Par', 'FRANCE A Pic'],
+    orders: [
+      'FRANCE: A Par H',              // Par holds — no Par→Bur move exists
+      'FRANCE: A Pic S A Par - Bur',  // support for a move that was never ordered
+    ],
+    // The support matches no real order, so it provides nothing → ✕ (both ways).
+    standard: {
+      survivors: ['france A par', 'france A pic'],
+      dislodged: [],
+      supVerdicts: { pic: 'fails' },
+    },
+    strict: {
+      survivors: ['france A par', 'france A pic'],
+      dislodged: [],
+      supVerdicts: { pic: 'fails' },
     },
   },
   {
@@ -164,6 +189,14 @@ export function runStrictTests() {
         notes.push(`survivors: got [${survivors.sort()}] want [${[...exp.survivors].sort()}]`);
       if (!setEq(dislodged, exp.dislodged))
         notes.push(`dislodged: got [${dislodged.sort()}] want [${[...exp.dislodged].sort()}]`);
+      // optional: assert the display verdict of a support order, keyed by the
+      // supporter's province (e.g. { pic: 'fails' }). Proves the resolution
+      // screen would show ✓/✕ correctly for support orders.
+      for (const [loc, want] of Object.entries(exp.supVerdicts || {})) {
+        const r = out.results.find((x) => x.order.kind === 'support' && x.order.loc === (ALIASES[loc] || loc));
+        const got = r ? r.verdict : '(no such support)';
+        if (got !== want) notes.push(`support@${loc} verdict: got ${got} want ${want}`);
+      }
       if (notes.length) failures.push({ id: `${c.id} [${mode}]`, notes });
     }
   }

@@ -34,6 +34,20 @@ export const POWER_COLORS = {
   turkey: '#957e00',
 };
 
+// Brighter, more saturated per-power colours used ONLY for drawing order
+// arrows. Kept separate from POWER_COLORS (the muted province-ownership tints)
+// so arrows read vividly and stay clearly distinct from the muted failure red
+// (#e05252) — most importantly for Austria, whose tint is itself reddish.
+export const ARROW_COLORS = {
+  austria: '#e6321f',
+  england: '#b01ff0',
+  france: '#2f6bff',
+  germany: '#b0842f',
+  italy: '#17b017',
+  russia: '#6f8bd8',
+  turkey: '#e0bc00',
+};
+
 // ---------------------------------------------------------------------------
 // COASTLINE APPEARANCE — change the coastline colour HERE
 //
@@ -925,10 +939,51 @@ export class Board {
     t.setAttribute('fill', color);
     t.setAttribute('stroke', 'white');
     t.setAttribute('stroke-width', 0.8);
+    // paint the white stroke BEHIND the fill so it reads as a thin outline
+    // around a solid coloured glyph, not a fat white overlay eating the glyph
+    t.setAttribute('paint-order', 'stroke');
     t.setAttribute('text-anchor', 'middle');
     t.setAttribute('pointer-events', 'none');
     t.textContent = s;
     return t;
+  }
+
+  // A bold coloured cross with a thin white outline — the resolution "failed"
+  // mark. The glyph is fattened with a same-colour stroke and sits on a wider
+  // white glyph, giving a thick coloured X ringed by a thin white outline.
+  _cross(x, y, size = 46, color = '#c40000') {
+    const t = this._text(x, y, '✕', size, color);
+    t.setAttribute('stroke', color);
+    t.setAttribute('stroke-width', 2.2);
+    // outer white halo via a second, wider white glyph underneath
+    const halo = this._text(x, y, '✕', size, 'white');
+    halo.setAttribute('stroke', 'white');
+    halo.setAttribute('stroke-width', 5);
+    const g = document.createElementNS(SVGNS, 'g');
+    g.appendChild(halo);
+    g.appendChild(t);
+    return g;
+  }
+
+  // A slash drawn as a line (white casing behind a coloured stroke), centred
+  // on (cx, cy) — the "support did not apply / cut" mark, sitting over the
+  // support arrow rather than beside it.
+  _slash(cx, cy, color = '#e05252') {
+    const dx = 16, dy = 20; // a "/" leaning like a prohibition slash
+    const g = document.createElementNS(SVGNS, 'g');
+    const mk = (w, col) => {
+      const l = document.createElementNS(SVGNS, 'line');
+      l.setAttribute('x1', cx - dx); l.setAttribute('y1', cy + dy);
+      l.setAttribute('x2', cx + dx); l.setAttribute('y2', cy - dy);
+      l.setAttribute('stroke', col);
+      l.setAttribute('stroke-width', w);
+      l.setAttribute('stroke-linecap', 'round');
+      l.setAttribute('pointer-events', 'none');
+      return l;
+    };
+    g.appendChild(mk(9, 'white'));
+    g.appendChild(mk(5, color));
+    return g;
   }
 
   // resolution marks drawn on top of everything
@@ -938,14 +993,20 @@ export class Board {
     const from = this.center(order.unit ? order.unit.loc : order.loc);
     if ((order.kind === 'move' || order.kind === 'retreat') && (order.destLoc || order.dest)) {
       const to = this._trim(from, this.center(order.destLoc || order.dest), 30);
-      g.appendChild(this._text(to.x, to.y + 10, '✕', 44));
-    } else if (order.kind === 'support' && reason === 'support cut') {
-      const target = order.target.dest ? this.center(order.target.dest) : this.center(order.target.loc);
-      const mid = { x: (from.x + target.x) / 2, y: (from.y + target.y) / 2 };
-      g.appendChild(this._text(mid.x, mid.y + 8, '∕', 46));
-      g.appendChild(this._text(mid.x, mid.y - 18, 'cut', 20));
+      g.appendChild(this._cross(to.x, to.y + 10, 46));
+    } else if (order.kind === 'support') {
+      // any failed support (cut, or gave no actual support) — a slash centred
+      // over the arrow. drawOrder() draws the arrow from the supporter to the
+      // target (support-hold) or to the midpoint of target→dest (support-move);
+      // put the slash at the midpoint of that arrow so it sits over it.
+      const t = this.center(order.target.loc);
+      const end = order.target.dest
+        ? { x: (t.x + this.center(order.target.dest).x) / 2, y: (t.y + this.center(order.target.dest).y) / 2 }
+        : t;
+      const mid = { x: (from.x + end.x) / 2, y: (from.y + end.y) / 2 };
+      g.appendChild(this._slash(mid.x, mid.y));
     } else {
-      g.appendChild(this._text(from.x + 18, from.y - 12, '✕', 36));
+      g.appendChild(this._cross(from.x + 18, from.y - 12, 38));
     }
     this.layers.highest.appendChild(g);
     return g;

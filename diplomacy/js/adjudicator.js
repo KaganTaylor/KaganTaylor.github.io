@@ -594,15 +594,27 @@ export function adjudicateMovement(units, orders, opts = {}) {
     d.retreatOptions = computeRetreatOptions(d, afterBoard, standoffs);
   }
 
-  const results = all.map((o) => ({
-    order: o,
-    verdict: o.illegal
-      ? 'invalid'
-      : resolution[o.idx]
-        ? 'succeeds'
-        : 'fails',
-    reason: o.illegal || failureReason(o),
-  }));
+  // A support that wasn't cut can still be ineffective — it gave no actual
+  // support because the supported unit moved (a real move keeps effKind
+  // 'move') or no matching order existed. It counts as effective iff the
+  // supported order's own supportsFor() set includes it, which already encodes
+  // every rule (support-hold only to a non-moving unit, support-move must
+  // match, an illegal order that reverts to a hold IS supportable, etc.).
+  function supportEffective(o) {
+    if (o.effKind !== 'support') return true;
+    const m = orderAt(o.targetProv);
+    return !!m && supportsFor(m).some((s) => s.idx === o.idx);
+  }
+
+  const results = all.map((o) => {
+    let verdict = o.illegal ? 'invalid' : resolution[o.idx] ? 'succeeds' : 'fails';
+    let reason = o.illegal || failureReason(o);
+    if (verdict === 'succeeds' && !supportEffective(o)) {
+      verdict = 'fails';
+      reason = 'no unit supported';
+    }
+    return { order: o, verdict, reason };
+  });
 
   function failureReason(o) {
     if (resolution[o.idx]) return null;
