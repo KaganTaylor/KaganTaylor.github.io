@@ -54,6 +54,7 @@ export const ARROW_COLORS = {
 const ARROW_BORDER = '#3a3f47';
 const ARROW_BORDER_PAD = 1.5; // border extends this many map units past each edge
 const ARROW_WIDTH = 6;        // colored shaft width
+const ARROW_OPACITY = 0.85;   // match the units' fill-opacity so arrows sit in the same visual plane
 
 // ---------------------------------------------------------------------------
 // COASTLINE APPEARANCE — change the coastline colour HERE
@@ -594,11 +595,12 @@ export class Board {
 
   // The dragged arrow is drawn with the exact same border+color structure as a
   // placed move arrow (via _line), in the issuing power's ARROW_COLORS colour,
-  // so what the user drags matches what lands.
+  // into the SAME layer (orders1, beneath the units) — so what the user drags
+  // matches what lands, and both sit under the unit symbols.
   _updateGhost(a, b, color) {
     const col = color || '#ffd479';
     if (!this._ghost) {
-      this._ghost = this._line(this.layers.highest, a.x, a.y, b.x, b.y, 'varwidthorder', col, { arrow: true, width: ARROW_WIDTH });
+      this._ghost = this._line(this.layers.orders1, a.x, a.y, b.x, b.y, 'varwidthorder', col, { arrow: true, width: ARROW_WIDTH });
       this._ghost.setAttribute('pointer-events', 'none');
     }
     for (const el of this._ghost.children) {
@@ -824,10 +826,14 @@ export class Board {
   }
 
   // Colored arrowhead marker, created on demand per color. The head carries its
-  // OWN dark-grey outline (stroke on the arrow path), sized with the colored
-  // line, so the head border matches the shaft border and needs no separate
-  // oversized shadow marker. overflow:visible keeps that stroke from being
-  // clipped at the marker viewport edges.
+  // OWN dark-grey border as a stroke on the arrow path — sized to match the
+  // shaft border — so no separate oversized shadow marker is needed.
+  //
+  // The path is OPEN (base-corner -> tip -> base-corner, no closing 'z'): fill
+  // still paints the whole triangle, but stroke covers only the two outer edges,
+  // NOT the base where the head meets the shaft. That keeps the head visually
+  // continuous with the shaft instead of a bordered triangle cut off from it.
+  // overflow:visible keeps the stroke from being clipped at the marker viewport.
   _marker(color) {
     const id = 'arrow-' + color.replace(/[^\w]/g, '');
     if (!this.svg.querySelector('#' + id)) {
@@ -836,10 +842,17 @@ export class Board {
       m.setAttribute('id', id);
       m.setAttribute('overflow', 'visible');
       const path = m.querySelector('path');
+      path.setAttribute('d', 'M 0 0 L 10 5 L 0 10'); // open: no base edge
       path.setAttribute('fill', color);
       path.setAttribute('stroke', ARROW_BORDER);
-      path.setAttribute('stroke-width', 1.3); // marker viewBox units (0..10)
+      // markerUnits=strokeWidth, markerWidth=4, viewBox width 10 -> the marker is
+      // scaled by 4*ARROW_WIDTH/10 in user space. Pick a viewBox stroke width so
+      // the grey exposed past each outer edge equals ARROW_BORDER_PAD, matching
+      // the shaft border exactly.
+      const markerScale = 4 * ARROW_WIDTH / 10;
+      path.setAttribute('stroke-width', 2 * ARROW_BORDER_PAD / markerScale);
       path.setAttribute('stroke-linejoin', 'round');
+      path.setAttribute('stroke-linecap', 'butt');
       base.parentNode.appendChild(m);
     }
     return `url(#${id})`;
@@ -865,6 +878,10 @@ export class Board {
     line.setAttribute('stroke-width', w);
     if (opts.arrow) line.setAttribute('marker-end', this._marker(color));
     const g = document.createElementNS(SVGNS, 'g');
+    // Group opacity (not per-line) so the exposed grey border and the colored
+    // fill flatten to ONE translucent layer at the units' opacity — no doubled
+    // darkening where the colored line overlaps its border.
+    g.setAttribute('opacity', ARROW_OPACITY);
     g.appendChild(border);
     g.appendChild(line);
     layer.appendChild(g);
