@@ -21,7 +21,7 @@ Tests: `diplomacy/test/datc.html` runs the full DATC (Diplomacy Adjudicator Test
 
 ## Workflow
 
-By default, commit and push changes made in this repo (not just `diplomacy/`) so GitHub Pages picks them up and the user can review the live result — don't wait to be asked for the push step specifically.
+By default, commit and push changes made in this repo (not just `diplomacy/`) so GitHub Pages picks them up and the user can review the live result — don't wait to be asked for the push step specifically. Do this immediately after finishing a change, not batched at the end of a longer session — the user checks results on the live GitHub Pages site, so a change sitting uncommitted/unpushed blocks them from seeing it.
 
 ## Architecture
 

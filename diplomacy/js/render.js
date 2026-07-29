@@ -833,6 +833,22 @@ export class Board {
     return `url(#${id})`;
   }
 
+  // slightly oversized black marker drawn under the colored one, so the
+  // shadow border wraps the arrow head the same way it outlines the shaft
+  _shadowMarker() {
+    const id = 'arrow-shadow';
+    if (!this.svg.querySelector('#' + id)) {
+      const base = this.svg.querySelector('#arrow');
+      const m = base.cloneNode(true);
+      m.setAttribute('id', id);
+      const path = m.querySelector('path');
+      path.setAttribute('fill', 'black');
+      path.setAttribute('fill-opacity', '0.45');
+      base.parentNode.appendChild(m);
+    }
+    return `url(#${id})`;
+  }
+
   _line(layer, x1, y1, x2, y2, cls, color, opts = {}) {
     const shadow = document.createElementNS(SVGNS, 'line');
     shadow.setAttribute('x1', x1); shadow.setAttribute('y1', y1);
@@ -843,7 +859,10 @@ export class Board {
     line.setAttribute('x2', x2); line.setAttribute('y2', y2);
     line.setAttribute('class', cls);
     line.setAttribute('stroke', color);
-    if (opts.arrow) line.setAttribute('marker-end', this._marker(color));
+    if (opts.arrow) {
+      shadow.setAttribute('marker-end', this._shadowMarker());
+      line.setAttribute('marker-end', this._marker(color));
+    }
     if (opts.width) line.setAttribute('stroke-width', opts.width);
     const g = document.createElementNS(SVGNS, 'g');
     g.appendChild(shadow);

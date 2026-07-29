@@ -704,12 +704,12 @@ function attachBoardHandlers() {
       if (editMode || game.step === 'movement') {
         const u = unitAt(base);
         if (!u) return null;
-        return { color: POWER_COLORS[u.power] };
+        return { color: ARROW_COLORS[u.power] };
       }
       if (game.step === 'retreat') {
         const d = dislodgedAt(base);
         if (!d) return null;
-        return { color: POWER_COLORS[d.unit.power] };
+        return { color: ARROW_COLORS[d.unit.power] };
       }
       return null;
     },
