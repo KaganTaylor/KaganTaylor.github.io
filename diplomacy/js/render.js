@@ -48,6 +48,13 @@ export const ARROW_COLORS = {
   turkey: '#e0bc00',
 };
 
+// Thin dark-grey outline drawn around every order arrow (shaft AND head), so a
+// vivid ARROW_COLORS line stays legible over any ownership tint. The border is
+// the ONLY outline on an arrow — no black drop-shadow halo.
+const ARROW_BORDER = '#3a3f47';
+const ARROW_BORDER_PAD = 1.5; // border extends this many map units past each edge
+const ARROW_WIDTH = 6;        // colored shaft width
+
 // ---------------------------------------------------------------------------
 // COASTLINE APPEARANCE — change the coastline colour HERE
 //
@@ -585,23 +592,19 @@ export class Board {
     }
   }
 
+  // The dragged arrow is drawn with the exact same border+color structure as a
+  // placed move arrow (via _line), in the issuing power's ARROW_COLORS colour,
+  // so what the user drags matches what lands.
   _updateGhost(a, b, color) {
+    const col = color || '#ffd479';
     if (!this._ghost) {
-      const g = document.createElementNS(SVGNS, 'line');
-      g.setAttribute('stroke-width', 7);
-      g.setAttribute('stroke-linecap', 'round');
-      g.setAttribute('pointer-events', 'none');
-      g.setAttribute('opacity', '0.8');
-      this.layers.highest.appendChild(g);
-      this._ghost = g;
+      this._ghost = this._line(this.layers.highest, a.x, a.y, b.x, b.y, 'varwidthorder', col, { arrow: true, width: ARROW_WIDTH });
+      this._ghost.setAttribute('pointer-events', 'none');
     }
-    const g = this._ghost;
-    g.setAttribute('x1', a.x);
-    g.setAttribute('y1', a.y);
-    g.setAttribute('x2', b.x);
-    g.setAttribute('y2', b.y);
-    g.setAttribute('stroke', color || '#ffd479');
-    g.setAttribute('marker-end', this._marker(color || '#ffd479'));
+    for (const el of this._ghost.children) {
+      el.setAttribute('x1', a.x); el.setAttribute('y1', a.y);
+      el.setAttribute('x2', b.x); el.setAttribute('y2', b.y);
+    }
   }
 
   _removeGhost() {
@@ -820,52 +823,49 @@ export class Board {
     this._ghost = null;
   }
 
-  // colored arrowhead markers, created on demand per color
+  // Colored arrowhead marker, created on demand per color. The head carries its
+  // OWN dark-grey outline (stroke on the arrow path), sized with the colored
+  // line, so the head border matches the shaft border and needs no separate
+  // oversized shadow marker. overflow:visible keeps that stroke from being
+  // clipped at the marker viewport edges.
   _marker(color) {
     const id = 'arrow-' + color.replace(/[^\w]/g, '');
     if (!this.svg.querySelector('#' + id)) {
       const base = this.svg.querySelector('#arrow');
       const m = base.cloneNode(true);
       m.setAttribute('id', id);
-      m.querySelector('path').setAttribute('fill', color);
-      base.parentNode.appendChild(m);
-    }
-    return `url(#${id})`;
-  }
-
-  // slightly oversized black marker drawn under the colored one, so the
-  // shadow border wraps the arrow head the same way it outlines the shaft
-  _shadowMarker() {
-    const id = 'arrow-shadow';
-    if (!this.svg.querySelector('#' + id)) {
-      const base = this.svg.querySelector('#arrow');
-      const m = base.cloneNode(true);
-      m.setAttribute('id', id);
+      m.setAttribute('overflow', 'visible');
       const path = m.querySelector('path');
-      path.setAttribute('fill', 'black');
-      path.setAttribute('fill-opacity', '0.45');
+      path.setAttribute('fill', color);
+      path.setAttribute('stroke', ARROW_BORDER);
+      path.setAttribute('stroke-width', 1.3); // marker viewBox units (0..10)
+      path.setAttribute('stroke-linejoin', 'round');
       base.parentNode.appendChild(m);
     }
     return `url(#${id})`;
   }
 
+  // Colored order line with a thin dark-grey border: a wider border line of the
+  // SAME class drawn underneath (so it inherits any dash pattern and the border
+  // follows the dashes), then the colored line on top. The head border rides
+  // along on the colored marker itself (see _marker).
   _line(layer, x1, y1, x2, y2, cls, color, opts = {}) {
-    const shadow = document.createElementNS(SVGNS, 'line');
-    shadow.setAttribute('x1', x1); shadow.setAttribute('y1', y1);
-    shadow.setAttribute('x2', x2); shadow.setAttribute('y2', y2);
-    shadow.setAttribute('class', 'shadowdash');
+    const w = opts.width || ARROW_WIDTH;
+    const border = document.createElementNS(SVGNS, 'line');
+    border.setAttribute('x1', x1); border.setAttribute('y1', y1);
+    border.setAttribute('x2', x2); border.setAttribute('y2', y2);
+    border.setAttribute('class', cls);
+    border.setAttribute('stroke', ARROW_BORDER);
+    border.setAttribute('stroke-width', w + ARROW_BORDER_PAD * 2);
     const line = document.createElementNS(SVGNS, 'line');
     line.setAttribute('x1', x1); line.setAttribute('y1', y1);
     line.setAttribute('x2', x2); line.setAttribute('y2', y2);
     line.setAttribute('class', cls);
     line.setAttribute('stroke', color);
-    if (opts.arrow) {
-      shadow.setAttribute('marker-end', this._shadowMarker());
-      line.setAttribute('marker-end', this._marker(color));
-    }
-    if (opts.width) line.setAttribute('stroke-width', opts.width);
+    line.setAttribute('stroke-width', w);
+    if (opts.arrow) line.setAttribute('marker-end', this._marker(color));
     const g = document.createElementNS(SVGNS, 'g');
-    g.appendChild(shadow);
+    g.appendChild(border);
     g.appendChild(line);
     layer.appendChild(g);
     return g;
@@ -887,8 +887,7 @@ export class Board {
     if (kind === 'move' || kind === 'retreat') {
       const dest = order.destLoc || order.dest;
       const to = this._trim(from, this.center(dest), 24);
-      const el = this._line(this.layers.orders1, from.x, from.y, to.x, to.y, 'varwidthorder', color, { arrow: true, width: 6 });
-      el.querySelector('line:last-child').setAttribute('fill', color);
+      const el = this._line(this.layers.orders1, from.x, from.y, to.x, to.y, 'varwidthorder', color, { arrow: true, width: ARROW_WIDTH });
       g.appendChild(el);
       if (order.isConvoyMove || order.viaConvoy) {
         const badge = this._text(from.x + 14, from.y - 14, '⚓', 20);
