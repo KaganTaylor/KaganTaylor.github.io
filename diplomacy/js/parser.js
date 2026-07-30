@@ -113,14 +113,24 @@ export function parseOrderLine(rawLine, phase, defaultPower) {
   }
 
   if (MOVE_WORDS.has(tokens[i])) {
-    i++;
-    const destM = matchLocation(tokens, i);
-    if (!destM) return err('cannot parse destination');
-    const [dest, afterDest] = destM;
-    i = afterDest;
+    // A chain of "- prov" hops. With one hop the single location is the
+    // destination; with several ("A Lon - NTH - Nwy") the trailing location is
+    // the destination and the earlier ones are the named sea provinces of an
+    // explicit convoy route (used by the strict-convoy house rule).
+    const hops = [];
+    while (MOVE_WORDS.has(tokens[i])) {
+      i++;
+      const hopM = matchLocation(tokens, i);
+      if (!hopM) return err('cannot parse destination');
+      hops.push(hopM[0]);
+      i = hopM[1];
+    }
     const viaConvoy = tokens[i] === '§via§';
     const kind = phase === 'retreat' ? 'retreat' : 'move';
-    return { order: { power, kind, loc, dest, viaConvoy, unitType } };
+    const dest = hops[hops.length - 1];
+    const order = { power, kind, loc, dest, viaConvoy, unitType };
+    if (kind === 'move' && hops.length > 1) order.convoyRoute = hops.slice(0, -1);
+    return { order };
   }
 
   if (SUPPORT_WORDS.has(tokens[i]) || CONVOY_WORDS.has(tokens[i])) {

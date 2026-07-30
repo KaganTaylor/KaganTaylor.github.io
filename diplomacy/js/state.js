@@ -20,7 +20,9 @@ const STORE_KEY = 'diplomacysim:games';
 //   soloWin / coalitionWin: SC thresholds shown next to the standings.
 //   supportRule: 'standard' | 'strict' — the strict support-hold house rule
 //   (a supporting unit cannot itself be supported; see adjudicateMovement()).
-export const DEFAULT_SETTINGS = { soloWin: 18, coalitionWin: 18, supportRule: 'standard' };
+//   convoyRule: 'standard' | 'strict' — the strict-convoy house rule (a
+//   convoyed army must name its exact sea route; see adjudicateMovement()).
+export const DEFAULT_SETTINGS = { soloWin: 18, coalitionWin: 18, supportRule: 'standard', convoyRule: 'standard' };
 
 // Settings for a game, with any missing field filled from the defaults, so
 // old games (and games published before settings existed) behave sanely.
@@ -30,7 +32,11 @@ export function gameSettings(g) {
 
 // The adjudication options a game's settings imply.
 export function movementOpts(g) {
-  return { strictSupportHold: gameSettings(g).supportRule === 'strict' };
+  const s = gameSettings(g);
+  return {
+    strictSupportHold: s.supportRule === 'strict',
+    strictConvoy: s.convoyRule === 'strict',
+  };
 }
 
 export function newGame(name) {

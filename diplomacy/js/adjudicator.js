@@ -69,6 +69,34 @@ function onPossibleWaterRoute(water, from, dest) {
   return false;
 }
 
+// Do two provinces share a fleet-adjacency edge? (Symmetric; either side may
+// be a coast province, so check both directions.)
+export function seaAdjacent(aProv, bProv) {
+  return (
+    (FLEET_ADJ[aProv] || []).some((l) => prov(l) === bProv) ||
+    (FLEET_ADJ[bProv] || []).some((l) => prov(l) === aProv)
+  );
+}
+
+// The sea provinces a convoy route from `from` to `dest` could legally extend
+// to next, given the hops chosen so far. A candidate is any water province
+// adjacent to the current chain end that keeps `dest` reachable (either
+// directly adjacent, or via some further all-water route). Fleet presence is
+// NOT required — convoys are cooperative, and an ally's fleet may be ordered
+// to carry the army. Used by the strict-convoy route picker.
+export function convoyRouteHops(from, dest, chosen = []) {
+  const end = chosen.length ? prov(chosen[chosen.length - 1]) : prov(from);
+  const used = new Set(chosen.map(prov));
+  const hops = [];
+  for (const w of Object.keys(PROVINCES)) {
+    if (PROVINCES[w].type !== 'water' || used.has(w) || w === end) continue;
+    if (!seaAdjacent(end, w)) continue;
+    if (seaAdjacent(w, prov(dest)) || onPossibleWaterRoute(w, prov(from), prov(dest)))
+      hops.push(w);
+  }
+  return hops;
+}
+
 // could an army at province `from` be convoyed to province `dest` at all,
 // through water provinces that currently contain a fleet (regardless of
 // orders)? Used to distinguish a failed convoy (real move order) from a
@@ -127,6 +155,12 @@ const FAILS = false;
 // ---------------------------------------------------------------------------
 export function adjudicateMovement(units, orders, opts = {}) {
   const strictSupportHold = !!opts.strictSupportHold;
+  // strictConvoy (house rule, default off): a convoyed army must name the exact
+  // sea provinces it is carried through (order.convoyRoute). The convoy succeeds
+  // only if every named sea has a fleet ordered to convoy that exact move and
+  // none is dislodged — no automatic best-route search, no alternate paths. A
+  // convoyed move with no named route is illegal (holds).
+  const strictConvoy = !!opts.strictConvoy;
   const board = new Map(); // province -> unit
   for (const u of units) board.set(prov(u.loc), u);
 
@@ -234,9 +268,30 @@ export function adjudicateMovement(units, orders, opts = {}) {
         c.destProv === o.destProv
     );
 
+  // Strict-convoy route check: the army named an exact chain of sea provinces
+  // (o.convoyRoute). Every named sea must be adjacent in sequence (army origin
+  // -> route[0] -> ... -> route[n] -> destination) and hold a fleet ordered to
+  // convoy THIS move that passes `fleetOk` (not dislodged). No alternatives.
+  function strictConvoyPath(o, fleetOk) {
+    const route = (o.convoyRoute || []).map(prov);
+    if (!route.length) return false;
+    const byProv = new Map();
+    for (const c of convoyersFor(o)) byProv.set(c.origin, c);
+    const link = (waterProv, other) =>
+      (FLEET_ADJ[waterProv] || []).some((l) => prov(l) === prov(other));
+    if (!link(route[0], o.origin)) return false;
+    for (let k = 0; k < route.length; k++) {
+      const f = byProv.get(route[k]);
+      if (!f || !fleetOk(f)) return false;
+      if (k < route.length - 1 && !link(route[k], route[k + 1])) return false;
+    }
+    return link(route[route.length - 1], o.destProv);
+  }
+
   // is there a chain of convoyers (subset allowed to be `pred`-filtered)
   // linking origin coast to destination coast?
   function convoyPath(o, fleetOk) {
+    if (strictConvoy) return strictConvoyPath(o, fleetOk);
     const fleets = convoyersFor(o).filter(fleetOk);
     if (!fleets.length) return false;
     const fleetAt = new Map(fleets.map((f) => [f.origin, f]));
@@ -291,6 +346,18 @@ export function adjudicateMovement(units, orders, opts = {}) {
       // 1982/2000 rulebook; illegal convoy orders show no intent, 6.G.7)
       if (o.viaConvoy || convoyersFor(o).some((c) => c.power === o.power)) {
         o.isConvoyMove = true;
+      }
+    }
+  }
+
+  // strict convoy: a convoyed move that never named its sea route is illegal
+  // (it holds) — the player must spell the route out for it to be considered.
+  if (strictConvoy) {
+    for (const o of all) {
+      if (o.effKind === 'move' && o.isConvoyMove && !(o.convoyRoute && o.convoyRoute.length)) {
+        o.illegal = 'convoy route required';
+        o.effKind = 'hold';
+        o.isConvoyMove = false;
       }
     }
   }

@@ -6,6 +6,8 @@ import {
   armyAdjacent,
   fleetDestLocs,
   convoyPossible,
+  convoyRouteHops,
+  seaAdjacent,
   adjudicateMovement,
   adjudicateRetreats,
   adjudicateAdjustments,
@@ -31,6 +33,9 @@ let publishedPreview = null; // board fields of the live published game, while �
 let editMode = false;
 let editTool = 'A';
 let lastParsed = { orders: [], errors: [], byProv: new Map() };
+// strict-convoy route picker: while non-null the board is in route-selection
+// mode — { u, from, dest, route: [seaProv…] } (see startConvoyRoute)
+let convoyPick = null;
 let mobileSheet = null; // null | 'edit' | 'orders' | 'standings' — mobile bottom-sheet state
 let orderMode = null; // null | 'support' | 'convoy' — see setOrderMode()
 
@@ -614,7 +619,10 @@ function unitToken(u) {
 function orderTextFor(u, spec) {
   switch (spec.kind) {
     case 'hold': return `${unitToken(u)} H`;
-    case 'move': return `${unitToken(u)} - ${spec.dest}${spec.via ? ' via convoy' : ''}`;
+    case 'move': {
+      const route = spec.route && spec.route.length ? spec.route.join(' - ') + ' - ' : '';
+      return `${unitToken(u)} - ${route}${spec.dest}${spec.via ? ' via convoy' : ''}`;
+    }
     case 'retreat': return `${unitToken(u)} - ${spec.dest}`;
     case 'disband': return `${unitToken(u)} disband`;
     case 'support':
@@ -699,7 +707,7 @@ function selectOrderLine(unitProv) {
 function attachBoardHandlers() {
   board.handlers = {
     canDrag(p) {
-      if (playback || publishedPreview || !game) return null;
+      if (convoyPick || playback || publishedPreview || !game) return null;
       const base = prov(p);
       if (editMode || game.step === 'movement') {
         const u = unitAt(base);
@@ -721,6 +729,7 @@ function attachBoardHandlers() {
       if (game.step === 'retreat') return retreatDrop(from, toProv, ev);
     },
     onClick(p, ev) {
+      if (convoyPick) return convoyRouteClick(prov(p), ev);
       if (playback || publishedPreview || !game) return;
       const base = prov(p);
       if (editMode) return editClick(base, ev);
@@ -842,19 +851,97 @@ function orderDrop(from, to, ev) {
 
   // plain move
   if (u.type === 'A') {
-    if (!armyAdjacent(from, to)) {
+    const needsConvoy = !armyAdjacent(from, to);
+    if (needsConvoy) {
       if (!(PROVINCES[from].type === 'coast' && PROVINCES[to].type === 'coast'))
         return toast(`An army cannot reach ${provName(to)}`);
       // only reachable by convoy: reject outright if no chain of fleets
       // could ever carry it there (same as an unreachable plain move)
       if (!convoyPossible(game.units, from, to))
         return toast(`No convoy to ${provName(to)} is possible — no fleet route`);
+      // strict convoy: the player must trace the exact sea route — open the
+      // interactive picker instead of writing the move straight away
+      if (strictConvoyOn()) return startConvoyRoute(u, from, to);
     }
     return setOrder(u, { kind: 'move', dest: to });
   }
   const opts = fleetDestLocs(u.loc, to);
   if (!opts.length) return toast(`${provName(to)} is not adjacent for this fleet`);
   setOrder(u, { kind: 'move', dest: nearestLoc(ev, opts) });
+}
+
+// ---------------------------------------------------------------------------
+// strict-convoy route picker
+// ---------------------------------------------------------------------------
+// Under the strict-convoy house rule a convoyed army must name every sea it is
+// carried through. Dragging an army to a convoy-only province opens this
+// picker: the player taps the sea provinces of the route one at a time (each
+// candidate sea is highlighted), then taps the destination to commit. The
+// order line written is "A From - Sea1 - Sea2 - Dest".
+function strictConvoyOn() {
+  return !!game && S.gameSettings(game).convoyRule === 'strict';
+}
+
+function startConvoyRoute(u, from, dest) {
+  convoyPick = { u, from, dest, route: [] };
+  renderConvoyPicker();
+  $('convoy-route-bar').hidden = false;
+  toast('Convoy route: tap each sea in order, then tap the destination', 'info');
+}
+
+// The seas the route may extend to next, given what's chosen so far.
+function convoyCandidates() {
+  return convoyRouteHops(convoyPick.from, convoyPick.dest, convoyPick.route);
+}
+
+function renderConvoyPicker() {
+  if (!convoyPick) return;
+  const { u, from, dest, route } = convoyPick;
+  board.showConvoyPicker({
+    fromLoc: u.loc,
+    route,
+    dest,
+    candidates: convoyCandidates(),
+    color: ARROW_COLORS[u.power],
+  });
+  const end = route.length ? route[route.length - 1] : from;
+  const canFinish = seaAdjacent(end, dest);
+  const bar = $('convoy-route-bar');
+  const chosen = route.length ? route.map(provName).join(' → ') : '(none yet)';
+  $('convoy-route-status').textContent =
+    `${provName(from)} → ${chosen} → ${provName(dest)}` +
+    (canFinish ? ' — tap the destination to finish' : '');
+  $('convoy-route-undo').disabled = !route.length;
+  bar.hidden = false;
+}
+
+// A board tap while the picker is open: extend the route, finish, or reject.
+function convoyRouteClick(p, _ev) {
+  const { from, dest, route } = convoyPick;
+  const end = route.length ? route[route.length - 1] : from;
+  if (p === dest) {
+    if (route.length && seaAdjacent(end, dest)) return finishConvoyRoute();
+    return toast('Pick the sea(s) leading to the destination first');
+  }
+  if (route.includes(p)) return toast('That sea is already in the route');
+  if (!convoyCandidates().includes(p))
+    return toast('Pick a highlighted sea adjacent to the route');
+  route.push(p);
+  renderConvoyPicker();
+}
+
+function finishConvoyRoute() {
+  const { u, dest, route } = convoyPick;
+  cancelConvoyRoute(); // tears down the overlay before the order redraws
+  // setOrder → onOrdersChanged dry-runs the engine, so a route with no fleet
+  // convoying it yet surfaces as "convoy disrupted" in the parse-status line.
+  setOrder(u, { kind: 'move', dest, route });
+}
+
+function cancelConvoyRoute() {
+  convoyPick = null;
+  board.clearConvoyPicker();
+  $('convoy-route-bar').hidden = true;
 }
 
 function retreatDrop(from, to, ev) {
@@ -1299,13 +1386,15 @@ function openGameSettings() {
   $('set-solo-win').value = s.soloWin;
   $('set-coalition-win').value = s.coalitionWin;
   $('set-support-rule').value = s.supportRule;
+  $('set-convoy-rule').value = s.convoyRule;
   // players (read-only viewers) may inspect the rules but not change them
   const ro = isReadOnly();
-  for (const id of ['set-solo-win', 'set-coalition-win', 'set-support-rule'])
+  for (const id of ['set-solo-win', 'set-coalition-win', 'set-support-rule', 'set-convoy-rule'])
     $(id).disabled = ro;
   $('set-save').hidden = ro;
   $('set-cancel').textContent = ro ? 'Close' : 'Cancel';
   $('set-support-explain').hidden = true;
+  $('set-convoy-explain').hidden = true;
   $('game-settings-dialog').showModal();
 }
 
@@ -1315,13 +1404,17 @@ async function saveGameSettings() {
     soloWin: clampInt($('set-solo-win').value, 1, 34, 18),
     coalitionWin: clampInt($('set-coalition-win').value, 1, 34, 18),
     supportRule: $('set-support-rule').value === 'strict' ? 'strict' : 'standard',
+    convoyRule: $('set-convoy-rule').value === 'strict' ? 'strict' : 'standard',
   };
   S.saveGame(game);
   $('game-settings-dialog').close();
   renderStandings();
   onOrdersChanged(); // re-validate: a rule change can flip which orders work
-  if (prev.supportRule !== game.settings.supportRule && game.history.length)
-    toast('Support rule changed — it applies to future resolutions only', 'info');
+  const ruleChanged =
+    prev.supportRule !== game.settings.supportRule ||
+    prev.convoyRule !== game.settings.convoyRule;
+  if (ruleChanged && game.history.length)
+    toast('House rule changed — it applies to future resolutions only', 'info');
   else toast('Game settings saved', 'info');
   // push to the published gist so every player sees the same rules; the
   // board override keeps the GM's in-progress position out of it
@@ -2506,6 +2599,26 @@ async function init() {
     const el = $('set-support-explain');
     el.hidden = !el.hidden;
   };
+  $('set-convoy-help').onclick = () => {
+    const el = $('set-convoy-explain');
+    el.hidden = !el.hidden;
+  };
+
+  $('convoy-route-cancel').onclick = () => {
+    cancelConvoyRoute();
+    toast('Convoy route cancelled', 'info');
+  };
+  $('convoy-route-undo').onclick = () => {
+    if (!convoyPick || !convoyPick.route.length) return;
+    convoyPick.route.pop();
+    renderConvoyPicker();
+  };
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && convoyPick) {
+      cancelConvoyRoute();
+      toast('Convoy route cancelled', 'info');
+    }
+  });
 
   // tick the deadline countdown — and, in auto-publish games, flip the UI
   // over to the reveal — while a published game sits open. Render-only; the

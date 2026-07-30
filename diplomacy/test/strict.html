@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>Strict support-hold — running…</title>
+<title>Strict house-rules — running…</title>
 <style>
   body { font-family: ui-monospace, Consolas, monospace; margin: 2rem; background: #14171c; color: #d8dee6; }
   .pass { color: #6fce7f; }
@@ -16,12 +16,19 @@
 <pre id="out"></pre>
 <script type="module">
 import { runStrictTests } from './strict-support.js';
+import { runStrictConvoyTests } from './strict-convoy.js';
 const headline = document.getElementById('headline');
 const out = document.getElementById('out');
 try {
-  const { total, pass, failures } = runStrictTests();
-  headline.textContent = `Strict support-hold: ${pass}/${total} passed`;
+  const s = runStrictTests();
+  const c = runStrictConvoyTests();
+  const pass = s.pass + c.pass;
+  const total = s.total + c.total;
+  headline.textContent =
+    `Strict house-rules: ${pass}/${total} passed ` +
+    `(support ${s.pass}/${s.total}, convoy ${c.pass}/${c.total})`;
   headline.className = pass === total ? 'pass' : 'fail';
+  const failures = [...s.failures, ...c.failures];
   out.textContent = failures.map((f) => `FAIL ${f.id}\n   ${f.notes.join('\n   ')}`).join('\n');
   document.title = `Strict ${pass}/${total}`;
 } catch (e) {

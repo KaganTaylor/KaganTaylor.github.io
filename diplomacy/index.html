@@ -35,7 +35,7 @@
         </div>
       </div>
     </div>
-    <p class="credits">Map: jDip (GPL) · Rules engine validated against the 167 Diplomacy Adjudicator Test Cases · <a href="test/datc.html">run the tests</a> · <a href="test/strict.html">strict-support tests</a> · <button id="btn-token" class="linklike" title="Change or clear the GitHub personal access token used for publishing">🔑 GitHub token</button></p>
+    <p class="credits">Map: jDip (GPL) · Rules engine validated against the 167 Diplomacy Adjudicator Test Cases · <a href="test/datc.html">run the tests</a> · <a href="test/strict.html">house-rule tests</a> · <button id="btn-token" class="linklike" title="Change or clear the GitHub personal access token used for publishing">🔑 GitHub token</button></p>
   </div>
 </section>
 
@@ -210,6 +210,11 @@
   </nav>
 
   <div id="coast-picker" hidden></div>
+  <div id="convoy-route-bar" hidden>
+    <span id="convoy-route-status">Convoy route</span>
+    <button type="button" id="convoy-route-undo">↩ Undo</button>
+    <button type="button" id="convoy-route-cancel">✕ Cancel</button>
+  </div>
   <div id="toast" hidden></div>
 
   <div id="players-modal" class="modal-overlay" hidden>
@@ -269,6 +274,20 @@
     <p class="hint" id="set-support-explain" hidden>
       <b>Standard:</b> Support-hold may be given to any unit not ordered to move from its province. Support-move must exactly match another order.<br>
       <b>Strict support-hold:</b> Support-hold can only be given to units ordered to hold or convoy. Units giving support cannot themselves receive support.
+    </p>
+    <label class="setting-row">
+      <span>Convoy house-rule</span>
+      <span class="setting-field">
+        <select id="set-convoy-rule">
+          <option value="standard">Standard</option>
+          <option value="strict">Strict convoy</option>
+        </select>
+        <button type="button" id="set-convoy-help" class="help-q" title="What's the difference?" aria-label="Explain the convoy house-rule">?</button>
+      </span>
+    </label>
+    <p class="hint" id="set-convoy-explain" hidden>
+      <b>Standard:</b> An army just moves to its destination; any fleets ordered to convoy provide routes, and the move succeeds if any undisrupted route exists.<br>
+      <b>Strict convoy:</b> The army must name every sea it is carried through (drag it across and pick the route). The convoy succeeds only if each named sea has a fleet ordered to convoy it and none is dislodged — there are no alternate routes.
     </p>
     <div class="btnrow modal-actions">
       <button type="button" id="set-cancel">Cancel</button>

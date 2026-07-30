@@ -89,6 +89,12 @@ const coastColor = (suffix) => COAST_COLORS[suffix] || COAST_COLOR;
 const HOVER_COLOR = '#ffd479';
 const HOVER_WIDTH = 4;
 
+// Strict-convoy route picker: the seas the route may extend to next are
+// outlined in one colour, the destination in another, so the two reads apart.
+const PICKER_CANDIDATE_COLOR = '#4fd1ff';
+const PICKER_DEST_COLOR = '#ffd479';
+const PICKER_WIDTH = 5;
+
 const UNIT_W = 40;
 const UNIT_H = 26; // symbol viewBox 23x15 scaled to width 40
 const ANIM_MS = 950;
@@ -571,11 +577,9 @@ export class Board {
   // them too made Spain, St Petersburg and Bulgaria look like three cut-out
   // regions instead of one country. The coastlines already show where each
   // coast lies.
-  _setHover(p) {
-    if (p === this._hovered) return;
-    this._hovered = p;
-    this.layers.hover.replaceChildren();
-    if (!p) return;
+  // Clone a province's influence shape as an unfilled coloured outline into
+  // `group`. Shared by the hover highlight and the strict-convoy route picker.
+  _outlineInto(group, p, color, width) {
     const pv = prov(p);
     for (const el of this.layers.influence.querySelectorAll('[data-prov]')) {
       const loc = el.getAttribute('data-prov');
@@ -586,10 +590,45 @@ export class Board {
         outline.removeAttribute('data-prov');
         outline.setAttribute('fill', 'none');
         outline.setAttribute('fill-opacity', '0');
-        outline.setAttribute('stroke', HOVER_COLOR);
-        outline.setAttribute('stroke-width', HOVER_WIDTH);
-        this.layers.hover.appendChild(outline);
+        outline.setAttribute('stroke', color);
+        outline.setAttribute('stroke-width', width);
+        group.appendChild(outline);
       }
+    }
+  }
+
+  _setHover(p) {
+    if (p === this._hovered) return;
+    this._hovered = p;
+    this.layers.hover.replaceChildren();
+    if (!p) return;
+    this._outlineInto(this.layers.hover, p, HOVER_COLOR, HOVER_WIDTH);
+  }
+
+  // ---- strict-convoy route picker -----------------------------------------
+  // A live overlay drawn above everything while the player builds a convoy
+  // route by tapping seas: candidate seas + destination outlined, plus a bent
+  // preview arrow tracing the route chosen so far.
+  showConvoyPicker({ fromLoc, route, dest, candidates, color }) {
+    this.clearConvoyPicker();
+    const g = document.createElementNS(SVGNS, 'g');
+    g.setAttribute('data-convoy-picker', '1');
+    g.setAttribute('pointer-events', 'none');
+    this._pickerGroup = g;
+    this.layers.highest.appendChild(g);
+    for (const p of candidates) this._outlineInto(g, p, PICKER_CANDIDATE_COLOR, PICKER_WIDTH);
+    this._outlineInto(g, dest, PICKER_DEST_COLOR, PICKER_WIDTH);
+    const from = this.center(fromLoc);
+    const mids = route.map((p) => this.center(p));
+    const endLoc = route.length ? route[route.length - 1] : fromLoc;
+    const tip = this._trim(this.center(endLoc), this.center(dest), 24);
+    this._polyArrow(g, [from, ...mids, tip], color || HOVER_COLOR, ARROW_WIDTH);
+  }
+
+  clearConvoyPicker() {
+    if (this._pickerGroup) {
+      this._pickerGroup.remove();
+      this._pickerGroup = null;
     }
   }
 
@@ -872,6 +911,57 @@ export class Board {
     return path;
   }
 
+  // A bent order arrow through a list of board-space points (last point is the
+  // tip). The shaft is a colored polyline over a wider dark-grey border
+  // polyline (same border+opacity structure as _line), with a filled+stroked
+  // arrowhead on the final segment. Used for strict-convoy moves, which trace
+  // the named sea route instead of a straight line.
+  _polyArrow(layer, points, color, width) {
+    const w = width || ARROW_WIDTH;
+    const tip = points[points.length - 1];
+    const prev = points[points.length - 2];
+    const dx = tip.x - prev.x, dy = tip.y - prev.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len, uy = dy / len;
+    const px = -uy, py = ux;
+    const headLen = Math.min(len, w * 3.2);
+    const headHw = w * 1.4;
+    const base = { x: tip.x - ux * headLen, y: tip.y - uy * headLen };
+    const shaftAttr = [...points.slice(0, -1), base]
+      .map((p) => `${p.x},${p.y}`)
+      .join(' ');
+    const g = document.createElementNS(SVGNS, 'g');
+    // Group opacity (not per-element) so the exposed grey border and the
+    // colored shaft flatten to one layer — no doubled darkening on overlap.
+    g.setAttribute('opacity', arrowOpacity(color));
+    const shaftLine = (stroke, sw) => {
+      const pl = document.createElementNS(SVGNS, 'polyline');
+      pl.setAttribute('points', shaftAttr);
+      pl.setAttribute('fill', 'none');
+      pl.setAttribute('stroke', stroke);
+      pl.setAttribute('stroke-width', sw);
+      pl.setAttribute('stroke-linejoin', 'round');
+      pl.setAttribute('stroke-linecap', 'round');
+      return pl;
+    };
+    g.appendChild(shaftLine(ARROW_BORDER, w + ARROW_BORDER_PAD * 2));
+    g.appendChild(shaftLine(color, w));
+    const head = document.createElementNS(SVGNS, 'path');
+    const hp = [
+      [base.x + px * headHw, base.y + py * headHw],
+      [tip.x, tip.y],
+      [base.x - px * headHw, base.y - py * headHw],
+    ];
+    head.setAttribute('d', 'M ' + hp.map((p) => p.join(',')).join(' L ') + ' Z');
+    head.style.setProperty('fill', color, 'important');
+    head.setAttribute('stroke', ARROW_BORDER);
+    head.setAttribute('stroke-width', ARROW_BORDER_PAD * 2);
+    head.setAttribute('stroke-linejoin', 'round');
+    g.appendChild(head);
+    layer.appendChild(g);
+    return g;
+  }
+
   // Plain colored order line (support/convoy — no arrowhead) with a thin
   // dark-grey border: a wider border line of the SAME class drawn underneath
   // (so it inherits any dash pattern), then the colored line on top.
@@ -916,10 +1006,16 @@ export class Board {
     const kind = order.kind;
     if (kind === 'move' || kind === 'retreat') {
       const dest = order.destLoc || order.dest;
-      const to = this._trim(from, this.center(dest), 24);
-      const el = this._line(this.layers.orders1, from.x, from.y, to.x, to.y, 'varwidthorder', color, { arrow: true, width: ARROW_WIDTH });
-      g.appendChild(el);
-      if (order.isConvoyMove || order.viaConvoy) {
+      if (order.convoyRoute && order.convoyRoute.length) {
+        // strict-convoy move: bend the shaft through each named sea province
+        const mids = order.convoyRoute.map((p) => this.center(p));
+        const tip = this._trim(mids[mids.length - 1], this.center(dest), 24);
+        g.appendChild(this._polyArrow(this.layers.orders1, [from, ...mids, tip], color, ARROW_WIDTH));
+      } else {
+        const to = this._trim(from, this.center(dest), 24);
+        g.appendChild(this._line(this.layers.orders1, from.x, from.y, to.x, to.y, 'varwidthorder', color, { arrow: true, width: ARROW_WIDTH }));
+      }
+      if (order.isConvoyMove || order.viaConvoy || order.convoyRoute) {
         const badge = this._text(from.x + 14, from.y - 14, '⚓', 20);
         g.appendChild(badge);
       }

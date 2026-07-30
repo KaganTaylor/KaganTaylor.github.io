@@ -145,6 +145,16 @@ They are **one-shot**: a mode switches itself off as soon as an order is written
 
 ---
 
+## Strict convoy: the route lives in the order text, picked on the map
+
+The strict-convoy house rule (Game settings → Convoy house-rule) makes a convoyed army name every sea it is carried through, and succeed only if each named sea has a fleet ordered to convoy it and none is dislodged — no automatic best-route search, no alternate paths. Two design choices follow from the "order text is the one source of truth" invariant.
+
+**The route is spelled into the move line, not a side-model.** A strict convoy is written `A Lon - NTH - Nwy`: the trailing province is the destination, the earlier ones are the sea route. `parser.js` already walked a chain of `- prov` hops for this; the only new output is `order.convoyRoute` (the intermediate seas) when there is more than one hop. Standard rules simply ignore that field — the engine still searches for any route — so the notation is safe to leave in an order under either ruleset, which is what lets the DATC suite and both test modes share one order set. The adjudicator's strict path check replaces the breadth-first "any undisrupted chain" search with a walk of exactly the named seas (`strictConvoyPath`), and a convoyed move that named *no* route is illegal and holds (you must spell it out). All of this is gated on `opts.strictConvoy`, so standard adjudication — and DATC 167/167 — is untouched.
+
+**The picker writes the same text a person would type.** Dragging an army to a convoy-only province under the rule opens an on-map route picker (`convoyPick` in `app.js`) instead of writing the move straight away: candidate seas are outlined, you tap them in order, then tap the destination to commit — and the only thing that commits is `setOrder(... { route })`, i.e. the same `A Lon - NTH - Nwy` line, re-parsed like any other. There is no parallel order object. Candidate seas come from `convoyRouteHops`, which offers any adjacent sea that keeps the destination reachable by water and does **not** require a fleet to be present — convoys are cooperative, and an ally's fleet may be the one ordered to carry the army, so the picker must not pre-judge whose seas are "allowed". The arrow bends through the named seas (`_polyArrow` in `render.js`, a colored polyline + border + arrowhead) so what you see traces the route the text encodes.
+
+---
+
 ## Submissions are hidden by default, not just gated
 
 Who's submitted, and their actual order text, used to live in a permanent sidebar section (`#panel-players`) and a small status table every player could see in the Orders panel. Both are gone. The status table was visible to *everyone*, not just the GM — a real privacy leak, since a game where players can see their opponents' submission timing is a worse game (it turns "did they submit yet" into a signal). And the GM's own review tools sat open on the main screen at all times, whether or not there was anything to review.

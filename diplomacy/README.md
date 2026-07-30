@@ -36,6 +36,7 @@ A Mar S A Par - Bur        # support a move
 F Bre - MAO
 F ENG C A Lon - Bre        # convoy
 A Lon - Bre via convoy
+A Lon - NTH - Nwy          # convoy naming its sea route (strict-convoy rule)
 A Pic H                    # hold (unordered units hold automatically)
 
 # retreats phase
@@ -99,9 +100,17 @@ Where the rulebook is ambiguous the engine follows Kruijswijk's DATC preferences
 - Convoy paradoxes: Szykman — the paradoxical convoyed move fails and does not cut support.
 - Dislodged units with no legal retreat are destroyed immediately.
 
+### House rules (⚙ Settings → 🎲 Game settings)
+
+Optional, per-game, off by default; a change applies to future resolutions only.
+
+- **Strict support-hold** — support-hold can only be given to units ordered to hold or convoy, and a unit giving support cannot itself receive support.
+- **Strict convoy** — a convoyed army must name every sea it is carried through (`A Lon - NTH - Nwy`), and the convoy succeeds only if each named sea has a fleet ordered to convoy it and none is dislodged. There is no automatic route search and no alternate path. Drag an army to a convoy-only province and a picker lets you tap the sea route on the map; the order arrow bends through the seas you choose.
+
 ## Testing
 
 - `test/datc.html` — the full DATC suite. Serve the folder and open it; the page title reports the score (`DATC 167/167`) and lists any failures by case.
+- `test/strict.html` — the house-rule cases (strict support-hold and strict convoy), each run both ways to pin the difference from standard rules.
 - `tools/datc_v2.4_06.txt` — the machine-readable test cases the runner parses.
 
 ## Design notes
