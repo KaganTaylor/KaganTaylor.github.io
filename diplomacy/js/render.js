@@ -47,16 +47,7 @@ export const ARROW_COLORS = {
   turkey: 'yellow',
 };
 
-// Matches the fill-opacity of the corresponding .unit<power> rule (Russia's
-// unit is fully opaque; every other power's is 0.85).
-const ARROW_OPACITY_BY_POWER = {
-  austria: 0.85, england: 0.85, france: 0.85, germany: 0.85,
-  italy: 0.85, russia: 1.0, turkey: 0.85,
-};
-const ARROW_OPACITY_BY_COLOR = Object.fromEntries(
-  Object.entries(ARROW_COLORS).map(([power, color]) => [color, ARROW_OPACITY_BY_POWER[power]])
-);
-const arrowOpacity = (color) => ARROW_OPACITY_BY_COLOR[color] ?? 0.85;
+const arrowOpacity = () => 1.0;
 
 // Thin dark-grey outline drawn around every order arrow (shaft AND head), so a
 // vivid ARROW_COLORS line stays legible over any ownership tint. The border is
