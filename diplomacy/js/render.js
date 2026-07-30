@@ -34,19 +34,29 @@ export const POWER_COLORS = {
   turkey: '#957e00',
 };
 
-// Brighter, more saturated per-power colours used ONLY for drawing order
-// arrows. Kept separate from POWER_COLORS (the muted province-ownership tints)
-// so arrows read vividly and stay clearly distinct from the muted failure red
-// (#e05252) — most importantly for Austria, whose tint is itself reddish.
+// Per-power colours used for order arrows — copied verbatim from the unit
+// fill colours in assets/standard.svg (.unit<power> rules) so an arrow reads
+// as exactly the same colour+opacity as the units it belongs to.
 export const ARROW_COLORS = {
-  austria: '#e6321f',
-  england: '#b01ff0',
-  france: '#2f6bff',
-  germany: '#b0842f',
-  italy: '#17b017',
-  russia: '#6f8bd8',
-  turkey: '#e0bc00',
+  austria: 'red',
+  england: 'mediumpurple',
+  france: 'deepskyblue',
+  germany: 'dimgray',
+  italy: 'olive',
+  russia: 'white',
+  turkey: 'yellow',
 };
+
+// Matches the fill-opacity of the corresponding .unit<power> rule (Russia's
+// unit is fully opaque; every other power's is 0.85).
+const ARROW_OPACITY_BY_POWER = {
+  austria: 0.85, england: 0.85, france: 0.85, germany: 0.85,
+  italy: 0.85, russia: 1.0, turkey: 0.85,
+};
+const ARROW_OPACITY_BY_COLOR = Object.fromEntries(
+  Object.entries(ARROW_COLORS).map(([power, color]) => [color, ARROW_OPACITY_BY_POWER[power]])
+);
+const arrowOpacity = (color) => ARROW_OPACITY_BY_COLOR[color] ?? 0.85;
 
 // Thin dark-grey outline drawn around every order arrow (shaft AND head), so a
 // vivid ARROW_COLORS line stays legible over any ownership tint. The border is
@@ -54,7 +64,6 @@ export const ARROW_COLORS = {
 const ARROW_BORDER = '#3a3f47';
 const ARROW_BORDER_PAD = 1.5; // border extends this many map units past each edge
 const ARROW_WIDTH = 6;        // colored shaft width
-const ARROW_OPACITY = 0.85;   // match the units' fill-opacity so arrows sit in the same visual plane
 
 // ---------------------------------------------------------------------------
 // COASTLINE APPEARANCE — change the coastline colour HERE
@@ -602,11 +611,9 @@ export class Board {
     if (!this._ghost) {
       this._ghost = this._line(this.layers.orders1, a.x, a.y, b.x, b.y, 'varwidthorder', col, { arrow: true, width: ARROW_WIDTH });
       this._ghost.setAttribute('pointer-events', 'none');
+      return;
     }
-    for (const el of this._ghost.children) {
-      el.setAttribute('x1', a.x); el.setAttribute('y1', a.y);
-      el.setAttribute('x2', b.x); el.setAttribute('y2', b.y);
-    }
+    this._ghost._update(a, b);
   }
 
   _removeGhost() {
@@ -825,45 +832,58 @@ export class Board {
     this._ghost = null;
   }
 
-  // Colored arrowhead marker, created on demand per color. The head carries its
-  // OWN dark-grey border as a stroke on the arrow path — sized to match the
-  // shaft border — so no separate oversized shadow marker is needed.
-  //
-  // The path is OPEN (base-corner -> tip -> base-corner, no closing 'z'): fill
-  // still paints the whole triangle, but stroke covers only the two outer edges,
-  // NOT the base where the head meets the shaft. That keeps the head visually
-  // continuous with the shaft instead of a bordered triangle cut off from it.
-  // overflow:visible keeps the stroke from being clipped at the marker viewport.
-  _marker(color) {
-    const id = 'arrow-' + color.replace(/[^\w]/g, '');
-    if (!this.svg.querySelector('#' + id)) {
-      const base = this.svg.querySelector('#arrow');
-      const m = base.cloneNode(true);
-      m.setAttribute('id', id);
-      m.setAttribute('overflow', 'visible');
-      const path = m.querySelector('path');
-      path.setAttribute('d', 'M 0 0 L 10 5 L 0 10'); // open: no base edge
-      path.setAttribute('fill', color);
-      path.setAttribute('stroke', ARROW_BORDER);
-      // markerUnits=strokeWidth, markerWidth=4, viewBox width 10 -> the marker is
-      // scaled by 4*ARROW_WIDTH/10 in user space. Pick a viewBox stroke width so
-      // the grey exposed past each outer edge equals ARROW_BORDER_PAD, matching
-      // the shaft border exactly.
-      const markerScale = 4 * ARROW_WIDTH / 10;
-      path.setAttribute('stroke-width', 2 * ARROW_BORDER_PAD / markerScale);
-      path.setAttribute('stroke-linejoin', 'round');
-      path.setAttribute('stroke-linecap', 'butt');
-      base.parentNode.appendChild(m);
-    }
-    return `url(#${id})`;
+  // Builds the outline of a full arrow (shaft + head) as ONE closed polygon
+  // path, so a single stroke wraps every edge — including the base of the
+  // shaft — at the same thickness throughout, and never crosses through the
+  // fill (the stroke only ever follows the polygon's perimeter).
+  _arrowPoints(x1, y1, x2, y2, w) {
+    const dx = x2 - x1, dy = y2 - y1;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len, uy = dy / len;
+    const px = -uy, py = ux; // unit perpendicular
+    const hw = w / 2;
+    const headLen = Math.min(len, w * 3.2);
+    const headHw = w * 1.4;
+    const bx = x2 - ux * headLen, by = y2 - uy * headLen; // head base center
+    return [
+      [x1 + px * hw, y1 + py * hw],
+      [x1 - px * hw, y1 - py * hw],
+      [bx - px * hw, by - py * hw],
+      [bx - px * headHw, by - py * headHw],
+      [x2, y2],
+      [bx + px * headHw, by + py * headHw],
+      [bx + px * hw, by + py * hw],
+    ];
   }
 
-  // Colored order line with a thin dark-grey border: a wider border line of the
-  // SAME class drawn underneath (so it inherits any dash pattern and the border
-  // follows the dashes), then the colored line on top. The head border rides
-  // along on the colored marker itself (see _marker).
+  _arrowPath(x1, y1, x2, y2, w) {
+    const pts = this._arrowPoints(x1, y1, x2, y2, w);
+    return 'M ' + pts.map((p) => p.join(',')).join(' L ') + ' Z';
+  }
+
+  // Colored order arrow: one filled polygon (shaft+head) with a single
+  // dark-grey stroke wrapping its whole perimeter — see _arrowPath.
+  _arrowNode(layer, x1, y1, x2, y2, cls, color, width) {
+    const w = width || ARROW_WIDTH;
+    const path = document.createElementNS(SVGNS, 'path');
+    path.setAttribute('class', cls);
+    path.setAttribute('d', this._arrowPath(x1, y1, x2, y2, w));
+    path.setAttribute('fill', color);
+    path.setAttribute('stroke', ARROW_BORDER);
+    path.setAttribute('stroke-width', ARROW_BORDER_PAD * 2);
+    path.setAttribute('stroke-linejoin', 'round');
+    path.setAttribute('opacity', arrowOpacity(color));
+    path._update = (a, b) => path.setAttribute('d', this._arrowPath(a.x, a.y, b.x, b.y, w));
+    layer.appendChild(path);
+    return path;
+  }
+
+  // Plain colored order line (support/convoy — no arrowhead) with a thin
+  // dark-grey border: a wider border line of the SAME class drawn underneath
+  // (so it inherits any dash pattern), then the colored line on top.
   _line(layer, x1, y1, x2, y2, cls, color, opts = {}) {
     const w = opts.width || ARROW_WIDTH;
+    if (opts.arrow) return this._arrowNode(layer, x1, y1, x2, y2, cls, color, w);
     const border = document.createElementNS(SVGNS, 'line');
     border.setAttribute('x1', x1); border.setAttribute('y1', y1);
     border.setAttribute('x2', x2); border.setAttribute('y2', y2);
@@ -876,12 +896,11 @@ export class Board {
     line.setAttribute('class', cls);
     line.setAttribute('stroke', color);
     line.setAttribute('stroke-width', w);
-    if (opts.arrow) line.setAttribute('marker-end', this._marker(color));
     const g = document.createElementNS(SVGNS, 'g');
     // Group opacity (not per-line) so the exposed grey border and the colored
     // fill flatten to ONE translucent layer at the units' opacity — no doubled
     // darkening where the colored line overlaps its border.
-    g.setAttribute('opacity', ARROW_OPACITY);
+    g.setAttribute('opacity', arrowOpacity(color));
     g.appendChild(border);
     g.appendChild(line);
     layer.appendChild(g);
