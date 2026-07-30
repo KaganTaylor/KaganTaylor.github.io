@@ -437,13 +437,13 @@
 
         /* unit colors, by power note that underscores are not supported */
 
-        .unitaustria {fill:red; fill-opacity:0.85}
-        .unitengland {fill:mediumpurple; fill-opacity:0.85}
-        .unitfrance {fill:deepskyblue; fill-opacity:0.85}
-        .unitgermany {fill:dimgray; fill-opacity:0.85}
-        .unititaly {fill:olive; fill-opacity:0.85}
+        .unitaustria {fill:red; fill-opacity:1.0}
+        .unitengland {fill:mediumpurple; fill-opacity:1.0}
+        .unitfrance {fill:deepskyblue; fill-opacity:1.0}
+        .unitgermany {fill:dimgray; fill-opacity:1.0}
+        .unititaly {fill:olive; fill-opacity:1.0}
         .unitrussia {fill:white; fill-opacity:1.0}
-        .unitturkey {fill:yellow; fill-opacity:0.85}
+        .unitturkey {fill:yellow; fill-opacity:1.0}
 
         /* order drawing styles, stroke and fill colors should not be specified */
 

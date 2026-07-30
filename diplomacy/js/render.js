@@ -868,11 +868,14 @@ export class Board {
     const path = document.createElementNS(SVGNS, 'path');
     path.setAttribute('class', cls);
     path.setAttribute('d', this._arrowPath(x1, y1, x2, y2, w));
-    path.setAttribute('fill', color);
+    // .varwidthorder in standard.svg sets fill:none (support/convoy lines are
+    // unfilled); a presentation attribute can't win against that class rule,
+    // so force the fill/opacity via inline style (which does).
+    path.style.setProperty('fill', color, 'important');
     path.setAttribute('stroke', ARROW_BORDER);
     path.setAttribute('stroke-width', ARROW_BORDER_PAD * 2);
     path.setAttribute('stroke-linejoin', 'round');
-    path.setAttribute('opacity', arrowOpacity(color));
+    path.style.setProperty('opacity', arrowOpacity(color), 'important');
     path._update = (a, b) => path.setAttribute('d', this._arrowPath(a.x, a.y, b.x, b.y, w));
     layer.appendChild(path);
     return path;
