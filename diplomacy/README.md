@@ -105,7 +105,7 @@ Where the rulebook is ambiguous the engine follows Kruijswijk's DATC preferences
 Optional, per-game, off by default; a change applies to future resolutions only.
 
 - **Strict support-hold** — support-hold can only be given to units ordered to hold or convoy, and a unit giving support cannot itself receive support.
-- **Strict convoy** — a convoyed army must name every sea it is carried through (`A Lon - NTH - Nwy`), and the convoy succeeds only if each named sea has a fleet ordered to convoy it and none is dislodged. There is no automatic route search and no alternate path. Drag an army to a convoy-only province and a picker lets you tap the sea route on the map; the order arrow bends through the seas you choose.
+- **Strict convoy** — a convoyed army must name every sea it is carried through (`A Lon - NTH - Nwy`), and the convoy succeeds only if each named sea has a fleet ordered to convoy it and none is dislodged. There is no automatic route search and no alternate path. Drag an army to a convoy-only province: if only one chain of fleets can carry it there, the route is filled in for you; if several can, an on-map picker opens so you tap the seas in order (only seas that hold a fleet are offered) and then tap the destination. Either way the order arrow bends through the named seas.
 
 ## Testing
 

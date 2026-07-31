@@ -78,23 +78,77 @@ export function seaAdjacent(aProv, bProv) {
   );
 }
 
+// Water provinces that currently hold a fleet — the only seas a convoy can
+// actually use (a sea with no fleet carries nothing). Used by the strict-convoy
+// route picker and the auto route search.
+export function fleetWaters(units) {
+  const s = new Set();
+  for (const u of units) {
+    if (u.type === 'F' && PROVINCES[prov(u.loc)] && PROVINCES[prov(u.loc)].type === 'water')
+      s.add(prov(u.loc));
+  }
+  return s;
+}
+
+// Is `destProv` reachable from the fleet-holding sea `startProv`, stepping only
+// through seas in `waters`? (`startProv` is assumed to be one of them.)
+function reachThroughWaters(startProv, destProv, waters) {
+  const seen = new Set([startProv]);
+  const q = [startProv];
+  while (q.length) {
+    const w = q.shift();
+    if (seaAdjacent(w, destProv)) return true;
+    for (const l of FLEET_ADJ[w] || []) {
+      const p = prov(l);
+      if (waters.has(p) && !seen.has(p)) { seen.add(p); q.push(p); }
+    }
+  }
+  return false;
+}
+
 // The sea provinces a convoy route from `from` to `dest` could legally extend
-// to next, given the hops chosen so far. A candidate is any water province
-// adjacent to the current chain end that keeps `dest` reachable (either
-// directly adjacent, or via some further all-water route). Fleet presence is
-// NOT required — convoys are cooperative, and an ally's fleet may be ordered
-// to carry the army. Used by the strict-convoy route picker.
-export function convoyRouteHops(from, dest, chosen = []) {
+// to next, given the hops chosen so far. A candidate is a water province
+// adjacent to the current chain end that keeps `dest` reachable. When `waters`
+// is given (the seas that hold a fleet), candidates are limited to those seas
+// and reachability is tested through them only — a sea with no fleet can carry
+// nothing, so the picker never offers it. Used by the strict-convoy picker.
+export function convoyRouteHops(from, dest, chosen = [], waters = null) {
   const end = chosen.length ? prov(chosen[chosen.length - 1]) : prov(from);
   const used = new Set(chosen.map(prov));
   const hops = [];
   for (const w of Object.keys(PROVINCES)) {
     if (PROVINCES[w].type !== 'water' || used.has(w) || w === end) continue;
+    if (waters && !waters.has(w)) continue;
     if (!seaAdjacent(end, w)) continue;
-    if (seaAdjacent(w, prov(dest)) || onPossibleWaterRoute(w, prov(from), prov(dest)))
-      hops.push(w);
+    const reaches = waters
+      ? reachThroughWaters(w, prov(dest), waters)
+      : (seaAdjacent(w, prov(dest)) || onPossibleWaterRoute(w, prov(from), prov(dest)));
+    if (reaches) hops.push(w);
   }
   return hops;
+}
+
+// Every simple convoy route (ordered list of fleet-occupied seas) that carries
+// an army from `from` to `dest`, shortest first. Each route chains by fleet
+// adjacency: from -> route[0] -> ... -> route[n] -> dest, using only seas that
+// currently hold a fleet. Empty if none exist. The UI auto-picks the sole route
+// and opens the picker only when there is more than one.
+export function convoyRoutes(units, from, dest, cap = 7) {
+  const waters = fleetWaters(units);
+  const f = prov(from), d = prov(dest);
+  const routes = [];
+  const walk = (end, path) => {
+    if (path.length && seaAdjacent(end, d)) routes.push(path.slice());
+    if (path.length >= cap) return;
+    for (const w of waters) {
+      if (w === end || path.includes(w)) continue;
+      if (!seaAdjacent(end, w)) continue;
+      walk(w, [...path, w]);
+    }
+  };
+  walk(f, []);
+  routes.sort((a, b) => a.length - b.length);
+  return routes;
 }
 
 // could an army at province `from` be convoyed to province `dest` at all,

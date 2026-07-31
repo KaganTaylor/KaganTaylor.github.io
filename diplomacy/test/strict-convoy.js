@@ -9,7 +9,9 @@
 //
 // Runs in the browser (strict.html) and under Node (`node test/strict-convoy.js`).
 
-import { adjudicateMovement } from '../js/adjudicator.js';
+import {
+  adjudicateMovement, convoyRoutes, convoyRouteHops, fleetWaters,
+} from '../js/adjudicator.js';
 import { parseOrderLine } from '../js/parser.js';
 import { ALIASES } from '../js/map-data.js';
 
@@ -79,9 +81,44 @@ const CASES = [
   },
 ];
 
-export function runStrictConvoyTests() {
+// Route-enumeration / picker-candidate logic (drives the drag behaviour: one
+// route auto-fills, several open the picker, none rejects the drop; and the
+// picker only ever offers seas that hold a fleet).
+function runRouteLogicTests() {
   const failures = [];
   let total = 0;
+  const check = (id, got, want) => {
+    total++;
+    if (JSON.stringify(got) !== JSON.stringify(want))
+      failures.push({ id, notes: [`got ${JSON.stringify(got)} want ${JSON.stringify(want)}`] });
+  };
+  const A = { power: 'england', type: 'A', loc: 'edi' };
+  const Fnth = { power: 'england', type: 'F', loc: 'nth' };
+  const Fnwg = { power: 'england', type: 'F', loc: 'nwg' };
+
+  // two carrying fleets (NTH and NWG), both adjacent to Edi and Nwy: several
+  // routes exist -> the UI opens the picker (routes.length > 1)
+  const many = convoyRoutes([A, Fnth, Fnwg], 'edi', 'nwy');
+  check('two fleets -> multiple routes', many.length > 1, true);
+
+  // only NTH holds a fleet: exactly one route -> the UI auto-fills it
+  check('one fleet -> single route', convoyRoutes([A, Fnth], 'edi', 'nwy'), [['nth']]);
+
+  // no fleet in any sea: no route -> the drop is rejected
+  check('no fleet -> no route', convoyRoutes([A], 'edi', 'nwy'), []);
+
+  // picker candidates are limited to seas that hold a fleet: with a fleet only
+  // in NTH, NWG must NOT be offered even though it is a geometric option
+  const hops = convoyRouteHops('edi', 'nwy', [], fleetWaters([A, Fnth]));
+  check('candidates exclude fleetless seas', hops, ['nth']);
+
+  return { total, pass: total - failures.length, failures };
+}
+
+export function runStrictConvoyTests() {
+  const route = runRouteLogicTests();
+  const failures = [...route.failures];
+  let total = route.total;
   for (const c of CASES) {
     const units = c.units.map(parseUnit);
     const orders = parseOrders(c.orders);

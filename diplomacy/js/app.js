@@ -7,6 +7,8 @@ import {
   fleetDestLocs,
   convoyPossible,
   convoyRouteHops,
+  convoyRoutes,
+  fleetWaters,
   seaAdjacent,
   adjudicateMovement,
   adjudicateRetreats,
@@ -594,9 +596,13 @@ function validateOrders(orders) {
 function drawLive(excludeProv = null) {
   if (playback || !game) return;
   board.clearOrders();
+  // while the convoy-route picker is open, hide the picked unit's own placed
+  // arrow — the picker draws its live preview in its place (else the old
+  // straight arrow reappears behind the bent preview)
+  const skip = excludeProv || (convoyPick ? prov(convoyPick.u.loc) : null);
   for (const o of lastParsed.orders) {
     if (!o.loc) continue; // a waive has no location — nothing to draw
-    if (excludeProv && prov(o.loc) === excludeProv) continue;
+    if (skip && prov(o.loc) === skip) continue;
     const reason = o.loc && lastParsed.illegal.get(prov(o.loc));
     // a convoy that cannot exist is a void order (the unit holds) — no
     // arrow at all; the warning below the order box explains why
@@ -855,13 +861,21 @@ function orderDrop(from, to, ev) {
     if (needsConvoy) {
       if (!(PROVINCES[from].type === 'coast' && PROVINCES[to].type === 'coast'))
         return toast(`An army cannot reach ${provName(to)}`);
-      // only reachable by convoy: reject outright if no chain of fleets
-      // could ever carry it there (same as an unreachable plain move)
+      if (strictConvoyOn()) {
+        // strict convoy: the route must be named. Auto-pick it when only one
+        // chain of fleets can carry the army there; if several routes exist,
+        // open the picker so the player chooses; if none, reject the drop.
+        const routes = convoyRoutes(game.units, from, to);
+        if (!routes.length)
+          return toast(`No convoy to ${provName(to)} is possible — no fleet route`);
+        if (routes.length === 1)
+          return setOrder(u, { kind: 'move', dest: to, route: routes[0] });
+        return startConvoyRoute(u, from, to);
+      }
+      // standard convoy: reject outright if no chain of fleets could ever
+      // carry it there (same as an unreachable plain move)
       if (!convoyPossible(game.units, from, to))
         return toast(`No convoy to ${provName(to)} is possible — no fleet route`);
-      // strict convoy: the player must trace the exact sea route — open the
-      // interactive picker instead of writing the move straight away
-      if (strictConvoyOn()) return startConvoyRoute(u, from, to);
     }
     return setOrder(u, { kind: 'move', dest: to });
   }
@@ -889,9 +903,12 @@ function startConvoyRoute(u, from, dest) {
   toast('Convoy route: tap each sea in order, then tap the destination', 'info');
 }
 
-// The seas the route may extend to next, given what's chosen so far.
+// The seas the route may extend to next, given what's chosen so far — limited
+// to seas that actually hold a fleet (only those can convoy).
 function convoyCandidates() {
-  return convoyRouteHops(convoyPick.from, convoyPick.dest, convoyPick.route);
+  return convoyRouteHops(
+    convoyPick.from, convoyPick.dest, convoyPick.route, fleetWaters(game.units)
+  );
 }
 
 function renderConvoyPicker() {
@@ -1235,9 +1252,18 @@ function renderPlayback() {
     const revealedCount = Math.min(step, orders.length);
     const revealedOrders = orders.slice(0, revealedCount).map((r) => r.order);
     const verdictByProv = revealedCount ? partialVerdicts(entry, revealedOrders) : new Map();
+    // A convoyed move's success depends on its carrying fleets, which may be
+    // revealed on a later step; judging it against the partial prefix would
+    // paint a successful convoy red until its convoyers appear. Colour those
+    // moves by their final resolved verdict instead.
+    const finalV = new Map();
+    for (const r of entry.results || []) if (!r.order.implicit) finalV.set(prov(r.order.loc), r.verdict);
+    const isConvoyed = (o) =>
+      o.kind === 'move' && (o.destLoc || o.dest) &&
+      !armyAdjacent(prov(o.loc), prov(o.destLoc || o.dest));
     for (let i = 0; i < revealedCount; i++) {
       const o = orders[i].order;
-      const v = verdictByProv.get(prov(o.loc));
+      const v = isConvoyed(o) ? finalV.get(prov(o.loc)) : verdictByProv.get(prov(o.loc));
       const failed = v === 'fails' || v === 'invalid';
       board.drawOrder(o, failed ? '#e05252' : ARROW_COLORS[o.power] || '#888');
     }

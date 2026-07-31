@@ -180,6 +180,10 @@ function stripResult(r) {
       destLoc: o.destLoc || null,
       viaConvoy: !!o.viaConvoy,
       isConvoyMove: !!o.isConvoyMove,
+      // keep the named strict-convoy sea route so the resolution arrow bends
+      // through it and the move animates along it (see render.js drawOrder /
+      // _convoyMoveFrames)
+      convoyRoute: (o.convoyRoute && o.convoyRoute.length) ? [...o.convoyRoute] : null,
       unitType: o.unit ? o.unit.type : o.unitType || null,
       target: o.target ? { loc: o.target.loc, dest: o.target.dest || null } : null,
       implicit: !!o.implicit,

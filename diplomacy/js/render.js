@@ -55,6 +55,10 @@ const arrowOpacity = () => 1.0;
 const ARROW_BORDER = '#3a3f47';
 const ARROW_BORDER_PAD = 1.5; // border extends this many map units past each edge
 const ARROW_WIDTH = 6;        // colored shaft width
+// How far short of the destination's unit spot a move/retreat arrowhead stops.
+// Small, so the head clearly enters the destination province — a larger gap
+// left tips out in the sea or pointing at a neighbour on long/oblique moves.
+const MOVE_TIP_GAP = 10;
 
 // ---------------------------------------------------------------------------
 // COASTLINE APPEARANCE — change the coastline colour HERE
@@ -343,6 +347,26 @@ export class Board {
     coastTint.after(hover);
     this.layers.hover = hover;
 
+    // strict-convoy route picker overlay, in two parts that live in different
+    // coordinate spaces:
+    //  - pickerHi: the candidate/destination province OUTLINES, cloned from the
+    //    influence shapes, so it must carry the same mouse transform as hover.
+    //  - pickerArrow: the live route ARROW, drawn from center() coords (the
+    //    same untransformed space as the order arrows) and sitting directly
+    //    beneath the units, so the preview matches a placed arrow's layering.
+    const pickerHi = document.createElementNS(SVGNS, 'g');
+    pickerHi.setAttribute('id', 'PickerHighlightLayer');
+    pickerHi.setAttribute('pointer-events', 'none');
+    if (mouseTransform) pickerHi.setAttribute('transform', mouseTransform);
+    hover.after(pickerHi);
+    this.layers.pickerHi = pickerHi;
+
+    const pickerArrow = document.createElementNS(SVGNS, 'g');
+    pickerArrow.setAttribute('id', 'PickerArrowLayer');
+    pickerArrow.setAttribute('pointer-events', 'none');
+    this.layers.units.before(pickerArrow); // directly beneath the unit symbols
+    this.layers.pickerArrow = pickerArrow;
+
     this._attachPointer();
     window.__board = this; // debug/testing handle
     return this;
@@ -507,6 +531,11 @@ export class Board {
       if (!drag) {
         this._setHover(p);
         if (this.handlers.onHover) this.handlers.onHover(p);
+        // strict-convoy picker: the route arrow's head follows the pointer
+        if (this._picker) {
+          this._pickerCursor = this.clientToBoard(e.clientX, e.clientY);
+          this._drawPickerArrow();
+        }
         return;
       }
       if (Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) > drag.threshold) drag.moved = true;
@@ -606,30 +635,41 @@ export class Board {
   }
 
   // ---- strict-convoy route picker -----------------------------------------
-  // A live overlay drawn above everything while the player builds a convoy
-  // route by tapping seas: candidate seas + destination outlined, plus a bent
-  // preview arrow tracing the route chosen so far.
+  // While the player builds a convoy route by tapping seas, this overlay shows
+  // the candidate seas + destination outlined (pickerHi, beneath the units) and
+  // a live arrow (pickerArrow, also beneath the units). The arrow is built up
+  // like a drag: it runs from the army through each sea chosen so far and ends
+  // in an arrowhead following the pointer, so the base advances as seas are
+  // picked and the full route only reads as complete once it reaches the
+  // destination.
   showConvoyPicker({ fromLoc, route, dest, candidates, color }) {
-    this.clearConvoyPicker();
-    const g = document.createElementNS(SVGNS, 'g');
-    g.setAttribute('data-convoy-picker', '1');
-    g.setAttribute('pointer-events', 'none');
-    this._pickerGroup = g;
-    this.layers.highest.appendChild(g);
-    for (const p of candidates) this._outlineInto(g, p, PICKER_CANDIDATE_COLOR, PICKER_WIDTH);
-    this._outlineInto(g, dest, PICKER_DEST_COLOR, PICKER_WIDTH);
-    const from = this.center(fromLoc);
-    const mids = route.map((p) => this.center(p));
-    const endLoc = route.length ? route[route.length - 1] : fromLoc;
-    const tip = this._trim(this.center(endLoc), this.center(dest), 24);
-    this._polyArrow(g, [from, ...mids, tip], color || HOVER_COLOR, ARROW_WIDTH);
+    this._picker = { fromLoc, route: route.slice(), dest, color: color || HOVER_COLOR };
+    this.layers.pickerHi.replaceChildren();
+    for (const p of candidates) this._outlineInto(this.layers.pickerHi, p, PICKER_CANDIDATE_COLOR, PICKER_WIDTH);
+    this._outlineInto(this.layers.pickerHi, dest, PICKER_DEST_COLOR, PICKER_WIDTH);
+    this._drawPickerArrow();
+  }
+
+  // Redraws just the route arrow (called on every pointer move so the head
+  // tracks the cursor). Waypoints: army origin, each chosen sea, then the live
+  // cursor. With no cursor yet (touch, before the first move) the chosen seas
+  // are shown as a plain headless line.
+  _drawPickerArrow() {
+    const layer = this.layers.pickerArrow;
+    layer.replaceChildren();
+    if (!this._picker) return;
+    const { fromLoc, route, color } = this._picker;
+    const pts = [this.center(fromLoc), ...route.map((p) => this.center(p))];
+    const cursor = this._pickerCursor;
+    if (cursor) this._polyArrow(layer, [...pts, cursor], color, ARROW_WIDTH);
+    else if (pts.length >= 2) this._polyLine(layer, pts, color, ARROW_WIDTH);
   }
 
   clearConvoyPicker() {
-    if (this._pickerGroup) {
-      this._pickerGroup.remove();
-      this._pickerGroup = null;
-    }
+    this._picker = null;
+    this._pickerCursor = null;
+    if (this.layers.pickerHi) this.layers.pickerHi.replaceChildren();
+    if (this.layers.pickerArrow) this.layers.pickerArrow.replaceChildren();
   }
 
   // The dragged arrow is drawn with the exact same border+color structure as a
@@ -765,8 +805,13 @@ export class Board {
         const d = delta(o.loc, o.destLoc || o.dest);
         if (!d) continue;
         if (r.verdict === 'succeeds') {
+          // a convoyed army slides along the sea route it named, not straight
+          // across the map
+          const routeFrames = o.convoyRoute && o.convoyRoute.length
+            ? this._convoyMoveFrames(o.loc, o.convoyRoute, o.destLoc || o.dest, reverse)
+            : null;
           anims.push(
-            node.animate(moveKeyframes(d), { duration: ANIM_MS, easing: ease, fill: 'forwards' })
+            node.animate(routeFrames || moveKeyframes(d), { duration: ANIM_MS, easing: ease, fill: 'forwards' })
           );
         } else if (r.verdict === 'fails' && !o.illegal) {
           // bounce: advance a third of the way, then fall back — the same
@@ -853,6 +898,27 @@ export class Board {
     return Promise.allSettled(anims.map((a) => a.finished));
   }
 
+  // Keyframes sliding a convoyed unit through its named sea route: origin ->
+  // each sea -> destination, timed by distance so it moves at a steady pace
+  // through the bends. Returns null if any waypoint has no coordinate.
+  _convoyMoveFrames(fromLoc, route, destLoc, reverse) {
+    const locs = [fromLoc, ...route, destLoc];
+    const pts = locs.map((l) => this.coords.get(l) || this.coords.get(prov(l)));
+    if (pts.some((p) => !p)) return null;
+    const base = pts[0];
+    const rel = pts.map((p) => ({ x: p.x - base.x, y: p.y - base.y }));
+    const dist = [0];
+    for (let i = 1; i < rel.length; i++)
+      dist.push(dist[i - 1] + Math.hypot(rel[i].x - rel[i - 1].x, rel[i].y - rel[i - 1].y));
+    const total = dist[dist.length - 1] || 1;
+    let frames = rel.map((p, i) => ({
+      transform: `translate(${p.x}px, ${p.y}px)`,
+      offset: dist[i] / total,
+    }));
+    if (reverse) frames = frames.map((f) => ({ transform: f.transform, offset: 1 - f.offset })).reverse();
+    return frames;
+  }
+
   // ---- order overlays -------------------------------------------------------
 
   clearOrders() {
@@ -909,6 +975,30 @@ export class Board {
     path._update = (a, b) => path.setAttribute('d', this._arrowPath(a.x, a.y, b.x, b.y, w));
     layer.appendChild(path);
     return path;
+  }
+
+  // A bent colored line through board-space points, no arrowhead — a wider
+  // dark-grey border polyline under a colored one, same structure as _polyArrow
+  // minus the head. Used for the touch route preview before a cursor exists.
+  _polyLine(layer, points, color, width) {
+    const w = width || ARROW_WIDTH;
+    const attr = points.map((p) => `${p.x},${p.y}`).join(' ');
+    const g = document.createElementNS(SVGNS, 'g');
+    g.setAttribute('opacity', arrowOpacity(color));
+    const mk = (stroke, sw) => {
+      const pl = document.createElementNS(SVGNS, 'polyline');
+      pl.setAttribute('points', attr);
+      pl.setAttribute('fill', 'none');
+      pl.setAttribute('stroke', stroke);
+      pl.setAttribute('stroke-width', sw);
+      pl.setAttribute('stroke-linejoin', 'round');
+      pl.setAttribute('stroke-linecap', 'round');
+      return pl;
+    };
+    g.appendChild(mk(ARROW_BORDER, w + ARROW_BORDER_PAD * 2));
+    g.appendChild(mk(color, w));
+    layer.appendChild(g);
+    return g;
   }
 
   // A bent order arrow through a list of board-space points (last point is the
@@ -1009,10 +1099,10 @@ export class Board {
       if (order.convoyRoute && order.convoyRoute.length) {
         // strict-convoy move: bend the shaft through each named sea province
         const mids = order.convoyRoute.map((p) => this.center(p));
-        const tip = this._trim(mids[mids.length - 1], this.center(dest), 24);
+        const tip = this._trim(mids[mids.length - 1], this.center(dest), MOVE_TIP_GAP);
         g.appendChild(this._polyArrow(this.layers.orders1, [from, ...mids, tip], color, ARROW_WIDTH));
       } else {
-        const to = this._trim(from, this.center(dest), 24);
+        const to = this._trim(from, this.center(dest), MOVE_TIP_GAP);
         g.appendChild(this._line(this.layers.orders1, from.x, from.y, to.x, to.y, 'varwidthorder', color, { arrow: true, width: ARROW_WIDTH }));
       }
       if (order.isConvoyMove || order.viaConvoy || order.convoyRoute) {
@@ -1031,10 +1121,10 @@ export class Board {
         g.appendChild(this._ring(target.x, target.y, 30, color, true));
       }
     } else if (kind === 'convoy') {
-      const target = this.center(order.target.loc);
-      const destC = this.center(order.dest);
-      const mid = { x: (target.x + destC.x) / 2, y: (target.y + destC.y) / 2 };
-      g.appendChild(this._line(this.layers.orders2, from.x, from.y, mid.x, mid.y, 'convoyorder', color));
+      // a convoying fleet just shows an anchor on itself — the old dashed line
+      // to the midpoint of the carried army's move read like a support and
+      // pointed at empty water, which was unclear
+      g.appendChild(this._text(from.x + 16, from.y - 14, '⚓', 22, color));
     } else if (kind === 'disband') {
       g.appendChild(this._text(from.x, from.y + 10, '⤫', 40, '#c40000'));
     } else if (kind === 'build') {
@@ -1136,7 +1226,7 @@ export class Board {
     g.setAttribute('data-order-overlay', '1');
     const from = this.center(order.unit ? order.unit.loc : order.loc);
     if ((order.kind === 'move' || order.kind === 'retreat') && (order.destLoc || order.dest)) {
-      const to = this._trim(from, this.center(order.destLoc || order.dest), 30);
+      const to = this._trim(from, this.center(order.destLoc || order.dest), MOVE_TIP_GAP + 6);
       g.appendChild(this._cross(to.x, to.y + 10, 46));
     } else if (order.kind === 'support') {
       // any failed support (cut, or gave no actual support) — a slash centred
