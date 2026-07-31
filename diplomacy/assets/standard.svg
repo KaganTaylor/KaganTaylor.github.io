@@ -845,6 +845,19 @@
     <text x="35" y="85" class="currentnotetext" id="CurrentNote2"> </text>
     <text x="1650" y="1325" class="currentphasetext" id="CurrentPhase">S1901M</text>
 
+    <!-- Completed nao/nwg border around Iceland. The jDip map leaves the sea-space
+         boundary between nao (nat) and nwg (nrg) unfinished at the top of the board:
+         the line drops from the map edge but stops short of Iceland, and Iceland's
+         northern coast is not enclosed (it is hidden under the sea fills). This draws
+         the missing stretch — down the border from the top edge to Iceland, plus a
+         cap sealing Iceland's exposed top. Placed here (after currentnoterect, which
+         is filled the same blue as the sea and would otherwise hide it). -->
+    <g id="IcelandBorderFix" transform="translate(-195 -170)">
+        <path d="M 557 170 L 557 266 M 542 268 Q 552 265 562 267"
+              fill="none" stroke="black" stroke-width="4"
+              stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+
     <g id="MouseLayer" class="invisibleContent" transform="translate(-195 -170)" >
         <g id="con">
             <path d="M 1331 1267 C 1320 1272 1310 1264 1298 1274 C 1289 1282 1298 1291 1291 1305 C 1289 1310 1284 1314 1287 1316 C 1289 1319 1295 1316 1303 1317 C 1303 1317 1303 1319 1303 1319 C 1299 1321 1292 1327 1290 1332 C 1294 1330 1296 1329 1297 1324 C 1297 1324 1323 1304 1323 1304 C 1323 1304 1337 1298 1337 1298 C 1337 1298 1356 1294 1356 1294 C 1356 1294 1340 1282 1340 1282 C 1340 1282 1331 1267 1331 1267 z M 1414 1284 C 1414 1284 1389 1288 1389 1288 C 1389 1288 1375 1292 1375 1292 C 1372 1292 1361 1293 1364 1299 C 1366 1301 1376 1303 1380 1304 C 1380 1304 1380 1306 1380 1306 C 1380 1306 1367 1310 1367 1310 C 1367 1310 1357 1315 1357 1315 C 1357 1315 1348 1318 1348 1318 C 1341 1321 1342 1326 1329 1326 C 1322 1326 1314 1323 1308 1328 C 1304 1331 1290 1344 1288 1349 C 1287 1351 1287 1353 1288 1356 C 1296 1354 1305 1345 1307 1359 C 1307 1359 1307 1364 1307 1364 C 1311 1361 1315 1355 1319 1355 C 1323 1354 1328 1358 1331 1360 C 1335 1363 1340 1364 1345 1365 C 1355 1366 1363 1362 1368 1361 C 1374 1361 1378 1364 1383 1365 C 1389 1365 1393 1361 1400 1361 C 1405 1361 1407 1361 1412 1362 C 1414 1363 1418 1364 1419 1363 C 1422 1362 1424 1355 1424 1352 C 1429 1337 1427 1328 1422 1314 C 1422 1314 1416 1297 1416 1297 C 1415 1292 1416 1288 1414 1284 z M 1346 1295 C 1346 1295 1346 1296 1346 1296 C 1346 1296 1345 1295 1345 1295 C 1345 1295 1346 1295 1346 1295 z"/>
