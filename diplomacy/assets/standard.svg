@@ -839,24 +839,18 @@
         <text class="labeltext18" x="496" y="653.5">YOR</text>
     </g>
 
-    <!-- Current phase -->
-    <rect x="25" y="25" height="70" width="750" class="currentnoterect" />
-    <text x="35" y="50" class="currentnotetext" id="CurrentNote"> </text>
-    <text x="35" y="85" class="currentnotetext" id="CurrentNote2"> </text>
+    <!-- Current phase. The jDip "current note" box — a blue rect plus CurrentNote
+         texts this app never writes to — used to sit at x25,y25 over the NW ocean,
+         covering the nao/nwg sea border and Iceland's north coast. It is filled the
+         same blue as the sea (#c5dfea), so it read not as a box but as an invisible
+         gap in the map: the border appeared to stop short of Iceland and Iceland's
+         top looked unenclosed. Removed, together with an earlier hand-drawn patch
+         (IcelandBorderFix) that redrew the hidden stretch on top of it. With the box
+         gone the real map geometry shows through — a continuous, even-width border
+         and a fully-outlined Iceland, both picking up the normal hover highlight
+         (the patch, sitting above the hover layer, never did). Only CurrentPhase is
+         kept; the app repositions it to the bottom-right (see render.js). -->
     <text x="1650" y="1325" class="currentphasetext" id="CurrentPhase">S1901M</text>
-
-    <!-- Completed nao/nwg border around Iceland. The jDip map leaves the sea-space
-         boundary between nao (nat) and nwg (nrg) unfinished at the top of the board:
-         the line drops from the map edge but stops short of Iceland, and Iceland's
-         northern coast is not enclosed (it is hidden under the sea fills). This draws
-         the missing stretch — down the border from the top edge to Iceland, plus a
-         cap sealing Iceland's exposed top. Placed here (after currentnoterect, which
-         is filled the same blue as the sea and would otherwise hide it). -->
-    <g id="IcelandBorderFix" transform="translate(-195 -170)">
-        <path d="M 557 170 L 557 266 M 542 268 Q 552 265 562 267"
-              fill="none" stroke="black" stroke-width="4"
-              stroke-linecap="round" stroke-linejoin="round"/>
-    </g>
 
     <g id="MouseLayer" class="invisibleContent" transform="translate(-195 -170)" >
         <g id="con">
