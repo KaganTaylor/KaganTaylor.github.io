@@ -16,19 +16,20 @@
 
     <div class="home-actions">
       <div class="home-group">
-        <h2>New</h2>
-        <input id="new-name" type="text" placeholder="Game name" value="Our game">
-        <button id="btn-new" class="primary">New game (1901)</button>
-        <button id="btn-sandbox">Sandbox (empty board)</button>
+        <h2>🧪 New sandbox</h2>
+        <input id="new-name" type="text" placeholder="Sandbox name" value="Our game">
+        <button id="btn-new" class="primary">Start at 1901</button>
+        <button id="btn-sandbox">Start from an empty board</button>
+        <p class="hint">A sandbox lives in this browser only: resolve as many turns as you like, drag pieces anywhere, branch whenever you want to try something. Publish one when it becomes the real game.</p>
       </div>
       <div class="home-group">
-        <h2>Continue</h2>
+        <h2>Your games</h2>
         <ul id="game-list"></ul>
         <label class="filebtn">Import game JSON<input id="import-file" type="file" accept=".json,application/json"></label>
       </div>
       <div class="home-group">
-        <h2>Published games</h2>
-        <p class="hint">Paste the link your game master shared to see the latest position. Pick your country to write orders and copy them for your email — or branch the game to test future moves. Check back after each deadline for the updated board.</p>
+        <h2>☁ Join an online game</h2>
+        <p class="hint">Paste the link your game master shared. You get the live position, and if they assigned your GitHub username a power you can submit orders in-app. Nothing you do on that board can change the real game — resolving there is a preview, and 🌿 branching gives you a sandbox to plan in.</p>
         <div class="sandbox-row">
           <input id="load-gist-input" type="text" placeholder="gist link or ID">
           <button id="btn-load-gist">Load</button>
@@ -42,10 +43,16 @@
 <section id="game-screen" class="screen" hidden>
   <header id="topbar">
     <button id="btn-home" title="Home — back to the game menu" aria-label="Home">🏠</button>
+    <!-- What kind of game this is, and what power you hold in it. The chip,
+         the coloured stripe along the top of this bar and the ring around the
+         board all carry the same colour, so "can what I do here change the
+         real game?" is answerable at a glance from anywhere on the screen. -->
+    <span id="mode-chip" class="mode-chip" hidden><span class="mc-icon"></span><span class="mc-text"></span></span>
     <span id="game-name"></span>
     <span id="phase-label"></span>
+    <!-- the game master's local position has moved on from the shared link -->
+    <button id="btn-sync" class="sync-pill" hidden><span class="sp-dot">●</span><span class="sp-text"></span></button>
     <span id="deadline-countdown" class="badge" hidden title="Whether orders are open for submission"></span>
-    <span id="readonly-badge" class="badge published" hidden>👁 Published — read only</span>
     <span id="published-preview-banner" class="badge published" hidden>👁 Viewing published state</span>
     <span id="debug-view-banner" class="badge debug" hidden>🕵<span class="debug-view-label"> Viewing as <span id="debug-view-power"></span> (debug)</span></span>
     <span id="hover-info"></span>
@@ -61,6 +68,11 @@
               title="Convoy mode — drag a fleet at sea onto an army that already has a move order (same as Ctrl-drop)">
         <span class="mode-icon">⚓</span><span class="mode-label">Convoy</span>
       </button>
+      <!-- sandboxes only: drag a piece anywhere instead of ordering it -->
+      <button id="btn-mode-arrange" class="mode-btn" aria-pressed="false" hidden
+              title="Arrange mode — drag any piece anywhere on the board, ignoring the rules (same as Alt-drag). Sandboxes only; stays on until you switch it off.">
+        <span class="mode-icon">✋</span><span class="mode-label">Arrange</span>
+      </button>
     </div>
     <button id="btn-exit-preview" hidden title="Stop viewing the published state and go back to your own position">◀ Back to my position</button>
     <button id="btn-edit" title="Freely place, move and remove units and set supply-center owners">✏ Edit board</button>
@@ -72,6 +84,9 @@
         <button id="btn-publish" title="Publish this game as a read-only, shareable link">📣 Publish</button>
         <button id="btn-update-published" hidden title="Push your position to the published link, so every player sees it">☁ Publish changes</button>
         <button id="btn-view-published" hidden title="See the position that's actually live at the published link, without touching your own">👁 View published state</button>
+        <button id="btn-revert-published" hidden title="Throw away local changes and reload the position from the published link">⟲ Revert to published</button>
+        <button id="btn-branch-top" title="Copy this position into a private sandbox and try things there">🌿 Branch to sandbox</button>
+        <button id="btn-open-source" hidden title="Go back to the game this sandbox was branched from">↩ Open source game</button>
         <button id="btn-game-settings" title="Victory thresholds and support house-rule for this game">🎲 Game settings</button>
         <button id="btn-export" title="Download this game as a JSON file">📤 Export</button>
         <button id="btn-set-players" hidden title="Assign each power to the GitHub username that will submit its moves">👥 Set players</button>
@@ -118,12 +133,14 @@
       <!-- orders entry -->
       <details id="panel-orders" class="panel" open>
         <summary><h2 id="orders-title">Orders</h2></summary>
+        <p class="branch-note" id="branch-note" hidden></p>
+        <p class="draft-note" id="draft-note" hidden></p>
         <div class="sandbox-row" id="country-row" hidden>
           <select id="country-select" title="Choose your country to write its orders"></select>
           <button id="btn-copy-orders" title="Copy the orders below — paste them into your email to the game master">📋 Copy orders</button>
         </div>
         <div class="btnrow" id="submit-row" hidden>
-          <button id="btn-submit-moves" class="primary" title="Submit your orders to the game — you can resubmit as often as you like before the deadline">📤 Submit moves</button>
+          <button id="btn-submit-moves" title="Submit your orders to the game — you can resubmit as often as you like before the deadline">📤 Submit moves</button>
           <span id="submit-status" class="hint"></span>
         </div>
         <div id="online-row" hidden>
@@ -140,7 +157,7 @@
           <button id="btn-resolve" class="primary">Resolve</button>
           <button id="btn-resolve-final" title="Resolve and jump straight to the final position — animates the moves without stepping through each order first">⏭ Resolve to final</button>
         </div>
-        <p class="hint" id="drag-hint">Drag a unit to its destination to write the order · drop on itself to hold · <b>⇧-drop</b> on a unit to support it (or turn on 🤝&nbsp;Support and just drag) · <b>Ctrl-drop</b> a fleet at sea onto a moving army to convoy (or turn on ⚓&nbsp;Convoy) · unordered units hold.</p>
+        <p class="hint" id="drag-hint">Drag a unit to its destination to write the order · drop on itself to hold · <b>⇧-drop</b> on a unit to support it (or turn on 🤝&nbsp;Support and just drag) · <b>Ctrl-drop</b> a fleet at sea onto a moving army to convoy (or turn on ⚓&nbsp;Convoy) · unordered units hold.<span id="arrange-hint" hidden><br><b>Alt-drag</b> a piece (or turn on ✋&nbsp;Arrange) to put it anywhere, rules ignored — sandboxes only.</span></p>
       </details>
 
       <!-- playback (replaces the orders panel while stepping through a resolve) -->
@@ -157,6 +174,7 @@
         <div class="btnrow">
           <button id="pb-continue" class="primary">Continue ➜</button>
           <button id="pb-copy" title="Copy a text summary of this phase's results for your group chat">📋 Copy results</button>
+          <button id="pb-branch" hidden title="Keep this outcome: copy the position it ends on into a private sandbox">🌿 Continue in a sandbox</button>
           <button id="pb-back-current" hidden>Back to current turn</button>
         </div>
       </div>
@@ -176,7 +194,7 @@
           <button id="btn-replay" title="Step through this past phase again">Replay</button>
           <button id="btn-undo" title="Undo the most recent phase — the board goes back and your orders return to the box">⤺ Undo</button>
           <button id="btn-redo" title="Redo the last undone phase">⤻ Redo</button>
-          <button id="btn-branch" title="Copy the current position into a new practice game">Branch</button>
+          <button id="btn-branch" title="Copy the current position into a private sandbox">🌿 Branch to sandbox</button>
         </div>
       </details>
 

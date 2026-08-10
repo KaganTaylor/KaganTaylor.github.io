@@ -39,7 +39,11 @@ let lastParsed = { orders: [], errors: [], byProv: new Map() };
 // mode — { u, from, dest, route: [seaProv…] } (see startConvoyRoute)
 let convoyPick = null;
 let mobileSheet = null; // null | 'edit' | 'orders' | 'standings' — mobile bottom-sheet state
-let orderMode = null; // null | 'support' | 'convoy' — see setOrderMode()
+let orderMode = null; // null | 'support' | 'convoy' | 'arrange' — see setOrderMode()
+// Whether the drag under way was started as a free reposition — read at
+// pointerdown (when Alt was held) so releasing Alt mid-drag cannot turn a
+// reposition into a move order half way through. See wantArrange().
+let arrangeDrag = false;
 
 // Gist viewers drag/click units for ANY power to sketch out what opponents
 // might do, but the orders textarea only ever shows the power they're
@@ -173,42 +177,79 @@ function pickCoast(x, y, options) {
 // ---------------------------------------------------------------------------
 // home screen
 // ---------------------------------------------------------------------------
+// The saved-game list is split by the same two kinds the game screen uses, and
+// each row carries its kind (☁ / 🧪), the role you hold in it and — for online
+// games — how long is left on the deadline, so the list answers "where do I
+// owe orders?" without opening anything.
 function renderHome() {
   const list = $('game-list');
   list.replaceChildren();
-  const games = S.listGames();
-  const names = Object.keys(games).sort();
-  if (!names.length) {
+  const all = Object.values(S.listGames());
+  const byName = (a, b) => a.name.localeCompare(b.name);
+  const onlineGames = all.filter((g) => g.published).sort(byName);
+  const sandboxes = all.filter((g) => !g.published).sort(byName);
+  if (!all.length) {
     const li = document.createElement('li');
-    li.innerHTML = '<span class="meta">No saved games yet</span>';
+    li.innerHTML = '<span class="meta">No saved games yet — start a sandbox, or join an online game.</span>';
     list.appendChild(li);
+    return;
   }
-  for (const name of names) {
-    const g = games[name];
+  const group = (text) => {
     const li = document.createElement('li');
-    if (g.published) li.className = 'published';
-    const load = document.createElement('button');
-    load.className = 'load';
-    const badge = g.published
-      ? ` <span class="badge published">${g.isOwner ? 'Published' : 'Read only'}</span>`
-      : g.sandbox ? ' <span class="badge sandbox">Sandbox</span>' : '';
-    load.innerHTML = `${name} <span class="meta">· ${S.phaseLabel(g)}</span>${badge}`;
-    // someone else's published game may have moved on since we last saw it —
-    // reload it through the gist (falls back to the local copy when offline)
-    load.onclick = () => (g.published && !g.isOwner && g.gistId ? loadPublishedGame(g.gistId) : openGame(g));
-    const del = document.createElement('button');
-    del.className = 'del';
-    del.textContent = '🗑';
-    del.title = 'Delete';
-    del.onclick = () => {
-      if (confirm(`Delete "${name}"?`)) {
-        S.deleteGame(name);
-        renderHome();
-      }
-    };
-    li.append(load, del);
+    li.className = 'group';
+    li.textContent = text;
     list.appendChild(li);
+  };
+  if (onlineGames.length) group('☁ Online games');
+  for (const g of onlineGames) list.appendChild(homeRow(g));
+  if (sandboxes.length) group('🧪 Sandboxes');
+  for (const g of sandboxes) list.appendChild(homeRow(g));
+}
+
+function homeRow(g) {
+  const kind = g.published ? (g.isOwner ? 'gm' : g.assignedPower ? 'player' : 'spectator') : 'sandbox';
+  const li = document.createElement('li');
+  li.className = 'game-row ' + kind;
+  const load = document.createElement('button');
+  load.className = 'load';
+  const bits = [
+    `<span class="gicon">${g.published ? '☁' : '🧪'}</span>`,
+    `<span class="gname">${escapeHtml(g.name)}</span>`,
+    `<span class="meta">${S.phaseLabel(g)}</span>`,
+  ];
+  if (kind === 'gm') bits.push('<span class="badge role-gm">👑 Game master</span>');
+  if (kind === 'player') bits.push(`<span class="badge role-player">🎖 ${cap(g.assignedPower)}</span>`);
+  if (kind === 'spectator') bits.push('<span class="badge role-spectator">👁 Watching</span>');
+  const d = g.deadline && new Date(g.deadline);
+  if (d && !isNaN(d)) {
+    const left = d - Date.now();
+    bits.push(`<span class="badge deadline${left > 0 ? '' : ' past'}">⏰ ${left > 0 ? 'in ' + fmtCountdown(left) : 'passed'}</span>`);
   }
+  if (g.branchedFrom) {
+    bits.push(`<span class="meta from">🌿 from ${escapeHtml(g.branchedFrom.name)}` +
+      `${g.branchedFrom.label ? ' · ' + escapeHtml(g.branchedFrom.label) : ''}</span>`);
+  }
+  load.innerHTML = bits.join(' ');
+  // someone else's published game may have moved on since we last saw it —
+  // reload it through the gist (falls back to the local copy when offline)
+  load.onclick = () => (g.published && !g.isOwner && g.gistId ? loadPublishedGame(g.gistId) : openGame(g));
+  const del = document.createElement('button');
+  del.className = 'del';
+  del.textContent = '🗑';
+  del.title = g.published && g.isOwner
+    ? 'Remove from this browser — the published gist itself is not deleted'
+    : 'Delete';
+  del.onclick = () => {
+    const warn = g.published && g.isOwner
+      ? `Remove "${g.name}" from this browser?\n\nThe published gist stays online, but only a browser holding your GitHub token can pick it up again.`
+      : `Delete "${g.name}"?`;
+    if (confirm(warn)) {
+      S.deleteGame(g.name);
+      renderHome();
+    }
+  };
+  li.append(load, del);
+  return li;
 }
 
 function uniqueName(base) {
@@ -222,11 +263,42 @@ function uniqueName(base) {
 // ---------------------------------------------------------------------------
 // game screen
 // ---------------------------------------------------------------------------
+// THERE ARE EXACTLY TWO KINDS OF GAME, and most of the rules below follow:
+//
+//   ☁ online  — a published gist. One authoritative position, one writer (the
+//               game master). Nobody else's board actions can move it, and the
+//               GM's only move it once they publish.
+//   🧪 sandbox — everything else: private to this browser, freely editable,
+//               freely resolvable, disposable. Branches, "practice games" and
+//               the old empty-board sandbox are all just this — there is no
+//               third kind, because the game is only ever really played
+//               online and everything local is thinking-out-loud.
+//
+// gameMode() names the four faces of that: 'sandbox', 'gm', 'player' (an
+// assigned power in an online game) and 'spectator'. It is written to
+// #game-screen[data-mode], which drives every piece of state colouring in the
+// stylesheet, so the two models cannot drift apart.
+function isOnline() {
+  return !!(game && game.published);
+}
+
+function isSandbox() {
+  return !!game && !isOnline();
+}
+
+function gameMode() {
+  if (!game) return '';
+  if (!isOnline()) return 'sandbox';
+  if (isOwnerView()) return 'gm';
+  return assignedPower() ? 'player' : 'spectator';
+}
+
 // A published game can only be advanced by the browser that published it
 // (holds the token that created its gist). Everyone else gets a live,
-// branchable, but non-editable view of the position. A GM in 🕵 debug "view
-// as player" mode is deliberately treated as read-only too, for the same
-// reason: it's supposed to be a faithful simulation of what that player sees.
+// previewable, branchable, but never mutable view of the position. A GM in 🕵
+// debug "view as player" mode is deliberately treated as read-only too, for
+// the same reason: it's supposed to be a faithful simulation of what that
+// player sees — including the fact that resolving is only ever a preview.
 function isReadOnly() {
   return !!debugPower || !!(game && game.published && !game.isOwner);
 }
@@ -291,12 +363,13 @@ function openGame(g) {
   showScreen('game-screen');
   $('game-name').textContent = game.name;
   mobileSheet = null;
-  setEditMode(!isReadOnly() && !!game.sandbox && game.units.length === 0);
+  setEditMode(isSandbox() && game.units.length === 0);
   refreshAll();
   if (game.published && game.gistId) refreshOnlineStatus();
 }
 
 function refreshAll() {
+  $('game-screen').dataset.mode = gameMode();
   $('phase-label').textContent = S.phaseLabel(game);
   board.setPhaseText(S.phaseLabel(game));
   board.setInfluence(game.scOwners);
@@ -305,20 +378,35 @@ function refreshAll() {
   $('panel-playback').hidden = true;
   $('panel-orders').hidden = false;
   const ro = isReadOnly();
-  $('readonly-badge').hidden = !ro;
   $('country-row').hidden = !ro;
   if (ro) renderCountrySelect();
   $('orders-text').readOnly = false;
-  // auto-publish games open up local resolution once the deadline reveals
-  // everyone's moves — a preview only; the GM's published update stays
-  // authoritative and reloads over it
-  const localResolve = ro && publishMode() === 'auto' && deadlinePassed();
-  $('btn-resolve').hidden = ro && !localResolve;
-  $('btn-resolve-final').hidden = ro && !localResolve;
-  $('btn-edit').hidden = ro || !game.sandbox;
+
+  // Resolving a published game you do not own must not move it, so for those
+  // viewers the two Resolve buttons become a PREVIEW: the phase is adjudicated
+  // on a throwaway copy and the real board comes back untouched when the
+  // playback closes (previewResolve). That means everyone can always try the
+  // resolution out — including before the deadline, on their own guesses at
+  // what the other powers will do — without any risk to the live position.
+  $('btn-resolve').textContent = ro ? '👁 Preview result' : 'Resolve';
+  $('btn-resolve').title = ro
+    ? 'Adjudicate the orders in the box on a throwaway copy — the published position is not touched'
+    : 'Resolve this phase and step through the results';
+  $('btn-resolve-final').textContent = ro ? '⏭ Preview to final' : '⏭ Resolve to final';
+  $('btn-resolve').classList.toggle('primary', !ro);
+  $('btn-resolve').hidden = false;
+  $('btn-resolve-final').hidden = false;
+
+  // Every sandbox gets the board editor, not just an empty one — a branched
+  // position is exactly where you want to add a hypothetical fleet. The game
+  // master keeps it too (correcting the official board by hand beats replaying
+  // a year), behind a confirmation; see toggleEditMode().
+  $('btn-edit').hidden = ro;
   const editTab = document.querySelector('#mobile-tabbar .mtab[data-sheet="edit"]');
-  if (editTab) editTab.hidden = ro || !game.sandbox;
-  $('btn-undo').disabled = (ro && !localResolve) || !game.history.length;
+  if (editTab) editTab.hidden = ro;
+  // a viewer's local copy is never allowed to move, so there is nothing to
+  // undo there — 🌿 Branch to sandbox is the way to explore instead
+  $('btn-undo').disabled = ro || !game.history.length;
   $('btn-redo').disabled = ro || !(game.redoStack && game.redoStack.length);
   $('btn-publish').hidden = ro || !!game.published;
   $('btn-update-published').hidden = !(game.published && isOwnerView());
@@ -332,6 +420,12 @@ function refreshAll() {
   $('btn-set-players').hidden = !(game.published && isOwnerView());
   $('btn-submissions').hidden = !(game.published && isOwnerView());
   $('autopublish-row').hidden = !(game.published && isOwnerView());
+  $('btn-revert-published').hidden = !isOnline();
+  $('btn-open-source').hidden = !game.branchedFrom;
+  $('arrange-hint').hidden = !isSandbox();
+  renderModeChip();
+  renderBranchNote();
+  renderDraftNote();
   renderViewAsControls();
   renderOnlineUI();
   setOrderMode(null);
@@ -339,6 +433,82 @@ function refreshAll() {
   renderHistorySelect();
   renderStandings();
   onOrdersChanged();
+  updateSyncPill();
+}
+
+// ---------------------------------------------------------------------------
+// game-state identity: which game am I in, and can I break it?
+// ---------------------------------------------------------------------------
+const MODE_CHIP = {
+  sandbox: ['🧪', 'Sandbox',
+    'Private to this browser. Edit the board, resolve turns and branch freely — nothing here is published.'],
+  gm: ['☁', 'Live · 👑 Game master',
+    'You run this published game. What you resolve here becomes the official position the moment you ☁ Publish changes.'],
+  spectator: ['☁', 'Live · 👁 Watching',
+    'A live view of a published game. Nothing you type, drag or resolve here can change it.'],
+};
+
+function renderModeChip() {
+  const el = $('mode-chip');
+  const mode = gameMode();
+  let icon, text, title;
+  if (mode === 'player') {
+    [icon, text, title] = ['☁', `Live · 🎖 ${cap(assignedPower())}`,
+      `You are playing ${cap(assignedPower())} in a published game. Orders here are a private draft until you 📤 Submit them; the board itself is the game master's to move.`];
+  } else {
+    [icon, text, title] = MODE_CHIP[mode] || ['', '', ''];
+  }
+  el.hidden = !text;
+  el.title = title;
+  el.querySelector('.mc-icon').textContent = icon;
+  el.querySelector('.mc-text').textContent = text;
+}
+
+// boardDirty() already knows the game master's position has moved on from the
+// shared link, but the only thing it drove was a disabled button inside a
+// closed ⚙ menu — so a resolved-but-unpublished turn looked exactly like a
+// published one. This is that same fact, said out loud in the topbar, naming
+// the phase the players are still looking at, and clickable to fix it.
+function updateSyncPill() {
+  const pill = $('btn-sync');
+  const dirty = boardDirty();
+  pill.hidden = !dirty || !!publishedPreview;
+  if (dirty) {
+    const live = game.publishedState ? S.phaseLabel(game.publishedState) : null;
+    pill.querySelector('.sp-text').textContent = live
+      ? `Unpublished — players still see ${live}`
+      : 'Unpublished changes';
+    pill.title = 'This browser holds a position the shared link does not. Click to publish it.';
+  }
+}
+
+function renderBranchNote() {
+  const el = $('branch-note');
+  const b = game.branchedFrom;
+  el.hidden = !b;
+  if (!b) return;
+  el.textContent = `🌿 Branched from “${b.name}”${b.label ? ' at ' + b.label : ''}` +
+    (b.gistId ? ' — ↩ Open source game in ⚙ Settings to go back to the live game.' : '.');
+}
+
+// What the order box actually is, in this game. Orders are never state, but in
+// an online game that is easy to forget — a drag on the map looks identical
+// whether it is a draft, a submission or the official record.
+function renderDraftNote() {
+  const el = $('draft-note');
+  const mode = gameMode();
+  if (mode === 'sandbox') {
+    el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+  if (mode === 'gm') {
+    el.textContent = '👑 These are the official orders. Resolve them, then ☁ Publish changes so every player sees the new board.';
+  } else if (mode === 'player') {
+    el.textContent = `✎ Private draft. Only 📤 Submit moves sends ${cap(assignedPower())}'s orders to the game — dragging pieces and previewing changes nothing.`;
+  } else {
+    el.textContent = '✎ Private scratch pad. Nothing you write, drag or preview here reaches the published game.';
+  }
 }
 
 function renderCountrySelect() {
@@ -417,16 +587,18 @@ function prefillOrders(preserve = false) {
   const ta = $('orders-text');
   const info = $('phase-info');
   const myC = myCountry();
+  // a viewer's box is a draft, and the heading says so on every phase
+  const title = (base) => (isReadOnly() ? 'Draft ' + base.toLowerCase() : base) + ' — ' + S.phaseLabel(game);
   if (game.step === 'movement') {
-    $('orders-title').textContent = 'Orders — ' + S.phaseLabel(game);
+    $('orders-title').textContent = title('Orders');
     info.textContent = myC
-      ? `Write ${cap(myC)}'s orders (type or drag units), then 📋 copy them for your game master. Branch first to test ideas.`
+      ? `Write ${cap(myC)}'s orders (type or drag units). 👁 Preview result tries them out safely; 🌿 Branch to sandbox keeps the ideas.`
       : 'Type orders or drag units on the map. Unordered units hold.';
   } else if (game.step === 'retreat') {
-    $('orders-title').textContent = 'Retreats — ' + S.phaseLabel(game);
+    $('orders-title').textContent = title('Retreats');
     info.textContent = 'Drag a dislodged unit to retreat it, or click it to disband. Unordered units disband.';
   } else {
-    $('orders-title').textContent = 'Builds — ' + S.phaseLabel(game);
+    $('orders-title').textContent = title('Builds');
     const counts = S.adjustmentCounts(game);
     const occupied = new Set(game.units.map((u) => prov(u.loc)));
     const infoLines = [];
@@ -533,6 +705,9 @@ function onOrdersChanged() {
   }
   el.innerHTML = parts.join('\n');
   if (game && game.step === 'adjustment' && !playback) updateAdjustmentInfo();
+  // "submitted" vs "submitted, then edited" has to track the box keystroke by
+  // keystroke, or it is reporting the state from the last network refresh
+  if (game && assignedPower()) renderSubmitStatus();
   drawLive();
   return { orders: own.orders, errors: own.errors };
 }
@@ -712,13 +887,13 @@ function selectOrderLine(unitProv) {
 // ---------------------------------------------------------------------------
 function attachBoardHandlers() {
   board.handlers = {
-    canDrag(p) {
+    canDrag(p, ev) {
       if (convoyPick || playback || publishedPreview || !game) return null;
       const base = prov(p);
-      if (editMode || game.step === 'movement') {
+      arrangeDrag = wantArrange(ev);
+      if (editMode || arrangeDrag || game.step === 'movement') {
         const u = unitAt(base);
-        if (!u) return null;
-        return { color: ARROW_COLORS[u.power] };
+        if (u) return { color: ARROW_COLORS[u.power] };
       }
       if (game.step === 'retreat') {
         const d = dislodgedAt(base);
@@ -730,11 +905,14 @@ function attachBoardHandlers() {
     onDrop(from, to, ev) {
       from = prov(from);
       const toProv = prov(to);
-      if (editMode) return editDrop(from, toProv, ev);
+      const arranging = arrangeDrag || wantArrange(ev);
+      arrangeDrag = false;
+      if (editMode || arranging) return editDrop(from, toProv, ev);
       if (game.step === 'movement') return orderDrop(from, toProv, ev);
       if (game.step === 'retreat') return retreatDrop(from, toProv, ev);
     },
     onClick(p, ev) {
+      arrangeDrag = false;
       if (convoyPick) return convoyRouteClick(prov(p), ev);
       if (playback || publishedPreview || !game) return;
       const base = prov(p);
@@ -768,6 +946,7 @@ function attachBoardHandlers() {
       drawLive(prov(p)); // hide this unit's old arrow while dragging
     },
     onDragEnd() {
+      arrangeDrag = false;
       drawLive();
     },
   };
@@ -792,17 +971,46 @@ function toggleOrderMode(mode) {
   setOrderMode(orderMode === mode ? null : mode);
   if (orderMode === 'support') toast('Support: drag a unit onto the one it should support', 'info');
   if (orderMode === 'convoy') toast('Convoy: drag a fleet at sea onto a moving army', 'info');
+  if (orderMode === 'arrange') toast('Arrange: drag any piece anywhere. Switch it off to write orders again.', 'info');
 }
 
-// The toggles only make sense where a drag writes a movement order at all —
-// the same condition canDrag() uses — so they are hidden during edit mode,
-// playback, and the retreat/build phases.
+// ✋ Arrange — sandboxes only.
+//
+// A sandbox exists to think in, and thinking means "what if that army were
+// over here?" as often as it means "what if it moved there?". So a sandbox
+// gets a second meaning for a drag: reposition the piece, ignoring adjacency
+// and ignoring whose phase it is. Alt-drag does it with a keyboard; the toggle
+// is the touchscreen equivalent, exactly as 🤝/⚓ are for ⇧/Ctrl. Which meaning
+// a drag has is decided at pointerdown, so releasing Alt half way through
+// cannot turn a reposition into a move order.
+//
+// Unlike those two it is NOT one-shot. Rearranging is something you do to five
+// pieces in a row, and re-arming between each would be the whole interaction.
+// The risk that trades against — a stray drag silently teleporting a unit — is
+// covered instead by making the mode loud: the board wears a thick amber ring
+// the entire time it is armed (#board-pane.arranging).
+function wantArrange(ev) {
+  return isSandbox() && !editMode && !playback && !convoyPick
+    && (orderMode === 'arrange' || !!(ev && ev.altKey));
+}
+
+// The support/convoy toggles only make sense where a drag writes a movement
+// order at all — the same condition canDrag() uses — so they are hidden during
+// edit mode, playback and the retreat/build phases. Arrange has its own rule:
+// any sandbox, any phase.
 function updateOrderModeUI() {
-  const usable = !!game && !playback && !publishedPreview && !editMode && game.step === 'movement';
-  if (!usable && orderMode) orderMode = null;
-  $('order-modes').hidden = !usable;
+  const live = !!game && !playback && !publishedPreview && !editMode;
+  const movement = live && game.step === 'movement';
+  const arrange = live && isSandbox();
+  if ((orderMode === 'arrange' && !arrange) || (orderMode !== 'arrange' && !movement)) orderMode = null;
+  $('order-modes').hidden = !movement && !arrange;
+  $('btn-mode-support').hidden = !movement;
+  $('btn-mode-convoy').hidden = !movement;
+  $('btn-mode-arrange').hidden = !arrange;
   $('btn-mode-support').setAttribute('aria-pressed', String(orderMode === 'support'));
   $('btn-mode-convoy').setAttribute('aria-pressed', String(orderMode === 'convoy'));
+  $('btn-mode-arrange').setAttribute('aria-pressed', String(orderMode === 'arrange'));
+  $('board-pane').classList.toggle('arranging', orderMode === 'arrange');
 }
 
 function orderDrop(from, to, ev) {
@@ -1029,7 +1237,17 @@ function setEditMode(on) {
   updateOrderModeUI();
 }
 
+// A game master editing a published board is editing the official position —
+// legitimate (correcting a mis-entered order beats replaying the year) but
+// never something to fall into by tapping a tab, so it asks first and points
+// at the sandbox as the alternative.
 function toggleEditMode() {
+  if (!editMode && game.published && isOwnerView() && !confirm(
+    'Edit the official board?\n\n' +
+    'You are about to change the published game\'s position by hand. ' +
+    'Players see nothing until you ☁ Publish changes.\n\n' +
+    'To try ideas out instead, cancel and use 🌿 Branch to sandbox.'
+  )) return;
   if (publishedPreview) exitPublishedPreview();
   setEditMode(!editMode);
   if (editMode && playback) endPlayback();
@@ -1071,6 +1289,7 @@ function editApply() {
   renderStandings();
   onOrdersChanged();
   if (game.published && isOwnerView()) $('btn-update-published').disabled = !boardDirty();
+  updateSyncPill();
 }
 
 function editClick(p, ev) {
@@ -1130,7 +1349,45 @@ function resolveCurrent() {
   const entry = S.resolvePhase(game, orders, text);
   S.saveGame(game);
   startPlayback(entry, false);
-  if (isReadOnly()) toast('Local preview — the game master’s published update stays the official position', 'info');
+  updateSyncPill();
+}
+
+// ---------------------------------------------------------------------------
+// preview: resolving a game you do not own
+// ---------------------------------------------------------------------------
+// The published position is the only real one, so a viewer's Resolve must not
+// move their copy of it — that divergence is exactly how a player ends up
+// staring at a board the rest of the table cannot see. Instead the phase is
+// adjudicated on a throwaway clone. The playback panel reads nothing but the
+// history entry it is handed (unitsBefore/unitsAfter/scOwners…), so the whole
+// step-through, animation and result copy work unchanged while `game` is never
+// touched; closing the playback re-renders the live position over the top.
+//
+// The upside is bigger than the safety: because previewing is free it is
+// offered at all times, not just after an auto-publish deadline. Guess the
+// other six powers' orders, preview, and 🌿 keep the outcome as a sandbox if
+// it was interesting.
+function shadowGame() {
+  return {
+    season: game.season,
+    year: game.year,
+    step: game.step,
+    settings: S.gameSettings(game), // the same house rules, or it isn't a preview
+    units: structuredClone(game.units),
+    scOwners: structuredClone(game.scOwners),
+    pending: structuredClone(game.pending),
+    history: [],
+    redoStack: [],
+  };
+}
+
+function previewResolve(toFinal) {
+  const { orders, errors } = onOrdersChanged();
+  if (errors.length) return toast('Fix the order problems first');
+  const shadow = shadowGame();
+  const entry = S.resolvePhase(shadow, orders, $('orders-text').value);
+  startPlayback(entry, true, shadow);
+  if (toFinal) continuePlayback();
 }
 
 // Resolves the phase but skips the order-by-order reveal entirely: shows the
@@ -1154,7 +1411,7 @@ async function resolveAndSkip() {
   board.setUnits(entry.unitsBefore, entry.step === 'retreat' ? entry.dislodged : []);
   await board.animateFinal(entry);
   refreshAll();
-  if (isReadOnly()) toast('Local preview — the game master’s published update stays the official position', 'info');
+  if (boardDirty()) toast('Resolved locally — ☁ Publish changes to show the players', 'info');
 }
 
 function redoPhase() {
@@ -1200,15 +1457,23 @@ function partialVerdicts(entry, revealedOrders) {
   return map;
 }
 
-function startPlayback(entry, readonly) {
-  playback = { entry, readonly, orders: playbackOrders(entry), step: 0, animating: false };
+// `preview` is the throwaway game the entry was resolved on (previewResolve);
+// null for a real resolution or a replay of a past turn.
+function startPlayback(entry, readonly, preview = null) {
+  playback = { entry, readonly, preview, orders: playbackOrders(entry), step: 0, animating: false };
   setOrderMode(null);
   $('panel-orders').hidden = true;
   $('panel-edit').hidden = true;
   $('panel-playback').hidden = false;
-  $('playback-title').textContent = entry.label;
-  $('pb-continue').hidden = readonly;
+  $('panel-playback').classList.toggle('preview', !!preview);
+  $('playback-title').textContent = (preview ? '👁 Preview · ' : '') + entry.label;
+  // A preview still gets to watch the moves play out — it just lands on the
+  // final position instead of advancing the game (see continuePlayback).
+  $('pb-continue').hidden = readonly && !preview;
+  $('pb-continue').textContent = preview ? '▶ Play the moves' : 'Continue ➜';
+  $('pb-branch').hidden = !preview;
   $('pb-back-current').hidden = !readonly;
+  $('pb-back-current').textContent = preview ? '← Back to the live position' : 'Back to current turn';
   const list = $('pb-order-list');
   list.replaceChildren();
   playback.orders.forEach((r, i) => {
@@ -1317,8 +1582,14 @@ function stepPlayback(delta) {
 }
 
 function endPlayback() {
+  const wasPreview = !!(playback && playback.preview);
   playback = null;
-  refreshAll();
+  refreshAll(); // re-renders the real position over whatever the playback drew
+  // a resolved-but-unpublished turn is invisible to the table, so say so once,
+  // right after the moment it happens (the ● pill keeps saying it afterwards)
+  if (!wasPreview && boardDirty()) {
+    toast('Resolved locally — ☁ Publish changes to show the players', 'info');
+  }
 }
 
 // "Continue ➜" is the only control that plays the move animation: stepping
@@ -1335,6 +1606,14 @@ function continuePlayback() {
   $('pb-next').disabled = true;
   board.animateFinal(pb.entry).then(() => {
     if (playback !== pb) return;
+    // a preview has no next phase to advance into — it stops on the position
+    // the orders would have produced, with 🌿 on hand to keep it
+    if (pb.preview) {
+      pb.animating = false;
+      pb.step = finalStep();
+      renderPlayback();
+      return;
+    }
     endPlayback();
   });
 }
@@ -1486,6 +1765,13 @@ function replaySelected() {
 
 function undoPhase() {
   if (publishedPreview) exitPublishedPreview();
+  // undoing a published turn walks the official position backwards — fine (it
+  // is how a GM fixes a mis-entered order) but worth being deliberate about
+  if (isOwnerView() && game.published && game.history.length && !confirm(
+    `Undo ${game.history[game.history.length - 1].label} on the official game?\n\n` +
+    'The board goes back a phase and your orders return to the box. ' +
+    'Players keep seeing the published position until you ☁ Publish changes again.'
+  )) return;
   const entry = S.undoLastPhase(game);
   if (!entry) return toast('Nothing to undo');
   playback = null;
@@ -1498,23 +1784,41 @@ function undoPhase() {
   toast(`Undid ${entry.label} — orders restored below`, 'info');
 }
 
-function branchCurrent() {
-  const name = prompt('Name for the practice branch:', uniqueName(`${game.name} practice`));
+// ---------------------------------------------------------------------------
+// branching — the one escape hatch from every read-only situation
+// ---------------------------------------------------------------------------
+// `src` is any position: the live game, or the throwaway one a preview
+// resolved into ("keep this outcome"). What comes back is always a plain
+// sandbox, with a note saying where it came from so it can be found again.
+function branchFrom(src, atLabel) {
+  const name = prompt('Name for the sandbox:', uniqueName(`${game.name} sandbox`));
   if (!name) return;
-  const g = {
-    ...S.newGame(uniqueName(name)),
-    season: game.season,
-    year: game.year,
-    step: game.step,
-    units: structuredClone(game.units),
-    scOwners: structuredClone(game.scOwners),
-    pending: structuredClone(game.pending),
-    sandbox: true,
-  };
-  g.name = uniqueName(name);
-  g.history = [];
+  const g = S.branchGame(src, uniqueName(name), {
+    name: game.name,
+    gistId: isOnline() ? game.gistId : null,
+    label: atLabel,
+    at: new Date().toISOString(),
+  });
   openGame(g);
-  toast('Practice branch created — experiment freely', 'info');
+  toast('🧪 Sandbox created — rearrange, resolve and try anything', 'info');
+}
+
+function branchCurrent() {
+  if (playback && playback.preview) {
+    return branchFrom(playback.preview, `after ${playback.entry.label}`);
+  }
+  branchFrom(game, S.phaseLabel(game));
+}
+
+// ⚙ → ↩ Open source game. A sandbox branched off an online game should not
+// need a trip through the home screen to get back to the real one.
+function openBranchSource() {
+  const b = game.branchedFrom;
+  if (!b) return;
+  if (b.gistId) return loadPublishedGame(b.gistId);
+  const src = S.listGames()[b.name];
+  if (src) return openGame(src);
+  toast(`“${b.name}” is no longer saved in this browser`);
 }
 
 // ---------------------------------------------------------------------------
@@ -1632,12 +1936,6 @@ function renderOnlineUI() {
   $('submit-row').hidden = !assignedPower();
   $('btn-submit-moves').disabled = !ordersOpen();
   $('online-row').hidden = !hasPlayers;
-  if (isReadOnly() && !playback) {
-    // keep the local-preview Resolve in step with the deadline ticking over
-    const localResolve = publishMode() === 'auto' && deadlinePassed();
-    $('btn-resolve').hidden = !localResolve;
-    $('btn-resolve-final').hidden = !localResolve;
-  }
   renderSubmitStatus();
   updateDeadlineCountdown();
   if (hasPlayers) renderDeadlineInfo();
@@ -1647,11 +1945,24 @@ function renderOnlineUI() {
   if (game.published && isOwnerView() && !$('submissions-modal').hidden) renderSubmissionsModal();
 }
 
+// Order text reduced to what the game actually cares about, so "have I changed
+// my orders since I submitted them?" ignores comments, spacing and case.
+function normalizeOrders(text) {
+  return (text || '')
+    .split('\n')
+    .map((l) => l.split('#')[0].trim().toLowerCase().replace(/\s+/g, ' '))
+    .filter(Boolean)
+    .join('\n');
+}
+
 function renderSubmitStatus() {
   const p = assignedPower();
   if (!p) return;
   const el = $('submit-status');
+  const btn = $('btn-submit-moves');
   const status = powerOnlineStatus(p);
+  el.classList.remove('drift');
+  btn.classList.remove('primary');
   el.classList.toggle('done', status === 'published' || status === 'revealed' || status === 'submitted');
   if (status === 'published') {
     el.textContent = '✓ Published — your moves are locked in for this phase';
@@ -1676,11 +1987,23 @@ function renderSubmitStatus() {
   const found = online.comments && online.login && findSubmission(online.comments, online.login);
   const s = found && found.submission;
   if (s && matchesPhase(s) && s.power === p) {
+    // Dragging a unit rewrites the order box, and that is indistinguishable
+    // from dragging one *before* submitting — so say outright when the box and
+    // the submission have parted company. Otherwise "✓ Submitted" quietly
+    // refers to orders that are no longer the ones on screen.
+    if (normalizeOrders(powerBlockText(p)) !== normalizeOrders(s.orders)) {
+      el.classList.remove('done');
+      el.classList.add('drift');
+      el.textContent = '✎ The box no longer matches what you submitted — 📤 Submit again to update it';
+      btn.classList.add('primary');
+      return;
+    }
     const when = s.submittedAt ? ' · ' + new Date(s.submittedAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '';
     el.textContent = `✓ Submitted${when} — resubmit any time before the deadline`;
   } else {
     el.textContent = 'Not submitted for this phase yet';
     el.classList.remove('done');
+    btn.classList.add('primary');
   }
 }
 
@@ -2303,15 +2626,18 @@ async function doPublish() {
     game.gistUrl = url;
     game.published = true;
     game.isOwner = true;
+    delete game.branchedFrom; // it is its own game now, not a copy of one
     game.publishedState = S.boardSnapshot(game);
     S.saveGame(game);
     refreshAll();
     const shareLink = `${location.origin}${location.pathname}?gist=${id}`;
     prompt(
-      'Published! Send this link to every player. They can watch the game, ' +
-      'pick their country to write orders and copy them into an email to you, ' +
-      'and branch the position to test ideas. After you resolve a turn, use ' +
-      '"☁ Publish changes" so everyone sees the latest position at the same link.',
+      'Published — this sandbox is now the live game, and you are its game master. ' +
+      'Send this link to every player: they get the position live, can pick their ' +
+      'country to draft orders, and can preview or branch freely without ever ' +
+      'touching it. Assign their GitHub usernames in 👥 Set players so they can ' +
+      'submit in-app. After you resolve a turn, "☁ Publish changes" is what the ' +
+      'table sees.',
       shareLink
     );
   } catch (e) {
@@ -2330,16 +2656,55 @@ async function doUpdatePublished() {
     game.publishedState = S.boardSnapshot(game);
     S.saveGame(game);
     $('btn-update-published').disabled = !boardDirty();
+    updateSyncPill();
     const d = deadlineDate();
     const hasPlayers = game.players && Object.values(game.players).some(Boolean);
     if (hasPlayers && (!d || d.getTime() <= Date.now())) {
-      toast('Changes published — now confirm the next deadline in 👥 Players', 'info');
+      toast(`Published ${S.phaseLabel(game)} — now confirm the next deadline in ⏰ Deadline`, 'info');
     } else {
-      toast('Changes published', 'info');
+      toast(`Published — every player now sees ${S.phaseLabel(game)}`, 'info');
     }
   } catch (e) {
     toast('Publish failed: ' + e.message);
     if (isAuthError(e)) askToken();
+  }
+}
+
+// The way back from any accident on a published game: throw the local copy
+// away and take the gist's again. 👁 View published state shows you the
+// difference; this is the button that resolves it the other way from ☁ Publish
+// changes. The order box is deliberately left alone — an unsubmitted draft is
+// the one thing here worth more than the position, which can always be
+// re-fetched.
+async function revertToPublished() {
+  if (!isOnline() || !game.gistId) return;
+  if (!confirm(
+    'Reload the published position?\n\n' +
+    'Every local change to this game\'s board, phase and history is thrown away ' +
+    'and replaced with what is on the shared link. Your draft orders stay in the box.'
+  )) return;
+  try {
+    const { game: fresh } = await fetchPublished(game.gistId);
+    const keep = {
+      name: game.name,
+      gistId: game.gistId,
+      gistUrl: game.gistUrl,
+      published: true,
+      isOwner: game.isOwner,
+      myCountry: game.myCountry,
+      assignedPower: game.assignedPower,
+    };
+    if (publishedPreview) exitPublishedPreview();
+    playback = null;
+    game = Object.assign(S.importGame(JSON.stringify(fresh)), keep);
+    game.settings = S.gameSettings(game);
+    game.publishedState = S.boardSnapshot(game);
+    S.saveGame(game);
+    refreshAll();
+    toast('Reloaded the published position', 'info');
+    refreshOnlineStatus();
+  } catch (e) {
+    toast('Could not reload: ' + e.message);
   }
 }
 
@@ -2461,6 +2826,12 @@ async function init() {
   $('btn-sandbox').onclick = () => openGame(S.sandboxGame(uniqueName(($('new-name').value.trim() || 'Sandbox'))));
   $('import-file').onchange = (e) => e.target.files[0] && importFile(e.target.files[0]);
   $('btn-home').onclick = () => {
+    // a GM walking away from an unpublished turn is the one exit worth
+    // catching: the table is still waiting on a board only this browser has
+    if (boardDirty() && !confirm(
+      'This game has changes that are not published yet.\n\n' +
+      'Leave anyway? They stay saved here — ☁ Publish changes when you come back.'
+    )) return;
     if (debugPower && game && game.gistId) {
       cleanupDebugSubmission(game.gistId, debugCapturedComment).catch(() => {});
       debugPower = null;
@@ -2475,6 +2846,7 @@ async function init() {
   $('btn-edit').onclick = toggleEditMode;
   $('btn-mode-support').onclick = () => toggleOrderMode('support');
   $('btn-mode-convoy').onclick = () => toggleOrderMode('convoy');
+  $('btn-mode-arrange').onclick = () => toggleOrderMode('arrange');
   // on mobile the toggles float just below the topbar, whose height depends on
   // the phone's font size and on whether the phase label wraps
   const topbarH = () =>
@@ -2510,12 +2882,17 @@ async function init() {
   });
 
   $('orders-text').addEventListener('input', onOrdersChanged);
-  $('btn-resolve').onclick = resolveCurrent;
-  $('btn-resolve-final').onclick = resolveAndSkip;
+  // on a game you do not own, resolving is a preview and never moves the board
+  $('btn-resolve').onclick = () => (isReadOnly() ? previewResolve(false) : resolveCurrent());
+  $('btn-resolve-final').onclick = () => (isReadOnly() ? previewResolve(true) : resolveAndSkip());
   $('btn-token').onclick = doEditToken;
   $('btn-publish').onclick = doPublish;
   $('btn-update-published').onclick = doUpdatePublished;
   $('btn-view-published').onclick = doViewPublished;
+  $('btn-revert-published').onclick = revertToPublished;
+  $('btn-branch-top').onclick = branchCurrent;
+  $('btn-open-source').onclick = openBranchSource;
+  $('btn-sync').onclick = doUpdatePublished;
   $('btn-exit-preview').onclick = exitPublishedPreview;
   $('btn-load-gist').onclick = () => loadPublishedGame($('load-gist-input').value);
   $('country-select').onchange = () => {
@@ -2606,6 +2983,7 @@ async function init() {
   $('pb-continue').onclick = continuePlayback;
   $('pb-back-current').onclick = endPlayback;
   $('pb-copy').onclick = copyResults;
+  $('pb-branch').onclick = branchCurrent;
   document.addEventListener('keydown', (e) => {
     if (playback && !$('panel-playback').hidden && document.activeElement.tagName !== 'TEXTAREA') {
       if (e.key === 'ArrowRight') stepPlayback(1);

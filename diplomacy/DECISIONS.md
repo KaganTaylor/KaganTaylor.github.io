@@ -97,7 +97,9 @@ The sidebar becomes a bottom sheet with an Edit / Orders / Standings tab bar. Tw
 
 The tab bar is `position: fixed`, so `#main` has to reserve its height explicitly or the board runs underneath it.
 
-The topbar's overflow (`⋮`) menu only exists on mobile: on desktop its wrapper is `display: contents`, which dissolves it and lets Publish/Export sit inline in the topbar. That is also why the wrapper has to be restored to a real box in the mobile media query — `display: contents` cancels `position: relative`, so the absolutely-positioned menu was anchoring to the page instead of to the button, and opened below the bottom of the viewport (it looked like the button did nothing).
+The topbar's actions live behind one ⚙ Settings drop-down at every width (`#settings-wrap`, which must stay `position: relative` for the menu to anchor to the button rather than the page). They used to sit inline on desktop, with `display: contents` dissolving the wrapper; that stopped scaling once the menu held publish, view/revert published, branch, game settings, export, players, submissions and the debug controls.
+
+**⚙ Settings must never be the item pushed off the right-hand edge** — on a published game it is the only way to reach the publish actions, and in 🕵 debug view it is the only way out. Everything else in the topbar is `flex: none`, so anything added there has to buy its room from something: `#game-name` is the one item allowed to shrink and ellipsise, `#deadline-countdown` and the debug banner drop to icons, and `#phase-label` is hidden outright on mobile because `Board.setPhaseText()` already prints it into the corner of the map.
 
 ---
 
@@ -107,11 +109,55 @@ It was a ☰ burger. The button does not open a drawer or expand a menu — it l
 
 ---
 
+## There are two kinds of game, and only two
+
+A game is either **☁ online** — a published gist, with one authoritative position and one writer — or **🧪 a sandbox**: private to this browser, freely editable, disposable. "Local game", "practice game", "branch" and "empty-board sandbox" used to be four things; they are all the second one now.
+
+The reason is that the game is only ever really *played* online. Everything local is thinking-out-loud: setting up a position to check a tactic, branching the live game to plan three moves ahead, blitzing a few turns to see where a year goes. Those want the same permissions as each other (edit anything, resolve anything, throw it away), and the *opposite* permissions from the real game. Two kinds, drawn along the line that actually matters — *can what I do here change the real game?* — beat four kinds drawn along how the file happened to be created.
+
+`gameMode()` in `js/app.js` names the four faces of those two kinds: `sandbox`, `gm`, `player` (an assigned power) and `spectator`. It is written to `#game-screen[data-mode]`, so the stylesheet reads the same answer the interaction code does and the two cannot drift apart. It is derived from `isOwnerView()`, not raw `isOwner`, so a game master in 🕵 debug view sees the `player` colours too — the point of that mode is a faithful simulation.
+
+### The state is visible before it is enforced
+
+A rule you can only discover by tripping over it is a bad rule. So the mode is on screen in three places at once, in one colour — amber for sandbox, blue for online:
+
+- a **chip** beside the game's name (`🧪 Sandbox`, `☁ Live · 👑 Game master`, `☁ Live · 🎖 France`, `☁ Live · 👁 Watching`),
+- a **stripe** along the top edge of the topbar,
+- a **ring** around the board itself.
+
+The home screen carries the same split: online games and sandboxes are separate labelled groups, each row tinted to match, each with its icon, the role you hold, the deadline countdown, and — for a branch — the game it came from.
+
+On a phone the chip keeps its colour and icon and drops its words, and `#phase-label` is hidden outright. The topbar is a row of `flex: none` items and had no give left once the chip and the ● pill joined it; the phase label is the one thing in it that is already on screen twice, since `Board.setPhaseText()` prints the same string into the corner of the map. That protects the rule from the mobile-layout section: ⚙ Settings must never be what gets pushed off the edge.
+
+---
+
 ## Publishing
 
 A published game is a public GitHub gist, written with a personal access token the player supplies (classic token, `gist` scope only — fine-grained tokens cannot access gists). The token is kept in `localStorage` and never leaves the browser except to `api.github.com`.
 
-Only the browser that published a game can advance it (`isOwner`). Everyone else opening the link gets a live, read-only view: they may pick their country, write and copy their own orders, and branch the position into a private practice game, but not resolve the real one. That keeps the game master authoritative without needing a server.
+Only the browser holding the publisher's token can advance a published game (`isOwner`). Publishing is also the one-way door out of the sandbox: **a sandbox becomes the real game by being published**, which is why there is no separate "create an online game" path.
+
+### Resolving a game you do not own is a preview, not a resolution
+
+Everyone else opening the link gets a live view — pick a country, write and drag orders, submit them if assigned — but their Resolve is relabelled **👁 Preview result** and adjudicates on a *throwaway clone* of the position (`shadowGame()` / `previewResolve()` in `js/app.js`). The playback panel reads nothing but the history entry it is handed, so the whole step-through, the animation and 📋 Copy results all work unchanged while the stored game is never touched; closing the playback re-renders the live position over the top.
+
+The old behaviour resolved the viewer's own copy, and only after an auto-publish deadline had passed. That had it backwards in both directions. It let a stray click silently walk a player's board a turn ahead of the table's — the divergence that makes someone plan against a position nobody else can see — while *withholding* the harmless and genuinely useful half. Because previewing costs nothing now, it is offered at all times: guess what the other six will do, preview it, and 🌿 **Continue in a sandbox** if the outcome was worth keeping.
+
+A preview keeps `Continue ➜` (relabelled *▶ Play the moves*) so the animation still plays, but it stops on the resulting position instead of advancing a phase — there is no next phase to advance into.
+
+That leaves branching as the single escape hatch from every read-only situation, so it is reachable from everywhere: ⚙ Settings, the History panel, and the preview itself. A branch records where it came from (`branchedFrom`), shows it, and offers **↩ Open source game** to get back.
+
+### The ● pill: saying out loud what boardDirty() already knew
+
+`boardDirty()` and `publishedState` already tracked the game master's position moving on from the shared link, but the only thing they drove was a *disabled button inside a closed menu* — so a resolved-but-unpublished turn looked exactly like a published one. That is half of "losing track of the published state": the fact was computed and then not communicated.
+
+So the same fact gets a **● pill** in the topbar, naming the phase the players are still looking at (`S.phaseLabel(game.publishedState)` — the snapshot carries year/season/step, so no new bookkeeping was needed) and clickable to publish. Alongside it, ⚙ → **⟲ Revert to published** resolves the divergence the other way: refetch the gist and throw the local copy away. It deliberately keeps the order box, since an unsubmitted draft is the one thing here worth more than the position, which can always be re-fetched. 👁 View published state, ● publish, ⟲ revert are then the full set — see the difference, push it, or drop it.
+
+A viewer's copy heals itself anyway (their home-screen rows always reload through the gist), which is why the pill is the game master's alone. The confirmations follow the same line: editing the official board, undoing an official turn and walking away from an unpublished one all ask first; nothing in a sandbox ever does.
+
+### Orders are never state, but only the box says so
+
+A drag on the map looks identical whether it is a draft, a submission or the official record, so the order box names which: it is titled *Draft orders* for anyone who does not own the game, and carries a one-line note per role. For an assigned player there is one more distinction worth surfacing — **submitted** and **what is in the box now** are different things the moment they drag anything. So the submission status compares the two (ignoring comments, spacing and case) and says *"the box no longer matches what you submitted"* rather than a ✓ that refers to orders no longer on screen.
 
 ---
 
@@ -182,3 +228,15 @@ The countdown lives in the topbar — not just the sidebar, where the old deadli
 The one comment a debug session *can* touch is the GM's own — if they happen to also be a real assigned player elsewhere, or from a previous test — so `enterDebugView()` captures it byte-for-byte (`{commentId, body}`) before doing anything, and `exitDebugView()` either restores that exact body or, if none existed, deletes whatever a debug submit created. This is deliberately implemented as a real GitHub comment (through the same `submitOrders()` path a real player uses) rather than a mocked/local-only submission, specifically so the GM is testing the real network path, not a simulation of it — the entire point of the feature is to catch bugs in the actual submit flow.
 
 Because leaving a debug session open by navigating away (🏠 Home, or opening a different game) would otherwise strand a stray comment on the old game's gist, both paths run the same restore-or-delete cleanup (`cleanupDebugSubmission()`) as a best-effort safety net, independent of `exitDebugView()`'s own toast/UI handling — cleanup is a pure network operation against whichever gist/captured-state is passed in, not tied to whatever `game` happens to be current when it runs.
+
+---
+
+## ✋ Arrange: a sandbox drag can mean "put it there" instead
+
+A sandbox exists to think in, and thinking is "what if that army were over *here*?" at least as often as "what if it moved there?". Getting a piece somewhere illegal meant switching into the full board editor and back out again, once per idea.
+
+So in a sandbox — and only in a sandbox — a drag has a second meaning: **Alt-drag repositions the piece**, ignoring adjacency, unit-type routing and whose phase it is. `✋ Arrange` is the touchscreen equivalent, exactly as 🤝/⚓ are for ⇧/Ctrl, and sits beside them. Which meaning a drag has is decided at *pointerdown* (`canDrag` now receives the event), not at drop, so releasing Alt half way through a drag cannot turn a reposition into a move order.
+
+Unlike the other two toggles it is **not** one-shot. Rearranging is something you do to five pieces in a row, and re-arming between each would be the whole interaction. The risk that trades against — a stray drag quietly teleporting a unit — is covered by making the mode loud instead: the board wears a thick amber ring for as long as it is armed, and the toggle is lit in the sandbox's amber rather than the order-writing blue, because it is the one toggle that stops writing orders altogether.
+
+The full ✏ Edit board (place, erase, set supply-center owners, reset to 1901) is now available in *every* sandbox rather than only an empty one — a branched position is exactly where you want to add a hypothetical fleet. On a published game it stays available to the game master, who occasionally has to correct the official board by hand, but asks first and points at branching as the alternative.

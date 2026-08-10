@@ -34,7 +34,9 @@ a { color: #7fb4ff; }
 
 /* ---------- home ---------- */
 #home-screen { display: flex; align-items: center; justify-content: center; }
-.home-card { max-width: 620px; padding: 2rem; }
+/* wide enough for the three groups to sit side by side — the middle one now
+   carries two labelled sections of games rather than one flat list */
+.home-card { max-width: 900px; padding: 2rem; }
 .home-card h1 { margin: 0 0 0.4rem; }
 .subtitle { color: #aab3c0; margin-top: 0; }
 .home-actions { display: flex; gap: 2rem; margin: 1.5rem 0; flex-wrap: wrap; }
@@ -42,14 +44,38 @@ a { color: #7fb4ff; }
 .home-group h2 { font-size: 1rem; margin: 0; color: #aab3c0; }
 #game-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 #game-list li { display: flex; gap: 6px; align-items: center; }
-#game-list .load { flex: 1; text-align: left; }
+#game-list .load { flex: 1; text-align: left; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 #game-list .del { padding: 6px 8px; }
 #game-list .meta { color: #8892a0; font-size: 0.85em; }
-#game-list li.published .load { border-color: #6b8fc9; background: #1f2b40; }
-#game-list li.published .load:hover { background: #253355; }
+#game-list .gname { font-weight: 600; }
+#game-list .gicon { flex: none; }
+#game-list .from { flex-basis: 100%; color: #9a8358; }
+
+/* The list is split by the same two kinds the game screen uses, and each row
+   is tinted by its kind — ☁ online games blue, 🧪 sandboxes amber — so which
+   of your games is the real one is answerable without reading a word. */
+#game-list li.group {
+  display: block; margin: 8px 0 0; padding-bottom: 3px;
+  color: #8892a0; font-size: 0.85em; border-bottom: 1px solid #333a46;
+}
+#game-list li.group:first-child { margin-top: 0; }
+#game-list li.gm .load,
+#game-list li.player .load,
+#game-list li.spectator .load { border-color: #4f7ec0; background: #1c2534; }
+#game-list li.gm .load:hover,
+#game-list li.player .load:hover,
+#game-list li.spectator .load:hover { background: #24314a; }
+#game-list li.sandbox .load { border-color: #6a5638; background: #262119; }
+#game-list li.sandbox .load:hover { background: #33291c; }
+
 .badge { font-size: 0.8em; padding: 2px 8px; border-radius: 10px; }
 .badge.published { background: #1f2b40; color: #8fb4ea; border: 1px solid #3f5c8f; }
 .badge.sandbox { background: #2b2010; color: #e0b070; border: 1px solid #8f6a3f; }
+.badge.role-gm { background: #24314a; color: #a8c8f5; border: 1px solid #4f7ec0; }
+.badge.role-player { background: #1f2b40; color: #8fb4ea; border: 1px solid #3f5c8f; }
+.badge.role-spectator { background: #262b33; color: #9aa4b2; border: 1px solid #4a5361; }
+.badge.deadline { background: #1c2a22; color: #7fc99a; border: 1px solid #3f7a58; }
+.badge.deadline.past { background: #3a2f18; color: #ffc46b; border: 1px solid #8a6a2f; }
 .badge.neutral { background: #262a31; color: #8892a0; border: 1px solid #3a4150; }
 .badge.warn { background: #3a2f10; color: #ffc46b; border: 1px solid #8f6a3f; }
 .badge.danger { background: #402b2b; color: #ff8484; border: 1px solid #7a4444; }
@@ -84,8 +110,53 @@ a { color: #7fb4ff; }
 }
 #topbar .spacer { flex: 1; }
 
+/* ---------- game-state identity ---------- */
+/* One question has to be answerable from anywhere on this screen: can what I
+   do here change the real game? Three things answer it in the same colour —
+   a stripe along the top of the topbar, the chip beside the game's name, and
+   a ring around the board itself. Amber = 🧪 sandbox (yours, disposable);
+   blue = ☁ online (shared, and only the game master moves it). The mode is
+   written to #game-screen[data-mode] by refreshAll(), so the stylesheet and
+   the interaction rules cannot disagree about which state we are in. */
+#topbar { border-top: 3px solid transparent; }
+#game-screen[data-mode="sandbox"] #topbar { border-top-color: #a97a3f; }
+#game-screen[data-mode="gm"] #topbar { border-top-color: #4f7ec0; }
+#game-screen[data-mode="player"] #topbar { border-top-color: #4f7ec0; }
+#game-screen[data-mode="spectator"] #topbar { border-top-color: #5b6472; }
+
+.mode-chip {
+  flex: none; display: inline-flex; align-items: center; gap: 5px;
+  font-size: 0.8em; padding: 3px 9px; border-radius: 10px; white-space: nowrap;
+  border: 1px solid transparent; cursor: default;
+}
+#game-screen[data-mode="sandbox"] .mode-chip { background: #2b2010; color: #e0b070; border-color: #8f6a3f; }
+#game-screen[data-mode="gm"] .mode-chip { background: #24314a; color: #a8c8f5; border-color: #4f7ec0; }
+#game-screen[data-mode="player"] .mode-chip { background: #1f2b40; color: #8fb4ea; border-color: #3f5c8f; }
+#game-screen[data-mode="spectator"] .mode-chip { background: #262b33; color: #9aa4b2; border-color: #4a5361; }
+
+/* The ● pill: the game master's position has moved on from the shared link.
+   boardDirty() already knew; without this it only ever greyed out a button
+   inside a closed menu, so an unpublished turn looked like a published one. */
+.sync-pill {
+  flex: none; display: inline-flex; align-items: center; gap: 5px;
+  font-size: 0.8em; padding: 3px 10px; border-radius: 10px;
+  background: #3a2f18; color: #ffc46b; border: 1px solid #8a6a2f;
+}
+.sync-pill:hover { background: #4a3c1e; }
+.sync-pill .sp-dot { font-size: 0.9em; }
+
 #main { flex: 1; display: flex; min-height: 0; }
-#board-pane { flex: 1; min-width: 0; overflow: auto; background: #101215; display: flex; }
+#board-pane {
+  flex: 1; min-width: 0; overflow: auto; background: #101215; display: flex;
+  box-shadow: inset 0 0 0 2px transparent;
+}
+#game-screen[data-mode="sandbox"] #board-pane { box-shadow: inset 0 0 0 2px rgba(169, 122, 63, .40); }
+#game-screen[data-mode="gm"] #board-pane { box-shadow: inset 0 0 0 2px rgba(79, 126, 192, .40); }
+#game-screen[data-mode="player"] #board-pane { box-shadow: inset 0 0 0 2px rgba(79, 126, 192, .26); }
+#game-screen[data-mode="spectator"] #board-pane { box-shadow: inset 0 0 0 2px rgba(91, 100, 114, .30); }
+/* ✋ Arrange is sticky, so it has to be loud: while it is armed a drag moves a
+   piece instead of ordering it, and the board says so the whole time. */
+#board-pane.arranging { box-shadow: inset 0 0 0 4px rgba(224, 176, 112, .8) !important; }
 #board { margin: auto; width: 100%; height: 100%; }
 #board svg { width: 100%; height: 100%; display: block; }
 
@@ -114,10 +185,23 @@ details.panel:not([open]) summary { margin-bottom: 0; }
 #edit-tools .tool.active { background: #2f6b46; border-color: #3f8f5e; }
 #btn-edit.active { background: #6b4a2f; border-color: #9c6b3f; }
 
+/* What the order box IS in this game — a draft, a submission, or the record.
+   A drag on the map looks identical in all three, so the box says which. */
+.draft-note {
+  margin: 0 0 8px; padding: 6px 9px; border-radius: 6px; font-size: 0.85em;
+  background: #1c2534; border-left: 3px solid #4f7ec0; color: #a8c8f5;
+}
+#game-screen[data-mode="gm"] .draft-note {
+  background: #1e2a22; border-left-color: #4f9a6e; color: #9fd0aa;
+}
+.branch-note { margin: 0 0 8px; color: #c9a46b; font-size: 0.85em; }
+#panel-playback.preview #playback-title { color: #8fb4ea; }
+
 /* ---------- online play (submissions + player assignments) ---------- */
 #submit-row { align-items: center; }
 #submit-status { align-self: center; }
 #submit-status.done { color: #6fce7f; }
+#submit-status.drift { color: #ffc46b; }
 #submissions-rows, #players-assign-rows { display: flex; flex-direction: column; gap: 6px; }
 .pstatus.st-none { color: #77808e; }
 .pstatus.st-submitted { color: #ffc46b; }
@@ -143,6 +227,12 @@ details.panel:not([open]) summary { margin-bottom: 0; }
 .mode-btn { display: inline-flex; align-items: center; gap: 6px; }
 .mode-btn[aria-pressed="true"] { background: #2f4d6b; border-color: #5a90c9; color: #dcecff; }
 .mode-btn[aria-pressed="true"]:hover { background: #37597b; }
+/* ✋ Arrange wears the sandbox's amber, not the order-writing blue — it is the
+   one toggle that stops writing orders and starts moving the pieces, and the
+   ring it puts round the board is the same colour. */
+#btn-mode-arrange[aria-pressed="true"] { background: #5c4426; border-color: #c99a56; color: #ffe0b0; }
+#btn-mode-arrange[aria-pressed="true"]:hover { background: #6b4f2b; }
+#btn-mode-arrange[aria-pressed="true"] .mode-label { color: #ffe0b0; }
 
 #standings { width: 100%; border-collapse: collapse; font-size: 0.9em; }
 #standings td { padding: 2px 6px; }
@@ -292,6 +382,26 @@ dialog.modal h2 { margin: 0 0 14px; font-size: 1.1rem; }
   #debug-view-banner .debug-view-label { display: none; }
   #btn-edit { display: none; } /* superseded by the mobile Edit tab */
   .settings-label { display: none; } /* icon-only ⚙ button on mobile */
+
+  /* The state indicators keep their colour but drop their words, on the same
+     reasoning as the debug banner above: the icon and the ● dot carry it, and
+     the game's name is worth more room than the label. The topbar stripe and
+     the board ring are unaffected. */
+  .mode-chip .mc-text, .sync-pill .sp-text { display: none; }
+  .mode-chip, .sync-pill { padding: 2px 6px; font-size: 0.75em; min-height: 0; }
+  /* The game's name is the only thing here that can afford to lose room, so
+     it is the only thing allowed to: everything else in the bar is flex: none
+     and would otherwise push ⚙ Settings off the right-hand edge between them
+     (and ⚙ Settings is the sole way out of debug view — see above). */
+  #game-name {
+    flex: 1 1 auto; min-width: 2.5em;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* …and even that is not enough room once the state chip and the ● pill are
+     in the bar too, so the phase label goes: it is the one item here that is
+     already on screen twice, since Board.setPhaseText() prints the very same
+     string into the corner of the map. */
+  #phase-label { display: none; }
 
   /* Lifted out of the topbar and parked over the map's top-right corner: big
      thumb-sized targets that stay put while panning/zooming, sitting clear of

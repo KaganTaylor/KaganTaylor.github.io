@@ -4,19 +4,21 @@ A dependency-free web app for playing and practicing [Diplomacy](https://en.wiki
 
 ## Features
 
+- **Two kinds of game, told apart at a glance** — a game is either **☁ online** (a published gist: one real position, run by its game master) or **🧪 a sandbox** (private to your browser, edit and resolve anything, throw it away). Branches and practice games are just sandboxes. Which one you are in is on screen three times over — a chip by the game's name, a coloured stripe along the topbar, and a ring round the board — and the home screen groups your games the same way, with the role you hold and the deadline countdown on each row. See [Game states](#game-states).
 - **DATC-validated rules engine** — all 167 [Diplomacy Adjudicator Test Cases](https://webdiplomacy.net/doc/DATC_v3_0.html) pass, including convoy paradoxes (Szykman rule), circular movement, coast edge cases, retreat and build rules. Open `test/datc.html` to run the suite in your browser.
 - **Step-through visualization** — click forward/back through each order (or skip to the end), exactly like resolving on a physical board, then watch every unit glide simultaneously to its final position (bounced units lunge and fall back).
 - **Drag to order** — drag a unit to its destination, drop it on itself to hold, ⇧-drop on a unit to support it, Ctrl-drop (a fleet at sea, onto a moving army) to convoy. No modifier keys? Turn on the **🤝 Support** or **⚓ Convoy** toggle instead — in the topbar on desktop, floating over the top-right of the map on a phone — and the next drag writes that order; the toggle switches itself off again once it does. A coast picker pops up when a fleet move is ambiguous. Everything is written into the plain-text order box, which stays the source of truth.
-- **Board editor** — toggle ✏ Edit board to place/remove armies and fleets, drag units anywhere, and set supply-center owners; scroll to zoom, drag empty space to pan.
+- **Board editor** — toggle ✏ Edit board in any sandbox to place/remove armies and fleets, drag units anywhere, and set supply-center owners; scroll to zoom, drag empty space to pan.
+- **✋ Arrange (sandboxes)** — **Alt-drag** any piece to somewhere illegal without leaving order entry, or turn on the ✋ toggle and just drag. The board wears an amber ring while it is armed, so you always know whether a drag is writing an order or moving a piece.
 - **Works on a phone** — the map fills the screen, with Edit / Orders / Standings as bottom sheets that shrink the board rather than cover it. Tap any province to outline it, drag to pan, pinch to zoom, double-tap to reset.
 - **Split coasts are drawn** — Spain, St Petersburg and Bulgaria have their individual coastlines marked along the sea, so it's clear a fleet must pick one. Highlighting still outlines the country as a whole. See [Customising the look](#customising-the-look) to change the coastline colour.
 - **Undo** — step back through resolved phases; your order text comes back with each undo.
 - **Tolerant order parsing** — `A Par - Bur`, `F ENG S A Bre - Pic`, `via convoy`, full names or abbreviations, all coast notations (`spa/sc`, `Spa(sc)`).
 - **Full game loop** — spring/fall movement, retreats, supply-center capture, winter builds & civil-disorder disbands.
-- **History & branching** — replay any past turn's step-through; branch a practice copy from any point to test future moves.
+- **History & branching** — replay any past turn's step-through; 🌿 branch any position (including a preview's outcome) into a sandbox, which remembers where it came from and offers a way back.
+- **Nothing you do to someone else's game can break it** — on a game you don't own, Resolve becomes **👁 Preview result**: it adjudicates on a throwaway copy, so you can try any orders — including guesses at what the other six powers will do — and the live position is still there when you close the playback.
 - **Sharing** — export/import the whole game as a JSON file; state also autosaves in your browser.
-- **Online play** — publish a game as a GitHub gist link; assigned players submit their orders in-app with their own GitHub token. When the game master's confirmed deadline passes, moves either reveal to everyone instantly (auto publish) or go to the game master first for review (manual publish, the default). See [Playing online](#playing-online).
-- **Sandbox** — set up any position (units, coasts, supply centers) and try things.
+- **Online play** — publish a sandbox to turn it into the real game; assigned players submit their orders in-app with their own GitHub token. When the game master's confirmed deadline passes, moves either reveal to everyone instantly (auto publish) or go to the game master first for review (manual publish, the default). See [Playing online](#playing-online).
 
 ## Running
 
@@ -51,18 +53,41 @@ Waive
 
 Orders can also be written per-line as `France: A Par - Bur` instead of using power headings.
 
+## Game states
+
+Every game is one of two things, and the app never leaves you guessing which:
+
+| | 🧪 **Sandbox** (amber) | ☁ **Online** (blue) |
+| --- | --- | --- |
+| Where it lives | this browser only | a public GitHub gist |
+| Who can move the board | you | the game master, and only by publishing |
+| ✏ Edit board, ✋ Arrange | yes | game master only (it asks first) |
+| Resolve | resolves, for real | game master resolves; **everyone else previews** |
+| Undo / Redo | yes | game master only |
+| Becomes | an online game, if you 📣 Publish it | — |
+
+Branches, practice copies and the old empty-board sandbox are all just sandboxes. **Publishing a sandbox is what makes it the real game.**
+
+**Telling them apart.** The chip beside the game's name says which (`🧪 Sandbox`, `☁ Live · 👑 Game master`, `☁ Live · 🎖 France`, `☁ Live · 👁 Watching`), a stripe along the top of the topbar carries the same colour, and so does a ring around the board. On the home screen your games are grouped into ☁ Online games and 🧪 Sandboxes, each row showing its role badge, its deadline countdown, and — for a branch — the game it came from.
+
+**Previewing.** On any game you don't own, Resolve reads **👁 Preview result** and adjudicates on a throwaway copy: step through it, play the moves, copy the results, and the published position is untouched when you close it. If the outcome was worth keeping, **🌿 Continue in a sandbox** picks it up from there.
+
+**Keeping track of what's published (game master).** After you resolve, your browser holds a position the shared link doesn't. A **● Unpublished** pill appears in the topbar — it names the turn your players can still see, and clicking it publishes. ⚙ Settings has the other two halves: **👁 View published state** to see what's actually live, and **⟲ Revert to published** to throw your local changes away and reload it (your draft orders in the box are kept). Editing the official board, undoing an official turn and leaving with an unpublished one all ask for confirmation first.
+
+**Knowing what's submitted (player).** Your order box is a private draft; only 📤 Submit moves sends it. If you drag or type anything after submitting, the status line says so — *"the box no longer matches what you submitted"* — instead of a ✓ that refers to orders you've since changed.
+
 ## Playing online
 
 A published game (a public GitHub gist) can collect each player's orders directly, replacing the weekly email round.
 
 **Game master**
 
-1. Publish the game (📣 Publish — needs a classic personal access token with only the `gist` scope).
+1. Publish the sandbox you set the game up in (⚙ Settings → 📣 Publish — needs a classic personal access token with only the `gist` scope). It becomes the live game and you become its game master.
 2. In **⚙ Settings → 👥 Set players**, enter each power's player as their GitHub username and 💾 Save.
 3. Pick the **⚙ publish mode**: **manual** (default) — when the deadline passes, submissions lock and only you see them until you release the results; **auto** — everyone sees all moves the moment the deadline passes.
 4. Confirm the phase's **⏰ deadline**, in the sidebar's Deadline panel: **+1 week** from the previous deadline is the default rhythm for movement, **+24 h** / **+48 h** suit retreats and builds, or pick any date and time. A live `DD:HH:MM:SS` countdown sits in the topbar for everyone (GM and players alike), amber while counting down and red once it's passed, so it's always obvious whether orders are open. **Submissions are closed both before a deadline is ever set and after it passes** — no late entries, and nothing to be "on time" against until you confirm one (a submission comment edited after the deadline is void).
 5. Who's submitted and what's published lives in one place, reached two ways: **⏰ Deadline → 🔍 Review submitted orders** (the normal per-phase step) or **⚙ Settings → 🔍 Submissions** (available any time, for the "something's wrong, check one player" case). Inside: **🔍 Review submissions** fills the order box with everyone's moves, for your eyes only — disabled until the deadline passes in manual mode, and skipped entirely in auto mode. If something's wrong, re-open by confirming a new deadline (players keep their submitted orders unless they resubmit). If it all looks right, **📣 Publish results** releases the moves to every player (also gated on the deadline, so results can't leak early). This is deliberately not a permanent sidebar panel — players never see who's submitted, and neither do you unless you open it.
-6. Resolve as normal — orders can be typed, dragged, undone and redone freely, and none of it reaches anyone else until you say so. When you're ready for players to see the new position, click **☁ Publish changes**; it's greyed out whenever your board already matches what's live, so it's always clear whether there's anything to send. **👁 View published state** shows what's actually at the link right now without touching your own game, in case you want to check before publishing. Then confirm the next deadline.
+6. Resolve as normal — orders can be typed, dragged, undone and redone freely, and none of it reaches anyone else until you say so. When you're ready for players to see the new position, click **☁ Publish changes** — or the **● Unpublished** pill that appears in the topbar the moment your board moves ahead of the link, which names the turn your players can still see. It's greyed out whenever your board already matches what's live, so it's always clear whether there's anything to send. **👁 View published state** shows what's actually at the link right now without touching your own game, in case you want to check before publishing, and **⟲ Revert to published** throws your local changes away and reloads it if you'd rather start the turn over. Then confirm the next deadline.
 7. Grace and overrides, inside the same 🔍 Submissions view: **✖** un-publishes a power for the phase so they can resubmit; **📥** force-publishes one power's submission (even a late edit); **📝** publishes whatever the order box holds for a power (the "fix the typo the table forgave" path). The GM can always still type and resolve anything by hand.
 8. **⚙ Settings → 🕵 View as** lets you preview and test the game exactly as one assigned player would — order box locked to their power, a real 📤 Submit moves that exercises the actual network path — without needing their GitHub login. Your own GM controls hide while you're in it, and a **🕵 Viewing as ⟨power⟩** badge stays in the topbar until you **🕵 Exit debug view**. A test submission is posted for real under your own GitHub account (never the real player's — submissions are matched by login, so it can't collide with theirs), then automatically cleaned up on exit: removed if you had no comment of your own before, or restored to exactly what it was if you did.
 
@@ -71,7 +96,8 @@ A published game (a public GitHub gist) can collect each player's orders directl
 1. Open the game link and set a GitHub token (🔑 on the home screen — classic token, `gist` scope only).
 2. If the GM assigned your GitHub username a power, you're locked to it. Write or drag your orders, then press **📤 Submit moves** — enabled once the game master has confirmed a deadline and it hasn't passed yet; the topbar's `DD:HH:MM:SS` countdown (amber while open, red once it's passed) makes it clear at a glance.
 3. Resubmit as often as you like before the deadline. The same GitHub account works from any browser or device — your submitted orders come back with you.
-4. After the deadline: in auto-publish games, **⬇ Load published moves** immediately shows what everyone ordered, and Resolve previews the new board (a local preview — the game master's published update remains the official position). In manual-publish games the moves appear once the game master has reviewed and published the results. Whether other powers have submitted yet is not shown to you — only the game master can check that.
+4. After the deadline: in auto-publish games, **⬇ Load published moves** immediately shows what everyone ordered, and **👁 Preview result** plays out the new board. In manual-publish games the moves appear once the game master has reviewed and published the results. Either way the preview is yours alone — the game master's published update is the official position, and it will simply reload over the top. Whether other powers have submitted yet is not shown to you — only the game master can check that.
+5. Before the deadline, preview anything you like: fill in your best guess at the other six powers' orders and 👁 Preview result. Nothing you draft, drag or preview reaches the game until you 📤 Submit, and **🌿 Branch to sandbox** keeps any line of play worth coming back to.
 
 **No servers, no schedules.** The deadline is enforced by the app itself: submissions are gist comments, GitHub stamps every comment with an edit time, and any client can therefore tell — from public data — which submissions beat the deadline. Nothing needs to run *at* the deadline. An optional GitHub Action (`.github/workflows/diplomacy-publish-moves.yml`, manual `workflow_dispatch` only — it never runs on a schedule) can copy auto-mode games' revealed submissions into per-power `moves-<power>.json` files as a durable record; it needs a repository secret named `DIPLOMACY_GIST_TOKEN` holding the GM's gist-scope token.
 

@@ -484,7 +484,9 @@ export class Board {
 
       const clickProv = this._provinceAtClient(e.clientX, e.clientY);
       const unitProv = this._unitAtClient(e.clientX, e.clientY);
-      const spec = unitProv && this.handlers.canDrag ? this.handlers.canDrag(unitProv) : null;
+      // the event goes through too: whether a drag is an order or a free
+      // reposition depends on the modifier keys held as it starts (Alt-drag)
+      const spec = unitProv && this.handlers.canDrag ? this.handlers.canDrag(unitProv, e) : null;
       drag = {
         from: spec ? unitProv : clickProv,
         spec,

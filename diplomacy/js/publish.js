@@ -20,7 +20,11 @@ function stripForPublish(game) {
   // it is shared state every viewer needs to know their assignment.
   // publishedState is the game master's own bookkeeping of what's already
   // live (see js/app.js boardDirty()) — never itself part of the position.
-  const { gistId, gistUrl, published, isOwner, myCountry, assignedPower, publishedState, ...rest } = game;
+  const {
+    gistId, gistUrl, published, isOwner, myCountry, assignedPower, publishedState,
+    branchedFrom, sandbox,
+    ...rest
+  } = game;
   return rest;
 }
 
