@@ -2332,6 +2332,7 @@ async function refreshOnlineStatus() {
     }
     maybeRestoreSubmission();
     renderOnlineUI();
+    renderPlayAsControls();
   } catch {
     // offline or rate-limited — keep whatever state we already had
   }
