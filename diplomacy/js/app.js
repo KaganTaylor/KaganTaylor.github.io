@@ -2353,7 +2353,15 @@ async function refreshOnlineStatus() {
     const login = token ? await getAuthenticatedLogin(token) : null;
     if (game !== g) return; // user switched games while we were fetching
     if (fresh && fresh.players) g.players = fresh.players;
-    if (fresh && !g.isOwner) {
+    if (fresh) {
+      // deadline/publishMode/settings are pushed to the gist immediately by
+      // their own setters (setDeadline, setPublishMode), never batched with
+      // a board publish — so the gist is authoritative for them even on an
+      // owner's OWN device: opening the game on a second device (or a stale
+      // tab) must not keep showing whatever deadline happened to be cached
+      // locally at last load. Only board state (units/scOwners/pending/
+      // history) stays local-authoritative for the owner, since that's the
+      // GM's possibly-unpublished in-progress position.
       g.deadline = fresh.deadline || null;
       g.publishMode = fresh.publishMode || null;
       // the GM owns the rules — pick up any change so every player's board,
