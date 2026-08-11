@@ -54,7 +54,6 @@
     <button id="btn-sync" class="sync-pill" hidden><span class="sp-dot">●</span><span class="sp-text"></span></button>
     <span id="deadline-countdown" class="badge" hidden title="Whether orders are open for submission"></span>
     <span id="published-preview-banner" class="badge published" hidden>👁 Viewing published state</span>
-    <span id="debug-view-banner" class="badge debug" hidden>🕵<span class="debug-view-label"> Viewing as <span id="debug-view-power"></span> (debug)</span></span>
     <span id="hover-info"></span>
     <span class="spacer"></span>
     <!-- order-mode toggles: a tappable stand-in for ⇧-drop / Ctrl-drop, so a
@@ -95,11 +94,13 @@
           <span>⚡ Auto-Publish</span>
           <span class="switch"><input type="checkbox" id="autopublish-toggle"><span class="slider"></span></span>
         </label>
-        <div id="view-as-row" class="settings-toggle-row" hidden title="Preview and test the game exactly as one assigned player would, without needing their GitHub login">
-          <span>🕵 View as</span>
-          <select id="debug-power-select"><option value="">— pick a power —</option></select>
+        <div id="play-as-row" class="settings-toggle-row" hidden title="Switch between running the game as its master and playing your own assigned power">
+          <span>🎭 Play as</span>
+          <select id="play-as-select">
+            <option value="gm">👑 Game Master</option>
+            <option value="player">🧑 Player</option>
+          </select>
         </div>
-        <button id="btn-exit-debug-view" hidden title="Exit debug view and clean up any test submission">🕵 Exit debug view</button>
       </div>
     </div>
   </header>

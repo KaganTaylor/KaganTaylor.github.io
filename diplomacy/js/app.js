@@ -18,7 +18,7 @@ import { PROVINCES, POWERS } from './map-data.js';
 import {
   getToken, setToken, publishGame, updatePublished, fetchPublished,
   getAuthenticatedLogin, extractGistId,
-  listComments, findSubmission, submitOrders, updateCommentBody, deleteComment,
+  listComments, findSubmission, submitOrders,
   fetchGist, readMovesFiles, readGameFile, writeMovesFiles, upsertMovesEntry,
 } from './publish.js';
 
@@ -56,15 +56,11 @@ let hiddenOrdersText = '';
 // GitHub login. Refetched on load and after every submit/publish action.
 let online = { comments: null, moves: null, login: null, restored: false };
 
-// GM-only "view as player" debug mode (⚙ Settings → 🕵 View as). debugPower is
-// the power currently being impersonated, or null. debugCapturedComment holds
-// the GM's own gist comment exactly as it was before debugging started —
-// {commentId, body}, or null if they had none — so exitDebugView() can put it
-// back (or delete a comment a debug submit created) without ever touching a
-// real player's own comment (submissions are matched by GitHub login, and the
-// GM's login is never a real player's login unless the GM is that player too).
-let debugPower = null;
-let debugCapturedComment = null;
+// A game master who has assigned their own GitHub login to a power in 👥 Set
+// players can freely switch (⚙ Settings → 🎭 Play as) between running the
+// game and genuinely playing that power — see isPlayingAsPlayer() below.
+// game.playAs ('gm' | 'player') persists on the game object like any other
+// setting, so this is a real, durable mode, not a session-only debug state.
 
 // Gates the order box for a published game's GM: hidden until they explicitly
 // ⬇ Load orders, and reset every time a load→resolve→publish cycle finishes
@@ -301,24 +297,32 @@ function gameMode() {
   return assignedPower() ? 'player' : 'spectator';
 }
 
-// A published game can only be advanced by the browser that published it
-// (holds the token that created its gist). Everyone else gets a live,
-// previewable, branchable, but never mutable view of the position. A GM in 🕵
-// debug "view as player" mode is deliberately treated as read-only too, for
-// the same reason: it's supposed to be a faithful simulation of what that
-// player sees — including the fact that resolving is only ever a preview.
-function isReadOnly() {
-  return !!debugPower || !!(game && game.published && !game.isOwner);
+// True when the game master has switched (🎭 Play as) into playing their own
+// assigned power rather than running the game. Requires a genuine self-
+// assignment in game.players — see refreshOnlineStatus(), which resolves
+// game.assignedPower for the owner exactly like it does for anyone else.
+function isPlayingAsPlayer() {
+  return !!(game && game.isOwner && game.assignedPower && game.playAs === 'player');
 }
 
-// True only for the real game master, and only outside debug view — the gate
-// on every GM-only control (Publish changes, Deadline panel, Submissions,
-// Set players, Auto-Publish). Kept separate from the raw game.isOwner fact
-// (still used as-is for identity/permission purposes, e.g. loadPublishedGame)
-// so debug view can hide the GM's own admin controls without touching who
-// actually owns the game.
+// A published game can only be advanced by the browser that published it
+// (holds the token that created its gist). Everyone else gets a live,
+// previewable, branchable, but never mutable view of the position. A GM
+// playing their own assigned power is read-only for the same reason: it's a
+// faithful, real player experience — including the fact that resolving is
+// only ever a preview and orders only reach the game via 📤 Submit.
+function isReadOnly() {
+  return !!(game && game.published && (!game.isOwner || isPlayingAsPlayer()));
+}
+
+// True only for the real game master, and only while running the game rather
+// than playing their own power — the gate on every GM-only control (Publish
+// changes, Deadline panel, Submissions, Set players, Auto-Publish). Kept
+// separate from the raw game.isOwner fact (still used as-is for identity/
+// permission purposes, e.g. loadPublishedGame) so Play-as-Player can hide the
+// GM's own admin controls without touching who actually owns the game.
 function isOwnerView() {
-  return !!(game && game.isOwner && !debugPower);
+  return !!(game && game.isOwner && !isPlayingAsPlayer());
 }
 
 // True once the game master's local position (resolves, undos, redos, board
@@ -336,17 +340,17 @@ function boardDirty() {
 // Viewers of a published game pick the country they play; order entry
 // (typing and dragging) then works for that power only, and "📋 Copy
 // orders" hands them their order block to email to the game master. A GM
-// debugging as a power is locked to it the same way a real player would be.
-// Empty string = spectating / no country chosen.
+// playing as their own power is locked to it the same way a real player
+// would be. Empty string = spectating / no country chosen.
 function myCountry() {
-  return debugPower || (isReadOnly() && game.myCountry) || '';
+  return (isReadOnly() && game.myCountry) || '';
 }
 
 // The power the GM assigned to this browser's GitHub account (game.players
 // maps power → login). An assigned player is locked to that power for the
 // whole game — on every device, since the token resolves to the same login.
 function assignedPower() {
-  return debugPower || (isReadOnly() && game.assignedPower) || '';
+  return (isReadOnly() && game.assignedPower) || '';
 }
 
 // Does a submission/published entry belong to the phase on the table now?
@@ -355,17 +359,10 @@ function matchesPhase(s) {
 }
 
 function openGame(g) {
-  // best-effort cleanup if a debug session on the PREVIOUS game was left
-  // open — normally exitDebugView() already did this before navigating away
-  if (debugPower && game && game.gistId) {
-    cleanupDebugSubmission(game.gistId, debugCapturedComment).catch(() => {});
-  }
   game = g;
   g.settings = S.gameSettings(g); // fill defaults for games saved before settings existed
   playback = null;
   publishedPreview = null;
-  debugPower = null;
-  debugCapturedComment = null;
   gmOrdersLoaded = false;
   online = { comments: null, moves: null, login: null, restored: false };
   S.saveGame(game);
@@ -439,7 +436,7 @@ function refreshAll() {
   renderModeChip();
   renderBranchNote();
   renderDraftNote();
-  renderViewAsControls();
+  renderPlayAsControls();
   renderOnlineUI();
   setOrderMode(null);
   prefillOrders();
@@ -2260,90 +2257,32 @@ function closeSubmissionsModal() {
   $('submissions-modal').hidden = true;
 }
 
-// ---- 🕵 view as player (GM debug mode) -------------------------------------
-// Lets the GM preview and exercise the game exactly as one assigned player
-// would — including a real 📤 Submit moves — without a second GitHub account.
-// Safe by construction: submissions are matched by GitHub login
-// (findSubmission), so a debug submission (posted under the GM's own login)
-// can never overwrite a different real player's comment. The only comment it
-// can touch is the GM's own — captured verbatim before debugging starts and
-// restored (or deleted, if none existed) in exitDebugView().
+// ---- 🎭 play as (game master / own assigned power) -------------------------
+// When the game master has assigned their own GitHub login to a power in 👥
+// Set players, this lets them switch between running the game and genuinely
+// playing that power — real private drafts, a real 📤 Submit that posts a
+// real gist comment under their own login, the same deadline rules as any
+// other player. Switching back to Game Master never touches or reverts a
+// submission; it's purely a change of which UI this browser shows.
 
-// Populates and shows/hides the Settings-menu "View as" picker / "Exit debug
-// view" button. Called from refreshAll() so it stays in sync with published
-// state and player assignments.
-function renderViewAsControls() {
-  const row = $('view-as-row');
-  const exitBtn = $('btn-exit-debug-view');
-  const banner = $('debug-view-banner');
-  const assignedPowers = activePowers().filter((p) => (game.players || {})[p]);
-  const canDebug = !!(game && game.published && game.isOwner && assignedPowers.length);
-  row.hidden = !canDebug || !!debugPower;
-  if (!row.hidden) {
-    const sel = $('debug-power-select');
-    const prev = sel.value;
-    sel.replaceChildren(new Option('— pick a power —', ''));
-    for (const p of assignedPowers) sel.appendChild(new Option(cap(p), p));
-    sel.value = assignedPowers.includes(prev) ? prev : '';
-  }
-  exitBtn.hidden = !debugPower;
-  exitBtn.textContent = debugPower ? `🕵 Exit debug view (${cap(debugPower)})` : '🕵 Exit debug view';
-  banner.hidden = !debugPower;
-  if (debugPower) {
-    $('debug-view-power').textContent = cap(debugPower);
-    banner.title = `Game master debug view — simulating ${cap(debugPower)}. Exit from ⚙ Settings.`;
-  }
+// Populates and shows/hides the Settings-menu "Play as" picker. Called from
+// refreshAll() so it stays in sync with published state and player
+// assignments (game.assignedPower is refreshed by refreshOnlineStatus()).
+function renderPlayAsControls() {
+  const row = $('play-as-row');
+  const canPlay = !!(game && game.published && game.isOwner && game.assignedPower);
+  row.hidden = !canPlay;
+  if (!canPlay) return;
+  const sel = $('play-as-select');
+  sel.options[1].textContent = `🧑 Player (${cap(game.assignedPower)})`;
+  sel.value = isPlayingAsPlayer() ? 'player' : 'gm';
 }
 
-async function enterDebugView(power) {
-  if (!power || !game || !game.isOwner || !game.gistId) return;
-  try {
-    const comments = await listComments(game.gistId);
-    const login = await getAuthenticatedLogin(getToken());
-    const mine = login && comments.find((c) => c.user && c.user.login.toLowerCase() === login.toLowerCase());
-    debugCapturedComment = mine ? { commentId: mine.id, body: mine.body } : null;
-    debugPower = power;
-    game.myCountry = power; // locks the country-select / order box to this power, like a real assigned player
-    toast(`🕵 Viewing as ${cap(power)} — a real 📤 Submit will post for real, then be cleaned up on exit`, 'info');
-    refreshAll(); // also re-runs prefillOrders(), which locks the box to this power via myCountry()
-  } catch (e) {
-    toast('Could not enter debug view: ' + e.message);
-  }
-}
-
-// Restores the GM's own comment to what it was before debugging (or deletes
-// it if it didn't exist), against whichever gist/captured-state is passed in
-// — a pure network op, independent of the current `game`/`debugPower`
-// globals, so it can also run as a fire-and-forget safety net when the GM
-// navigates away from a debug session without explicitly exiting it first
-// (see openGame() and 🏠 Home).
-async function cleanupDebugSubmission(gistId, captured) {
-  const comments = await listComments(gistId);
-  const login = await getAuthenticatedLogin(getToken());
-  const mine = login && comments.find((c) => c.user && c.user.login.toLowerCase() === login.toLowerCase());
-  if (captured) {
-    if (mine && mine.id === captured.commentId && mine.body !== captured.body) {
-      await updateCommentBody(gistId, mine.id, captured.body);
-    }
-  } else if (mine) {
-    await deleteComment(gistId, mine.id);
-  }
-}
-
-async function exitDebugView() {
-  const power = debugPower;
-  if (!power) return;
-  try {
-    await cleanupDebugSubmission(game.gistId, debugCapturedComment);
-    toast(`Exited debug view (${cap(power)}) — any test submission was cleaned up`, 'info');
-  } catch (e) {
-    toast(`Exited debug view, but cleanup failed (${e.message}) — check the gist's comments manually`);
-  } finally {
-    debugPower = null;
-    debugCapturedComment = null;
-    refreshAll();
-    refreshOnlineStatus();
-  }
+function setPlayAs(mode) {
+  if (!game) return;
+  game.playAs = mode === 'player' ? 'player' : 'gm';
+  S.saveGame(game);
+  refreshAll();
 }
 
 // "Set players" modal (⚙ Settings) — assigns the GitHub username for each
@@ -2392,7 +2331,15 @@ async function refreshOnlineStatus() {
     const login = token ? await getAuthenticatedLogin(token) : null;
     if (game !== g) return; // user switched games while we were fetching
     if (fresh && fresh.players) g.players = fresh.players;
-    if (fresh && !g.isOwner) {
+    if (fresh) {
+      // deadline/publishMode/settings are pushed to the gist immediately by
+      // their own setters (setDeadline, setPublishMode), never batched with
+      // a board publish — so the gist is authoritative for them even on an
+      // owner's OWN device: opening the game on a second device (or a stale
+      // tab) must not keep showing whatever deadline happened to be cached
+      // locally at last load. Only board state (units/scOwners/pending/
+      // history) stays local-authoritative for the owner, since that's the
+      // GM's possibly-unpublished in-progress position.
       g.deadline = fresh.deadline || null;
       g.publishMode = fresh.publishMode || null;
       // the GM owns the rules — pick up any change so every player's board,
@@ -2403,8 +2350,10 @@ async function refreshOnlineStatus() {
     online.moves = moves;
     online.comments = comments;
     online.login = login;
+    // Resolved for the owner too — that's what lets a GM who assigned
+    // themselves a power in 👥 Set players genuinely 🎭 Play as that power.
     let assigned = null;
-    if (!g.isOwner && login && g.players) {
+    if (login && g.players) {
       for (const [p, l] of Object.entries(g.players)) {
         if (l && l.toLowerCase() === login.toLowerCase()) { assigned = p; break; }
       }
@@ -2422,6 +2371,7 @@ async function refreshOnlineStatus() {
     }
     maybeRestoreSubmission();
     renderOnlineUI();
+    renderPlayAsControls();
   } catch {
     // offline or rate-limited — keep whatever state we already had
   }
@@ -2594,9 +2544,13 @@ async function gmPublishPreview() {
 // game) and, once the deadline has actually passed (never merely cleared —
 // deadlinePassed() is false whenever game.deadline is null), loads on-time
 // submissions, resolves and publishes exactly like gmPublishPreview() would,
-// skipping the step-through UI entirely.
+// skipping the step-through UI entirely. Gated on the raw game.isOwner fact,
+// not isOwnerView() — this must still fire while the GM is 🎭 Playing as
+// their own power, since that's a view change, not a different browser; it
+// only stands down while a preview (theirs or a real player's) is actually
+// open (`playback`), so it never yanks the board out from under one.
 async function autoPublishIfDue() {
-  if (!game || !game.published || !isOwnerView() || playback || autoPublishing) return;
+  if (!game || !game.published || !game.isOwner || playback || autoPublishing) return;
   if (publishMode() !== 'auto') return;
   if (!game.deadline || !deadlinePassed()) return;
   autoPublishing = true;
@@ -2766,6 +2720,7 @@ async function revertToPublished() {
       isOwner: game.isOwner,
       myCountry: game.myCountry,
       assignedPower: game.assignedPower,
+      playAs: game.playAs,
     };
     if (publishedPreview) exitPublishedPreview();
     playback = null;
@@ -2860,6 +2815,7 @@ async function loadPublishedGame(idOrUrl) {
     // refreshOnlineStatus() re-verifies it against the token's login
     g.assignedPower = local ? local.assignedPower : null;
     if (g.assignedPower) g.myCountry = g.assignedPower;
+    g.playAs = local ? local.playAs : null;
     // this position was just fetched from the published gist, so it *is*
     // the published state — without this, boardDirty() sees no
     // publishedState and reports dirty even though nothing has changed yet
@@ -2905,11 +2861,6 @@ async function init() {
       'This game has changes that are not published yet.\n\n' +
       'Leave anyway? They stay saved here — ☁ Publish changes when you come back.'
     )) return;
-    if (debugPower && game && game.gistId) {
-      cleanupDebugSubmission(game.gistId, debugCapturedComment).catch(() => {});
-      debugPower = null;
-      debugCapturedComment = null;
-    }
     playback = null;
     publishedPreview = null;
     renderHome();
@@ -2991,12 +2942,7 @@ async function init() {
   });
   $('btn-submissions').onclick = openSubmissionsModal;
   $('deadline-load-btn').onclick = gmLoadOrders;
-  $('debug-power-select').onchange = (e) => {
-    const power = e.target.value;
-    e.target.value = '';
-    if (power) enterDebugView(power);
-  };
-  $('btn-exit-debug-view').onclick = exitDebugView;
+  $('play-as-select').onchange = (e) => setPlayAs(e.target.value);
   $('submissions-modal-close').onclick = closeSubmissionsModal;
   $('submissions-modal').addEventListener('pointerdown', (e) => {
     if (e.target === $('submissions-modal')) closeSubmissionsModal();
@@ -3109,7 +3055,7 @@ async function init() {
   setInterval(() => {
     if (game && game.published && !playback) {
       renderOnlineUI();
-      if (isOwnerView()) autoPublishIfDue();
+      if (game.isOwner) autoPublishIfDue();
     }
   }, 60000);
 
