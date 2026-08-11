@@ -79,7 +79,6 @@ a { color: #7fb4ff; }
 .badge.neutral { background: #262a31; color: #8892a0; border: 1px solid #3a4150; }
 .badge.warn { background: #3a2f10; color: #ffc46b; border: 1px solid #8f6a3f; }
 .badge.danger { background: #402b2b; color: #ff8484; border: 1px solid #7a4444; }
-.badge.debug { background: #2b2040; color: #c9a8ff; border: 1px solid #6a4f99; }
 #deadline-countdown { font-variant-numeric: tabular-nums; font-family: Consolas, ui-monospace, monospace; flex: none; }
 .filebtn {
   display: inline-block; text-align: center;
@@ -372,27 +371,19 @@ dialog.modal h2 { margin: 0 0 14px; font-size: 1.1rem; }
   #topbar { gap: 6px; padding: 8px; flex-wrap: nowrap; }
   #hover-info { display: none; }
   /* The countdown's DD:HH:MM:SS must stay whole (that's the whole point of
-     the format), so it's never truncated. #debug-view-banner instead drops
-     its label text down to just the 🕵 icon — there isn't room for both the
-     full countdown and a full debug label alongside game name/phase/⚙
-     Settings on a phone screen, and ⚙ Settings (the only way to exit debug
-     view) must never be the thing that gets pushed off the edge. */
+     the format), so it's never truncated. */
   #deadline-countdown { font-size: 0.75em; padding: 2px 4px; flex: none; white-space: nowrap; }
-  #debug-view-banner { font-size: 0.75em; padding: 2px 4px; flex: none; }
-  #debug-view-banner .debug-view-label { display: none; }
   #btn-edit { display: none; } /* superseded by the mobile Edit tab */
   .settings-label { display: none; } /* icon-only ⚙ button on mobile */
 
-  /* The state indicators keep their colour but drop their words, on the same
-     reasoning as the debug banner above: the icon and the ● dot carry it, and
-     the game's name is worth more room than the label. The topbar stripe and
-     the board ring are unaffected. */
+  /* The state indicators keep their colour but drop their words — the icon
+     and the ● dot carry it, and the game's name is worth more room than the
+     label. The topbar stripe and the board ring are unaffected. */
   .mode-chip .mc-text, .sync-pill .sp-text { display: none; }
   .mode-chip, .sync-pill { padding: 2px 6px; font-size: 0.75em; min-height: 0; }
   /* The game's name is the only thing here that can afford to lose room, so
      it is the only thing allowed to: everything else in the bar is flex: none
-     and would otherwise push ⚙ Settings off the right-hand edge between them
-     (and ⚙ Settings is the sole way out of debug view — see above). */
+     and would otherwise push ⚙ Settings off the right-hand edge between them. */
   #game-name {
     flex: 1 1 auto; min-width: 2.5em;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

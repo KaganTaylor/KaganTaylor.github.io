@@ -97,9 +97,9 @@ The sidebar becomes a bottom sheet with an Edit / Orders / Standings tab bar. Tw
 
 The tab bar is `position: fixed`, so `#main` has to reserve its height explicitly or the board runs underneath it.
 
-The topbar's actions live behind one ⚙ Settings drop-down at every width (`#settings-wrap`, which must stay `position: relative` for the menu to anchor to the button rather than the page). They used to sit inline on desktop, with `display: contents` dissolving the wrapper; that stopped scaling once the menu held publish, view/revert published, branch, game settings, export, players, submissions and the debug controls.
+The topbar's actions live behind one ⚙ Settings drop-down at every width (`#settings-wrap`, which must stay `position: relative` for the menu to anchor to the button rather than the page). They used to sit inline on desktop, with `display: contents` dissolving the wrapper; that stopped scaling once the menu held publish, view/revert published, branch, game settings, export, players, submissions and the play-as control.
 
-**⚙ Settings must never be the item pushed off the right-hand edge** — on a published game it is the only way to reach the publish actions, and in 🕵 debug view it is the only way out. Everything else in the topbar is `flex: none`, so anything added there has to buy its room from something: `#game-name` is the one item allowed to shrink and ellipsise, `#deadline-countdown` and the debug banner drop to icons, and `#phase-label` is hidden outright on mobile because `Board.setPhaseText()` already prints it into the corner of the map.
+**⚙ Settings must never be the item pushed off the right-hand edge** — on a published game it is the only way to reach the publish actions, including switching `🎭 Play as` back to `👑 Game Master`. Everything else in the topbar is `flex: none`, so anything added there has to buy its room from something: `#game-name` is the one item allowed to shrink and ellipsise, `#deadline-countdown` drops to an icon, and `#phase-label` is hidden outright on mobile because `Board.setPhaseText()` already prints it into the corner of the map.
 
 ---
 
@@ -115,7 +115,7 @@ A game is either **☁ online** — a published gist, with one authoritative pos
 
 The reason is that the game is only ever really *played* online. Everything local is thinking-out-loud: setting up a position to check a tactic, branching the live game to plan three moves ahead, blitzing a few turns to see where a year goes. Those want the same permissions as each other (edit anything, resolve anything, throw it away), and the *opposite* permissions from the real game. Two kinds, drawn along the line that actually matters — *can what I do here change the real game?* — beat four kinds drawn along how the file happened to be created.
 
-`gameMode()` in `js/app.js` names the four faces of those two kinds: `sandbox`, `gm`, `player` (an assigned power) and `spectator`. It is written to `#game-screen[data-mode]`, so the stylesheet reads the same answer the interaction code does and the two cannot drift apart. It is derived from `isOwnerView()`, not raw `isOwner`, so a game master in 🕵 debug view sees the `player` colours too — the point of that mode is a faithful simulation.
+`gameMode()` in `js/app.js` names the four faces of those two kinds: `sandbox`, `gm`, `player` (an assigned power) and `spectator`. It is written to `#game-screen[data-mode]`, so the stylesheet reads the same answer the interaction code does and the two cannot drift apart. It is derived from `isOwnerView()`, not raw `isOwner`, so a game master who has switched `🎭 Play as → 🧑 Player` sees the `player` colours too — see below.
 
 ### The state is visible before it is enforced
 
@@ -221,13 +221,13 @@ The countdown lives in the topbar — not just the sidebar, where the old deadli
 
 ---
 
-## Debug "view as player" is safe because submissions are keyed by login, not by claim
+## 🎭 Play as: a GM's own player position is real, not simulated
 
-`⚙ Settings → 🕵 View as` lets the GM preview and test the game exactly as one assigned player would, including a real `📤 Submit moves` — without a second GitHub account. That only works safely because of a property the online-play design already had: a submission comment is found by the *submitter's actual GitHub login* (`findSubmission`, `js/publish.js`), never by the `power` field inside its payload. A GM debug-testing as France still submits under their own login, which is necessarily a different comment object than the real France player's — so a debug submission can never overwrite, shadow, or be mistaken for a real player's comment, no matter which power the GM claims to be. If claim-based lookup were used instead (trust the `power` field in the payload), debug submissions would be indistinguishable from real ones and this feature would be unsafe to build at all.
+`⚙ Settings → 🎭 Play as` only appears once the GM has assigned their own GitHub login to a power in `👥 Set players` — at that point `game.assignedPower` resolves for the owner exactly like it does for anyone else (`refreshOnlineStatus()` no longer excludes owners from that lookup). Switching to `🧑 Player` sets `game.playAs = 'player'`, a durable field on the game object saved like any other setting, not session-only state — closing the tab and coming back leaves the GM exactly where they left off.
 
-The one comment a debug session *can* touch is the GM's own — if they happen to also be a real assigned player elsewhere, or from a previous test — so `enterDebugView()` captures it byte-for-byte (`{commentId, body}`) before doing anything, and `exitDebugView()` either restores that exact body or, if none existed, deletes whatever a debug submit created. This is deliberately implemented as a real GitHub comment (through the same `submitOrders()` path a real player uses) rather than a mocked/local-only submission, specifically so the GM is testing the real network path, not a simulation of it — the entire point of the feature is to catch bugs in the actual submit flow.
+`isPlayingAsPlayer()` (`js/app.js`) is the one predicate this depends on: `game.isOwner && game.assignedPower && game.playAs === 'player'`. `isReadOnly()` and `isOwnerView()` both fold it in, so once it's true the GM's browser runs through the *exact same code paths* a real player's browser does — private draft orders, a real `📤 Submit moves` that posts a real gist comment under their own login, deadline enforcement, preview-only resolve. There is no separate debug flow to keep in sync and nothing to clean up on the way out: switching back to `👑 Game Master` only changes `game.playAs` back, it never touches a submission, because the submission they made while playing was always a genuine one.
 
-Because leaving a debug session open by navigating away (🏠 Home, or opening a different game) would otherwise strand a stray comment on the old game's gist, both paths run the same restore-or-delete cleanup (`cleanupDebugSubmission()`) as a best-effort safety net, independent of `exitDebugView()`'s own toast/UI handling — cleanup is a pure network operation against whichever gist/captured-state is passed in, not tied to whatever `game` happens to be current when it runs.
+`gameMode()` is unaffected by any of this — it already derives from `isOwnerView()`, not raw `isOwner`, so it naturally reports `player` while `isPlayingAsPlayer()` is true and `gm` otherwise.
 
 ---
 
