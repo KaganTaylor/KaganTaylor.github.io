@@ -66,6 +66,14 @@ let online = { comments: null, moves: null, login: null, restored: false };
 let debugPower = null;
 let debugCapturedComment = null;
 
+// Gates the order box for a published game's GM: hidden until they explicitly
+// ⬇ Load orders, and reset every time a load→resolve→publish cycle finishes
+// (or is abandoned by opening a different game). See gmLoadOrders().
+let gmOrdersLoaded = false;
+// Guards autoPublishIfDue() against overlapping runs from the 60s tick while
+// a previous auto-publish is still in flight.
+let autoPublishing = false;
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
@@ -358,6 +366,7 @@ function openGame(g) {
   publishedPreview = null;
   debugPower = null;
   debugCapturedComment = null;
+  gmOrdersLoaded = false;
   online = { comments: null, moves: null, login: null, restored: false };
   S.saveGame(game);
   showScreen('game-screen');
@@ -376,7 +385,11 @@ function refreshAll() {
   board.setUnits(game.units, game.step === 'retreat' ? game.pending.dislodged : []);
   board.clearOrders();
   $('panel-playback').hidden = true;
-  $('panel-orders').hidden = false;
+  // The GM's order box stays out of the way until they deliberately ⬇ Load
+  // orders (⏰ Deadline panel) — see gmLoadOrders()/gmOrdersLoaded. Everyone
+  // else (sandboxes, players, spectators) sees it as before.
+  const gmGated = isOwnerView() && game.published && !gmOrdersLoaded;
+  $('panel-orders').hidden = gmGated;
   const ro = isReadOnly();
   $('country-row').hidden = !ro;
   if (ro) renderCountrySelect();
@@ -1381,12 +1394,19 @@ function shadowGame() {
   };
 }
 
-function previewResolve(toFinal) {
+// `gmPublish` marks this preview as the game master's real resolution-in-
+// waiting for a published game: the shadow game it resolves onto is a
+// throwaway exactly like any other preview, but startPlayback() remembers the
+// orders/text that produced it (playback.pendingOrders/pendingText) so
+// gmPublishPreview() can commit the identical resolution for real once the
+// GM is happy with it, instead of re-deriving from a possibly-since-edited box.
+function previewResolve(toFinal, gmPublish = false) {
   const { orders, errors } = onOrdersChanged();
   if (errors.length) return toast('Fix the order problems first');
   const shadow = shadowGame();
-  const entry = S.resolvePhase(shadow, orders, $('orders-text').value);
-  startPlayback(entry, true, shadow);
+  const text = $('orders-text').value;
+  const entry = S.resolvePhase(shadow, orders, text);
+  startPlayback(entry, true, shadow, gmPublish ? { orders, text } : null);
   if (toFinal) continuePlayback();
 }
 
@@ -1458,9 +1478,17 @@ function partialVerdicts(entry, revealedOrders) {
 }
 
 // `preview` is the throwaway game the entry was resolved on (previewResolve);
-// null for a real resolution or a replay of a past turn.
-function startPlayback(entry, readonly, preview = null) {
-  playback = { entry, readonly, preview, orders: playbackOrders(entry), step: 0, animating: false };
+// null for a real resolution or a replay of a past turn. `gmPending`, when
+// set, marks this as the game master's real resolution-in-waiting for a
+// published game — {orders, text} it was resolved from, for gmPublishPreview()
+// to commit verbatim.
+function startPlayback(entry, readonly, preview = null, gmPending = null) {
+  playback = {
+    entry, readonly, preview, orders: playbackOrders(entry), step: 0, animating: false,
+    gmPublish: !!gmPending,
+    pendingOrders: gmPending ? gmPending.orders : null,
+    pendingText: gmPending ? gmPending.text : null,
+  };
   setOrderMode(null);
   $('panel-orders').hidden = true;
   $('panel-edit').hidden = true;
@@ -1474,6 +1502,17 @@ function startPlayback(entry, readonly, preview = null) {
   $('pb-branch').hidden = !preview;
   $('pb-back-current').hidden = !readonly;
   $('pb-back-current').textContent = preview ? '← Back to the live position' : 'Back to current turn';
+  // The game master's real resolution-in-waiting: no sandbox branch (this
+  // isn't a throwaway to keep, it's the actual next phase), Publish commits
+  // it, and "back" returns to the still-loaded, still-editable order box
+  // instead of the read-only "live position" a plain preview backs out to.
+  if (playback.gmPublish) {
+    $('pb-continue').hidden = false;
+    $('pb-continue').textContent = '📣 Publish results';
+    $('pb-branch').hidden = true;
+    $('pb-back-current').hidden = false;
+    $('pb-back-current').textContent = '← Back — amend an order';
+  }
   const list = $('pb-order-list');
   list.replaceChildren();
   playback.orders.forEach((r, i) => {
@@ -1936,6 +1975,15 @@ function renderOnlineUI() {
   $('submit-row').hidden = !assignedPower();
   $('btn-submit-moves').disabled = !ordersOpen();
   $('online-row').hidden = !hasPlayers;
+  if (game.published && isOwnerView()) {
+    const loadBtn = $('deadline-load-btn');
+    loadBtn.disabled = ordersOpen() || gmOrdersLoaded;
+    loadBtn.title = gmOrdersLoaded
+      ? 'Already loaded — resolve or publish below'
+      : ordersOpen()
+        ? 'Available once the deadline passes (or clear it to load and skip forward now)'
+        : "Loads submitted orders once the deadline passes — or, with no deadline set, opens an empty box so you can skip the game forward";
+  }
   renderSubmitStatus();
   updateDeadlineCountdown();
   if (hasPlayers) renderDeadlineInfo();
@@ -2052,12 +2100,16 @@ function renderDeadlineInfo() {
     el.textContent = `⏰ Deadline: ${when} (in ${fmtCountdown(d - Date.now())})`;
     el.classList.add('warn');
   } else {
+    // This element sits in the (player/spectator-only, once a GM has loaded
+    // orders it's the GM's too) online-row — the game master's own copy stays
+    // hidden behind gmGated until they ⬇ Load orders, so the isOwnerView()
+    // case here only ever shows to the GM in the brief window after loading.
     el.textContent =
       publishMode() === 'auto'
         ? `⏰ Deadline passed (${when}) — all submissions are revealed. ⬇ Load them, then Resolve to preview the result`
         : isOwnerView()
-          ? `⏰ Deadline passed (${when}) — 🔍 review the submissions, then 📣 publish results or re-open with a new deadline`
-          : `⏰ Deadline passed (${when}) — the game master is reviewing the results`;
+          ? `⏰ Deadline passed (${when}) — ⬇ Load orders in the ⏰ Deadline panel, resolve, then publish`
+          : `⏰ Deadline passed (${when}) — the game master is resolving the results`;
     el.classList.add('past');
   }
 }
@@ -2133,7 +2185,8 @@ async function setDeadline(date) {
   }
 }
 
-// GM: how the deadline resolves — instant reveal, or review first.
+// GM: how the deadline resolves — auto-resolve on its own, or load and
+// resolve it yourself.
 async function setPublishMode(mode) {
   game.publishMode = mode;
   S.saveGame(game);
@@ -2142,8 +2195,8 @@ async function setPublishMode(mode) {
     await updatePublished(game, game.publishedState);
     toast(
       mode === 'auto'
-        ? 'Auto publish: everyone sees all moves the moment the deadline passes'
-        : 'Manual publish: after the deadline you review the submissions before releasing them',
+        ? 'Auto publish: the phase resolves and publishes itself the moment the deadline passes'
+        : 'Manual publish: after the deadline, ⬇ Load orders and resolve/publish it yourself',
       'info'
     );
   } catch (e) {
@@ -2162,16 +2215,6 @@ function bumpDeadline(hours) {
 
 // ---- player assignments ----------------------------------------------------
 function renderSubmissionsModal() {
-  // 🔍 Review is a manual-mode-only step, and only once the deadline has
-  // passed — before that, submissions can still change, and auto mode skips
-  // the review step entirely (the deadline reveals everything on its own).
-  const reviewBtn = $('submissions-review');
-  reviewBtn.hidden = publishMode() === 'auto';
-  reviewBtn.disabled = !deadlinePassed();
-  reviewBtn.title = deadlinePassed()
-    ? 'Fill the order box with every submission — for your eyes only, nothing is published'
-    : 'Available once the deadline passes';
-  $('submissions-publish-all').disabled = !deadlinePassed();
   const rows = $('submissions-rows');
   rows.replaceChildren();
   for (const p of activePowers()) {
@@ -2196,10 +2239,6 @@ function renderSubmissionsModal() {
     };
     row.append(
       name, login, status,
-      mk('📥', `Publish ${cap(p)}'s submitted moves for this phase (overwrites what's published)`,
-        () => gmPublishFromComments([p], { force: true })),
-      mk('📝', `Publish the order box's ${cap(p)} block for this phase (manual override)`,
-        () => gmPublishFromBox(p)),
       mk('✖', `Un-publish ${cap(p)} for this phase so they can resubmit`,
         () => gmUnpublish(p)),
     );
@@ -2459,12 +2498,14 @@ async function doLoadPublishedMoves() {
   }
 }
 
-// GM: load everyone's submitted comments into the order box WITHOUT
-// publishing anything — the manual-mode review step after the deadline.
-// Gated on the deadline: before it, submissions can still change, and no
-// one — including the GM — gets a shortcut to see them early.
-async function gmReviewSubmissions() {
-  if (!deadlinePassed()) return toast('Wait for the deadline before reviewing submissions');
+// GM: fills the order box with every power's submitted comment for the
+// current phase and opens it (gmOrdersLoaded), the one on-ramp into the
+// resolve → publish flow. Gated on !ordersOpen(): either the deadline has
+// passed (the normal case), or none was ever set — the deliberate escape
+// hatch that lets the GM skip the game forward on an empty box and type
+// orders in by hand. Loading never publishes anything by itself.
+async function gmLoadOrders() {
+  if (ordersOpen()) return toast('Wait for the deadline before loading orders');
   try {
     if (!online.comments) await refreshOnlineStatus();
     const blocks = [];
@@ -2473,83 +2514,115 @@ async function gmReviewSubmissions() {
       const s = found && found.submission;
       if (s && s.orders.trim()) blocks.push(p.toUpperCase() + '\n' + s.orders.trim() + '\n');
     }
-    if (!blocks.length) return toast('No submissions for this phase yet');
     applyOrdersText(blocks.join('\n'));
-    closeSubmissionsModal(); // get out of the way so the GM can see/edit the order box
-    toast(`Loaded ${blocks.length} submission${blocks.length === 1 ? '' : 's'} for review — nothing is published yet`, 'info');
+    gmOrdersLoaded = true;
+    refreshAll();
+    toast(
+      blocks.length
+        ? `Loaded ${blocks.length} submission${blocks.length === 1 ? '' : 's'} — resolve when ready`
+        : 'No submissions yet — order box is open for you to fill in',
+      'info'
+    );
   } catch (e) {
-    toast('Could not load submissions: ' + e.message);
+    toast('Could not load orders: ' + e.message);
   }
 }
 
-// GM: copy submitted comments into the per-power files — 📣 Publish results.
-// Without `force`, this waits for the deadline (results reveal what everyone
-// ordered, so releasing them early would leak the position to whoever's
-// already submitted while others are still deciding), skips powers already
-// published for this phase, and skips comments edited after the deadline;
-// the per-power 📥 button forces through all three (the deliberate grace
-// path for one power at a time).
-async function gmPublishFromComments(powers, { force = false } = {}) {
-  if (!force && !deadlinePassed()) return toast('Wait for the deadline before publishing results');
-  try {
-    const gistJson = await fetchGist(game.gistId);
-    const moves = await readMovesFiles(gistJson);
-    const comments = await listComments(game.gistId);
-    const updates = {};
-    const done = [];
-    const skipped = [];
-    for (const p of powers) {
-      const login = (game.players || {})[p];
-      if (!login) continue;
-      if (!force && moves[p] && moves[p].history.some(matchesPhase)) {
-        skipped.push(`${cap(p)}: already published`);
-        continue;
-      }
-      const found = findSubmission(comments, login);
-      const s = found && found.submission;
-      if (!s || !matchesPhase(s) || s.power !== p) {
-        skipped.push(`${cap(p)}: no submission for this phase`);
-        continue;
-      }
-      if (!force && deadlinePassed() && !submissionOnTime(found)) {
-        skipped.push(`${cap(p)}: edited after the deadline (📥 to allow it)`);
-        continue;
-      }
-      updates[p] = upsertMovesEntry(moves[p], p, {
-        year: s.year, season: s.season, step: s.step, orders: s.orders,
-        by: login, submittedAt: s.submittedAt || null,
-        publishedAt: new Date().toISOString(), publishedBy: 'gm',
-      });
-      done.push(cap(p));
-    }
-    if (done.length) await writeMovesFiles(game.gistId, updates);
-    const msg = done.length ? `Published: ${done.join(', ')}` : 'Nothing published';
-    toast(skipped.length ? `${msg} · ${skipped.join(' · ')}` : msg, done.length ? 'info' : '');
-    await refreshOnlineStatus();
-  } catch (e) {
-    toast('Publish failed: ' + e.message);
-    if (isAuthError(e)) askToken();
-  }
-}
-
-// GM: publish whatever the order box holds for one power — the grace path
-// when a player's submission has a typo the table forgives.
-async function gmPublishFromBox(power) {
-  const orders = powerBlockText(power);
-  if (!orders) return toast(`No ${cap(power)} orders in the box`);
-  try {
-    const moves = await readMovesFiles(await fetchGist(game.gistId));
-    const doc = upsertMovesEntry(moves[power], power, {
-      year: game.year, season: game.season, step: game.step, orders,
+// Writes one moves-<power>.json entry per power that had orders in `text`
+// (the box the GM just resolved from) — a durable record of what was
+// actually published, same shape as a normal submission but `publishedBy:
+// 'gm'`. Always overwrites any existing entry for this phase: whatever was
+// in the box when Publish was clicked is the record, including any manual
+// edit the GM made — there is no separate "force" path anymore.
+async function gmWriteLoadedMovesFiles(text) {
+  const byPower = splitOrdersByPower(text);
+  if (!byPower.size) return;
+  const moves = await readMovesFiles(await fetchGist(game.gistId));
+  const updates = {};
+  for (const [p, lines] of byPower) {
+    const ordersText = lines.slice(1).join('\n').trim();
+    if (!ordersText) continue;
+    updates[p] = upsertMovesEntry(moves[p], p, {
+      year: game.year, season: game.season, step: game.step, orders: ordersText,
       by: online.login || 'game master', submittedAt: null,
-      publishedAt: new Date().toISOString(), publishedBy: 'gm-override',
+      publishedAt: new Date().toISOString(), publishedBy: 'gm',
     });
-    await writeMovesFiles(game.gistId, { [power]: doc });
-    toast(`Published ${cap(power)} from the order box`, 'info');
-    await refreshOnlineStatus();
+  }
+  if (Object.keys(updates).length) await writeMovesFiles(game.gistId, updates);
+}
+
+// GM: commits the previewed resolution for real and pushes it to the table —
+// the "📣 Publish results" button on a gmPublish preview (see previewResolve/
+// startPlayback). Plays the same move animation a normal Continue does, then
+// resolves the REAL game with the exact orders/text the preview used
+// (playback.pendingOrders/pendingText), records each power's published
+// moves, and pushes the new position. The deadline is cleared afterward so
+// a stale "already passed" timestamp can never carry over and auto-publish
+// the next phase on an empty box — the GM confirms a fresh one every phase.
+async function gmPublishPreview() {
+  if (!playback || !playback.gmPublish || playback.animating) return;
+  const pb = playback;
+  pb.animating = true;
+  pb.step = outcomeStep();
+  renderPlayback();
+  board.clearOrders();
+  $('pb-step-label').textContent = 'Executing moves…';
+  $('pb-next').disabled = true;
+  await board.animateFinal(pb.entry);
+  if (playback !== pb) return;
+  try {
+    const entry = S.resolvePhase(game, pb.pendingOrders, pb.pendingText);
+    S.saveGame(game);
+    await gmWriteLoadedMovesFiles(pb.pendingText);
+    game.deadline = null;
+    await updatePublished(game);
+    game.publishedState = S.boardSnapshot(game);
+    S.saveGame(game);
+    gmOrdersLoaded = false;
+    playback = null;
+    refreshAll();
+    toast(`Published ${entry.label} — confirm the next deadline in ⏰ Deadline`, 'info');
   } catch (e) {
+    pb.animating = false;
     toast('Publish failed: ' + e.message);
     if (isAuthError(e)) askToken();
+  }
+}
+
+// Auto-publish mode's whole point: no GM action required. Runs off the 60s
+// online-status tick (only in the GM's own browser — only it can advance the
+// game) and, once the deadline has actually passed (never merely cleared —
+// deadlinePassed() is false whenever game.deadline is null), loads on-time
+// submissions, resolves and publishes exactly like gmPublishPreview() would,
+// skipping the step-through UI entirely.
+async function autoPublishIfDue() {
+  if (!game || !game.published || !isOwnerView() || playback || autoPublishing) return;
+  if (publishMode() !== 'auto') return;
+  if (!game.deadline || !deadlinePassed()) return;
+  autoPublishing = true;
+  try {
+    await refreshOnlineStatus();
+    const blocks = [];
+    for (const p of activePowers()) {
+      const found = phaseSubmission(p);
+      const s = found && submissionOnTime(found) ? found.submission : null;
+      if (s && s.orders.trim()) blocks.push(p.toUpperCase() + '\n' + s.orders.trim() + '\n');
+    }
+    const text = blocks.join('\n');
+    const parsed = parseOrders(text, phaseKind());
+    const entry = S.resolvePhase(game, parsed.orders, text);
+    S.saveGame(game);
+    await gmWriteLoadedMovesFiles(text);
+    game.deadline = null;
+    await updatePublished(game);
+    game.publishedState = S.boardSnapshot(game);
+    S.saveGame(game);
+    refreshAll();
+    toast(`Auto-published ${entry.label} — confirm the next deadline`, 'info');
+  } catch (e) {
+    toast('Auto-publish failed: ' + e.message);
+  } finally {
+    autoPublishing = false;
   }
 }
 
@@ -2883,8 +2956,14 @@ async function init() {
 
   $('orders-text').addEventListener('input', onOrdersChanged);
   // on a game you do not own, resolving is a preview and never moves the board
-  $('btn-resolve').onclick = () => (isReadOnly() ? previewResolve(false) : resolveCurrent());
-  $('btn-resolve-final').onclick = () => (isReadOnly() ? previewResolve(true) : resolveAndSkip());
+  // A published game's owner resolves through the same throwaway-preview path
+  // as a read-only viewer — see previewResolve()'s gmPublish flag — so a typo
+  // caught after resolving can be backed out and fixed instead of already
+  // being committed to game.history. Only a sandbox (or a debug "view as
+  // player") ever mutates the real game directly on Resolve.
+  const gmPublishFlow = () => isOwnerView() && game.published;
+  $('btn-resolve').onclick = () => (isReadOnly() || gmPublishFlow() ? previewResolve(false, gmPublishFlow()) : resolveCurrent());
+  $('btn-resolve-final').onclick = () => (isReadOnly() || gmPublishFlow() ? previewResolve(true, gmPublishFlow()) : resolveAndSkip());
   $('btn-token').onclick = doEditToken;
   $('btn-publish').onclick = doPublish;
   $('btn-update-published').onclick = doUpdatePublished;
@@ -2911,7 +2990,7 @@ async function init() {
     if (e.target === $('players-modal')) closePlayersModal();
   });
   $('btn-submissions').onclick = openSubmissionsModal;
-  $('deadline-review-btn').onclick = openSubmissionsModal;
+  $('deadline-load-btn').onclick = gmLoadOrders;
   $('debug-power-select').onchange = (e) => {
     const power = e.target.value;
     e.target.value = '';
@@ -2922,8 +3001,6 @@ async function init() {
   $('submissions-modal').addEventListener('pointerdown', (e) => {
     if (e.target === $('submissions-modal')) closeSubmissionsModal();
   });
-  $('submissions-review').onclick = gmReviewSubmissions;
-  $('submissions-publish-all').onclick = () => gmPublishFromComments(activePowers());
   $('autopublish-toggle').onchange = (e) => setPublishMode(e.target.checked ? 'auto' : 'manual');
   $('deadline-plus-week').onclick = () => bumpDeadline(7 * 24);
   $('deadline-plus-2day').onclick = () => bumpDeadline(48);
@@ -2980,7 +3057,7 @@ async function init() {
   $('pb-prev').onclick = () => stepPlayback(-1);
   $('pb-start').onclick = () => stepPlayback(-999);
   $('pb-end').onclick = () => stepPlayback(999);
-  $('pb-continue').onclick = continuePlayback;
+  $('pb-continue').onclick = () => (playback && playback.gmPublish ? gmPublishPreview() : continuePlayback());
   $('pb-back-current').onclick = endPlayback;
   $('pb-copy').onclick = copyResults;
   $('pb-branch').onclick = branchCurrent;
@@ -3024,11 +3101,16 @@ async function init() {
     }
   });
 
-  // tick the deadline countdown — and, in auto-publish games, flip the UI
-  // over to the reveal — while a published game sits open. Render-only; the
-  // network is touched only by the 🔄 button and explicit actions.
+  // tick the deadline countdown while a published game sits open. Render-only
+  // for everyone except the game master's own browser in Auto-Publish mode,
+  // where autoPublishIfDue() is the one place outside explicit buttons/🔄 the
+  // network gets touched — deliberately, since auto-publish means no one has
+  // to be watching for the deadline to pass.
   setInterval(() => {
-    if (game && game.published && !playback) renderOnlineUI();
+    if (game && game.published && !playback) {
+      renderOnlineUI();
+      if (isOwnerView()) autoPublishIfDue();
+    }
   }, 60000);
 
   // the topbar countdown chip ticks every second on its own — far cheaper
