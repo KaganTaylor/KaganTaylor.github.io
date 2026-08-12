@@ -17,9 +17,8 @@
     <div class="home-actions">
       <div class="home-group">
         <h2>🧪 New sandbox</h2>
-        <input id="new-name" type="text" placeholder="Sandbox name" value="Our game">
+        <input id="new-name" type="text" placeholder="Sandbox name" value="New game">
         <button id="btn-new" class="primary">Start at 1901</button>
-        <button id="btn-sandbox">Start from an empty board</button>
         <p class="hint">A sandbox lives in this browser only: resolve as many turns as you like, drag pieces anywhere, branch whenever you want to try something. Publish one when it becomes the real game.</p>
       </div>
       <div class="home-group">
@@ -28,15 +27,16 @@
         <label class="filebtn">Import game JSON<input id="import-file" type="file" accept=".json,application/json"></label>
       </div>
       <div class="home-group">
-        <h2>☁ Join an online game</h2>
-        <p class="hint">Paste the link your game master shared. You get the live position, and if they assigned your GitHub username a power you can submit orders in-app. Nothing you do on that board can change the real game — resolving there is a preview, and 🌿 branching gives you a sandbox to plan in.</p>
-        <div class="sandbox-row">
-          <input id="load-gist-input" type="text" placeholder="gist link or ID">
-          <button id="btn-load-gist">Load</button>
-        </div>
+        <h2>🔑 Publishing</h2>
+        <p class="hint">Set the GitHub personal access token used to publish a game or submit orders online.</p>
+        <button id="btn-token">Set GitHub token</button>
       </div>
     </div>
-    <p class="credits">Map: jDip (GPL) · Rules engine validated against the 167 Diplomacy Adjudicator Test Cases · <a href="test/datc.html">run the tests</a> · <a href="test/strict.html">house-rule tests</a> · <button id="btn-token" class="linklike" title="Change or clear the GitHub personal access token used for publishing">🔑 GitHub token</button></p>
+    <p class="credits">Map: jDip (GPL) · Rules engine validated against the 167 Diplomacy Adjudicator Test Cases · <a href="test/datc.html">run the tests</a> · <a href="test/strict.html">house-rule tests</a></p>
+  </div>
+  <div id="home-loading" class="home-loading" hidden>
+    <div class="spinner"></div>
+    <p>Loading game…</p>
   </div>
 </section>
 

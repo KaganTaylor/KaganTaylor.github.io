@@ -59,14 +59,6 @@ export function newGame(name) {
   };
 }
 
-// An empty board to build a position on. Every unpublished game is a sandbox
-// (see isSandbox() in app.js) — this one just starts with no pieces on it.
-export function sandboxGame(name) {
-  const g = newGame(name);
-  g.units = [];
-  return g;
-}
-
 // A sandbox copy of some position — the one and only "branch". `src` may be
 // the live game or the throwaway clone a preview resolved into, so this takes
 // the position fields only and never the source's published identity.
