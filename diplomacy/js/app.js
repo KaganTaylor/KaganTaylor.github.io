@@ -28,6 +28,15 @@ const $ = (id) => document.getElementById(id);
 // (Spain, St Petersburg, Bulgaria)
 const COAST_NAMES = { nc: 'North coast', sc: 'South coast', ec: 'East coast' };
 
+// One real-world flag per power, standing in for its country everywhere a
+// player's identity is shown (Play as picker, topbar mode chip, home-screen
+// game list). Austria and Turkey have no country of that exact name/borders
+// today, so these use the closest modern flag rather than a historical one.
+const POWER_FLAGS = {
+  england: '🇬🇧', france: '🇫🇷', germany: '🇩🇪', italy: '🇮🇹',
+  austria: '🇦🇹', russia: '🇷🇺', turkey: '🇹🇷',
+};
+
 let board;
 let game = null;
 let playback = null; // {entry, step, orders, readonly, animating}
@@ -222,7 +231,7 @@ function homeRow(g) {
     `<span class="meta">${S.phaseLabel(g)}</span>`,
   ];
   if (kind === 'gm') bits.push('<span class="badge role-gm">👑 Game master</span>');
-  if (kind === 'player') bits.push(`<span class="badge role-player">🎖 ${cap(g.assignedPower)}</span>`);
+  if (kind === 'player') bits.push(`<span class="badge role-player">${POWER_FLAGS[g.assignedPower] || ''} ${cap(g.assignedPower)}</span>`);
   if (kind === 'spectator') bits.push('<span class="badge role-spectator">👁 Watching</span>');
   const d = g.deadline && new Date(g.deadline);
   if (d && !isNaN(d)) {
@@ -388,30 +397,39 @@ function refreshAll() {
   const gmGated = isOwnerView() && game.published && !gmOrdersLoaded;
   $('panel-orders').hidden = gmGated;
   const ro = isReadOnly();
-  $('country-row').hidden = !ro;
+  // An assigned player is always drafting their own power, so there is
+  // nothing to pick — the selector is only for a spectator choosing which
+  // country to sketch orders for.
+  const isPlayer = gameMode() === 'player';
+  $('country-row').hidden = !ro || isPlayer;
   if (ro) renderCountrySelect();
   $('orders-text').readOnly = false;
 
-  // Resolving a published game you do not own must not move it, so for those
-  // viewers the two Resolve buttons become a PREVIEW: the phase is adjudicated
-  // on a throwaway copy and the real board comes back untouched when the
-  // playback closes (previewResolve). That means everyone can always try the
-  // resolution out — including before the deadline, on their own guesses at
-  // what the other powers will do — without any risk to the live position.
-  $('btn-resolve').textContent = ro ? '👁 Preview result' : 'Resolve';
-  $('btn-resolve').title = ro
-    ? 'Adjudicate the orders in the box on a throwaway copy — the published position is not touched'
-    : 'Resolve this phase and step through the results';
-  $('btn-resolve-final').textContent = ro ? '⏭ Preview to final' : '⏭ Resolve to final';
-  $('btn-resolve').classList.toggle('primary', !ro);
-  $('btn-resolve').hidden = false;
-  $('btn-resolve-final').hidden = false;
+  // Resolving a published game you do not own must not move it, so a
+  // spectator's two Resolve buttons become a PREVIEW: the phase is
+  // adjudicated on a throwaway copy and the real board comes back untouched
+  // when the playback closes (previewResolve). An assigned player submits
+  // orders instead (📤 Submit moves) — previewing their own game is not a
+  // real action, so Resolve/Resolve to final are hidden outright for them.
+  $('btn-resolve').hidden = isPlayer;
+  $('btn-resolve-final').hidden = isPlayer;
+  if (!isPlayer) {
+    $('btn-resolve').textContent = ro ? '👁 Preview result' : 'Resolve';
+    $('btn-resolve').title = ro
+      ? 'Adjudicate the orders in the box on a throwaway copy — the published position is not touched'
+      : 'Resolve this phase and step through the results';
+    $('btn-resolve-final').textContent = ro ? '⏭ Preview to final' : '⏭ Resolve to final';
+    $('btn-resolve').classList.toggle('primary', !ro);
+  }
 
   // Every sandbox gets the board editor, not just an empty one — a branched
   // position is exactly where you want to add a hypothetical fleet. The game
   // master keeps it too (correcting the official board by hand beats replaying
-  // a year), behind a confirmation; see toggleEditMode().
+  // a year), behind a confirmation; see toggleEditMode(). Players never edit
+  // the official board, so the whole section (heading included) disappears
+  // rather than leaving an empty "Edit board" label in the History panel.
   $('btn-edit').hidden = ro;
+  $('edit-board-section').hidden = ro;
   // a viewer's local copy is never allowed to move, so there is nothing to
   // undo there — 🌿 Branch to sandbox is the way to explore instead
   $('btn-undo').disabled = ro || !game.history.length;
@@ -461,8 +479,9 @@ function renderModeChip() {
   const mode = gameMode();
   let icon, text, title;
   if (mode === 'player') {
-    [icon, text, title] = ['☁', `Live · 🎖 ${cap(assignedPower())}`,
-      `You are playing ${cap(assignedPower())} in a published game. Orders here are a private draft until you 📤 Submit them; the board itself is the game master's to move.`];
+    const power = assignedPower();
+    [icon, text, title] = ['☁', `Live · ${POWER_FLAGS[power] || ''} ${cap(power)}`,
+      `You are playing ${cap(power)} in a published game. Orders here are a private draft until you 📤 Submit them; the board itself is the game master's to move.`];
   } else {
     [icon, text, title] = MODE_CHIP[mode] || ['', '', ''];
   }
@@ -513,24 +532,19 @@ function renderDraftNote() {
   if (mode === 'gm') {
     el.textContent = '👑 These are the official orders. Resolve them, then ☁ Publish changes so every player sees the new board.';
   } else if (mode === 'player') {
-    el.textContent = `✎ Private draft. Only 📤 Submit moves sends ${cap(assignedPower())}'s orders to the game — dragging pieces and previewing changes nothing.`;
+    el.textContent = `✎ Private draft. Only 📤 Submit moves sends ${cap(assignedPower())}'s orders to the game — dragging pieces changes nothing until then.`;
   } else {
     el.textContent = '✎ Private scratch pad. Nothing you write, drag or preview here reaches the published game.';
   }
 }
 
+// Spectator-only (an assigned player is locked to their own power without
+// any picker — see refreshOnlineStatus(), which sets game.myCountry to the
+// assignment directly — and country-row is hidden for them entirely).
 function renderCountrySelect() {
   const sel = $('country-select');
   sel.replaceChildren();
-  const assigned = assignedPower();
-  if (assigned) {
-    // assigned players are tied to their power for the whole game — the only
-    // other view is "all countries", for reading everyone's published moves
-    sel.appendChild(new Option(`Playing as ${cap(assigned)}`, assigned));
-    sel.appendChild(new Option('👁 View all countries', ''));
-    sel.value = game.myCountry === assigned ? assigned : '';
-    return;
-  }
+  if (assignedPower()) return;
   sel.appendChild(new Option('👁 View all countries', ''));
   for (const p of POWERS) {
     if (game.units.some((u) => u.power === p) || Object.values(game.scOwners).includes(p)) {
@@ -600,7 +614,9 @@ function prefillOrders(preserve = false) {
   if (game.step === 'movement') {
     $('orders-title').textContent = title('Orders');
     info.textContent = myC
-      ? `Write ${cap(myC)}'s orders (type or drag units). 👁 Preview result tries them out safely; 🌿 Branch to sandbox keeps the ideas.`
+      ? gameMode() === 'player'
+        ? `Write ${cap(myC)}'s orders (type or drag units), then 📤 Submit moves.`
+        : `Write ${cap(myC)}'s orders (type or drag units). 👁 Preview result tries them out safely; 🌿 Branch to sandbox keeps the ideas.`
       : 'Type orders or drag units on the map. Unordered units hold.';
   } else if (game.step === 'retreat') {
     $('orders-title').textContent = title('Retreats');
@@ -1969,6 +1985,15 @@ function renderOnlineUI() {
   $('submit-row').hidden = !assignedPower();
   $('btn-submit-moves').disabled = !ordersOpen();
   $('online-row').hidden = !hasPlayers;
+  const loadMovesBtn = $('btn-load-moves');
+  if (assignedPower()) {
+    loadMovesBtn.title = 'Replace the box with your currently published orders, discarding local changes';
+    // disabled state (greyed out once the box already matches) is kept in
+    // step with every keystroke by renderSubmitStatus(), not here
+  } else {
+    loadMovesBtn.disabled = false;
+    loadMovesBtn.title = "Fill the order box with every power's published moves for the current phase";
+  }
   if (game.published && isOwnerView()) {
     const loadBtn = $('deadline-load-btn');
     loadBtn.disabled = ordersOpen() || gmOrdersLoaded;
@@ -1997,12 +2022,28 @@ function normalizeOrders(text) {
     .join('\n');
 }
 
+// My own submission comment for the current phase, or null — the "currently
+// published" record a player's box is compared against and can reload from.
+function mySubmission() {
+  const p = assignedPower();
+  if (!p) return null;
+  const found = online.comments && online.login && findSubmission(online.comments, online.login);
+  const s = found && found.submission;
+  return s && matchesPhase(s) && s.power === p ? s : null;
+}
+
 function renderSubmitStatus() {
   const p = assignedPower();
   if (!p) return;
   const el = $('submit-status');
   const btn = $('btn-submit-moves');
+  const loadBtn = $('btn-load-moves');
   const status = powerOnlineStatus(p);
+  const s = mySubmission();
+  // "Load published moves" resets the box back to what's on record for me —
+  // there is nothing to reset once the box already matches it.
+  const matchesRecord = s && normalizeOrders(powerBlockText(p)) === normalizeOrders(s.orders);
+  loadBtn.disabled = !s || matchesRecord;
   el.classList.remove('drift');
   btn.classList.remove('primary');
   el.classList.toggle('done', status === 'published' || status === 'revealed' || status === 'submitted');
@@ -2026,14 +2067,12 @@ function renderSubmitStatus() {
     el.textContent = "No deadline set yet — ask your game master, then you can submit";
     return;
   }
-  const found = online.comments && online.login && findSubmission(online.comments, online.login);
-  const s = found && found.submission;
-  if (s && matchesPhase(s) && s.power === p) {
+  if (s) {
     // Dragging a unit rewrites the order box, and that is indistinguishable
     // from dragging one *before* submitting — so say outright when the box and
     // the submission have parted company. Otherwise "✓ Submitted" quietly
     // refers to orders that are no longer the ones on screen.
-    if (normalizeOrders(powerBlockText(p)) !== normalizeOrders(s.orders)) {
+    if (!matchesRecord) {
       el.classList.remove('done');
       el.classList.add('drift');
       el.textContent = '✎ The box no longer matches what you submitted — 📤 Submit again to update it';
@@ -2271,7 +2310,7 @@ function renderPlayAsControls() {
   row.hidden = !canPlay;
   if (!canPlay) return;
   const sel = $('play-as-select');
-  sel.options[1].textContent = `🧑 Player (${cap(game.assignedPower)})`;
+  sel.options[1].textContent = `${POWER_FLAGS[game.assignedPower] || ''} ${cap(game.assignedPower)}`;
   sel.value = isPlayingAsPlayer() ? 'player' : 'gm';
 }
 
@@ -2374,19 +2413,19 @@ async function refreshOnlineStatus() {
   }
 }
 
-// On first load, put the player's already-submitted orders back into the box
-// (multi-device continuity) — unless they have started drafting this session.
+// Whenever a player opens the game, put their currently published orders
+// back into the box (multi-device continuity) — unless they have already
+// started drafting this session.
 function maybeRestoreSubmission() {
   if (online.restored) return;
   const p = assignedPower();
   if (!p || !online.comments || !online.login) return;
-  const found = findSubmission(online.comments, online.login);
-  const s = found && found.submission;
-  if (!s || !matchesPhase(s) || s.power !== p) return;
+  const s = mySubmission();
+  if (!s) return;
   online.restored = true;
   if (parseOrders(powerBlockText(p), phaseKind()).orders.length) return;
   replacePowerBlock(p, s.orders);
-  toast('Restored the orders you already submitted', 'info');
+  toast('Loaded your published orders', 'info');
 }
 
 async function doSubmitMoves() {
@@ -2423,15 +2462,25 @@ async function doSubmitMoves() {
   }
 }
 
-// Fills the order box with every power's revealed moves for the current
-// phase — published file entries, plus (auto mode, past deadline) on-time
-// submissions straight from the comments. The reveal for players, the
-// pre-resolve step for the GM.
+// An assigned player: replaces just their own block with what's currently on
+// record for them (their latest submission comment), discarding local edits.
+// Everyone else (spectators, or the GM previewing before a resolve): fills
+// the box with every power's revealed moves for the current phase —
+// published file entries, plus (auto mode, past deadline) on-time
+// submissions straight from the comments.
 async function doLoadPublishedMoves() {
   const btn = $('btn-load-moves');
   btn.disabled = true;
   try {
-    if (!online.moves) await refreshOnlineStatus();
+    if (!online.comments || !online.moves) await refreshOnlineStatus();
+    const power = assignedPower();
+    if (power) {
+      const s = mySubmission();
+      if (!s) return toast('Nothing published for you yet this phase');
+      replacePowerBlock(power, s.orders);
+      toast('Reloaded your published orders', 'info');
+      return;
+    }
     const blocks = [];
     for (const p of POWERS) {
       const entry = revealedEntry(p);
@@ -2441,7 +2490,8 @@ async function doLoadPublishedMoves() {
     applyOrdersText(blocks.join('\n'));
     toast(`Loaded moves for ${blocks.length} power${blocks.length === 1 ? '' : 's'}`, 'info');
   } finally {
-    btn.disabled = false;
+    renderSubmitStatus();
+    if (!assignedPower()) btn.disabled = false;
   }
 }
 
@@ -2961,14 +3011,6 @@ async function init() {
     const d = v && new Date(v);
     if (!d || isNaN(d)) return toast('Pick a date and time first');
     setDeadline(d);
-  };
-  $('btn-copy-orders').onclick = () => {
-    const text = $('orders-text').value.trim();
-    if (!text) return toast('No orders to copy yet');
-    navigator.clipboard.writeText(text).then(
-      () => toast('Orders copied — paste them into your email to the game master', 'info'),
-      () => toast('Could not copy')
-    );
   };
 
   for (const b of $('edit-tools').querySelectorAll('.tool')) {

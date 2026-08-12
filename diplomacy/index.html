@@ -93,10 +93,10 @@
           <span class="switch"><input type="checkbox" id="autopublish-toggle"><span class="slider"></span></span>
         </label>
         <div id="play-as-row" class="settings-toggle-row" hidden title="Switch between running the game as its master and playing your own assigned power">
-          <span>🎭 Play as</span>
+          <span>Play as</span>
           <select id="play-as-select">
             <option value="gm">👑 Game Master</option>
-            <option value="player">🧑 Player</option>
+            <option value="player">Player</option>
           </select>
         </div>
       </div>
@@ -107,6 +107,27 @@
     <div id="board-pane"><div id="board"></div></div>
 
     <aside id="sidebar">
+      <!-- history / branch (kept at the top: the one panel every viewer of a
+           live game reaches for first — jumping to a past turn or forking a
+           private copy to try something) -->
+      <details id="panel-history" class="panel" open>
+        <summary><h2>History</h2></summary>
+        <select id="history-select"></select>
+        <div class="btnrow">
+          <button id="btn-replay" title="Step through this past phase again">Replay</button>
+          <button id="btn-undo" title="Undo the most recent phase — the board goes back and your orders return to the box">⤺ Undo</button>
+          <button id="btn-redo" title="Redo the last undone phase">⤻ Redo</button>
+          <button id="btn-branch" title="Copy the current position into a private sandbox">🌿 Branch to sandbox</button>
+        </div>
+        <div id="edit-board-section">
+          <h3>Edit board</h3>
+          <div class="btnrow">
+            <button id="btn-edit" title="Freely place, move and remove units and set supply-center owners">✏ Edit board</button>
+            <button id="btn-update-published" hidden title="Push your position to the published link, so every player sees it">☁ Publish changes</button>
+          </div>
+        </div>
+      </details>
+
       <!-- board editor (toggled with ✏ Edit board) -->
       <div id="panel-edit" class="panel" hidden>
         <h2>Edit board</h2>
@@ -136,7 +157,6 @@
         <p class="draft-note" id="draft-note" hidden></p>
         <div class="sandbox-row" id="country-row" hidden>
           <select id="country-select" title="Choose your country to write its orders"></select>
-          <button id="btn-copy-orders" title="Copy the orders below — paste them into your email to the game master">📋 Copy orders</button>
         </div>
         <div class="btnrow" id="submit-row" hidden>
           <button id="btn-submit-moves" title="Submit your orders to the game — you can resubmit as often as you like before the deadline">📤 Submit moves</button>
@@ -183,23 +203,6 @@
         <summary><h2>Standings</h2></summary>
         <div id="win-thresholds" class="hint"></div>
         <table id="standings"></table>
-      </details>
-
-      <!-- history -->
-      <details id="panel-history" class="panel" open>
-        <summary><h2>History</h2></summary>
-        <select id="history-select"></select>
-        <div class="btnrow">
-          <button id="btn-replay" title="Step through this past phase again">Replay</button>
-          <button id="btn-undo" title="Undo the most recent phase — the board goes back and your orders return to the box">⤺ Undo</button>
-          <button id="btn-redo" title="Redo the last undone phase">⤻ Redo</button>
-          <button id="btn-branch" title="Copy the current position into a private sandbox">🌿 Branch to sandbox</button>
-        </div>
-        <h3>Edit board</h3>
-        <div class="btnrow">
-          <button id="btn-edit" title="Freely place, move and remove units and set supply-center owners">✏ Edit board</button>
-          <button id="btn-update-published" hidden title="Push your position to the published link, so every player sees it">☁ Publish changes</button>
-        </div>
       </details>
 
       <!-- deadline (game master, published games only) -->
