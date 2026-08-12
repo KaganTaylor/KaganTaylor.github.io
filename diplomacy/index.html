@@ -38,6 +38,14 @@
     <div class="spinner"></div>
     <p>Loading game…</p>
   </div>
+  <script>
+    // Un-hides the spinner the instant this markup is parsed, rather than
+    // waiting for js/app.js (a deferred module) to load and run init() —
+    // that gap is exactly the "blank flash" a ?gist= link used to show.
+    if (new URLSearchParams(location.search).get('gist')) {
+      document.getElementById('home-loading').hidden = false;
+    }
+  </script>
 </section>
 
 <section id="game-screen" class="screen" hidden>
