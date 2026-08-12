@@ -38,7 +38,7 @@ let lastParsed = { orders: [], errors: [], byProv: new Map() };
 // strict-convoy route picker: while non-null the board is in route-selection
 // mode — { u, from, dest, route: [seaProv…] } (see startConvoyRoute)
 let convoyPick = null;
-let mobileSheet = null; // null | 'edit' | 'orders' | 'standings' — mobile bottom-sheet state
+let mobileSheet = null; // null | 'orders' | 'standings' — mobile bottom-sheet state
 let orderMode = null; // null | 'support' | 'convoy' | 'arrange' — see setOrderMode()
 // Whether the drag under way was started as a free reposition — read at
 // pointerdown (when Alt was held) so releasing Alt mid-drag cannot turn a
@@ -412,8 +412,6 @@ function refreshAll() {
   // master keeps it too (correcting the official board by hand beats replaying
   // a year), behind a confirmation; see toggleEditMode().
   $('btn-edit').hidden = ro;
-  const editTab = document.querySelector('#mobile-tabbar .mtab[data-sheet="edit"]');
-  if (editTab) editTab.hidden = ro;
   // a viewer's local copy is never allowed to move, so there is nothing to
   // undo there — 🌿 Branch to sandbox is the way to explore instead
   $('btn-undo').disabled = ro || !game.history.length;
@@ -1242,15 +1240,14 @@ function setEditMode(on) {
   editMode = on;
   $('btn-edit').classList.toggle('active', on);
   $('panel-edit').hidden = !on;
-  mobileSheet = on ? 'edit' : (mobileSheet === 'edit' ? null : mobileSheet);
   applyMobileSheetUI();
   updateOrderModeUI();
 }
 
 // A game master editing a published board is editing the official position —
 // legitimate (correcting a mis-entered order beats replaying the year) but
-// never something to fall into by tapping a tab, so it asks first and points
-// at the sandbox as the alternative.
+// never something to fall into by accident, so it asks first and points at
+// the sandbox as the alternative.
 function toggleEditMode() {
   if (!editMode && game.published && isOwnerView() && !confirm(
     'Edit the official board?\n\n' +
@@ -1264,7 +1261,7 @@ function toggleEditMode() {
 }
 
 // ---------------------------------------------------------------------------
-// mobile bottom sheet (Edit / Orders+History / Standings tabs)
+// mobile bottom sheet (Orders+History / Standings tabs)
 // ---------------------------------------------------------------------------
 function applyMobileSheetUI() {
   const sidebar = $('sidebar');
@@ -1278,8 +1275,8 @@ function applyMobileSheetUI() {
 
 // Reserve the open sheet's height at the bottom of the board pane so the map
 // shrinks to the space above it instead of hiding behind it — on mobile the
-// board must stay usable while a sheet is open (that's the whole point of the
-// Edit sheet). The stylesheet reads this as --sheet-h, and ignores it on
+// board must stay usable while a sheet is open (editing units means tapping
+// the map itself). The stylesheet reads this as --sheet-h, and ignores it on
 // desktop, where the sidebar sits beside the board.
 function updateSheetInset() {
   const h = mobileSheet ? $('sidebar').offsetHeight : 0;
@@ -2889,10 +2886,7 @@ async function init() {
   topbarH();
 
   for (const b of document.querySelectorAll('#mobile-tabbar .mtab')) {
-    b.onclick = () => {
-      if (b.dataset.sheet === 'edit') toggleEditMode();
-      else selectMobileSheet(b.dataset.sheet);
-    };
+    b.onclick = () => selectMobileSheet(b.dataset.sheet);
   }
   // the sheet grows and shrinks with its contents (playback list, warnings…),
   // and the board pane's inset has to follow it

@@ -74,14 +74,12 @@
       </button>
     </div>
     <button id="btn-exit-preview" hidden title="Stop viewing the published state and go back to your own position">◀ Back to my position</button>
-    <button id="btn-edit" title="Freely place, move and remove units and set supply-center owners">✏ Edit board</button>
     <div id="settings-wrap">
       <button id="settings-btn" title="Game settings">
         <span class="settings-icon">⚙</span><span class="settings-label">Settings</span>
       </button>
       <div id="settings-menu">
         <button id="btn-publish" title="Publish this game as a read-only, shareable link">📣 Publish</button>
-        <button id="btn-update-published" hidden title="Push your position to the published link, so every player sees it">☁ Publish changes</button>
         <button id="btn-view-published" hidden title="See the position that's actually live at the published link, without touching your own">👁 View published state</button>
         <button id="btn-revert-published" hidden title="Throw away local changes and reload the position from the published link">⟲ Revert to published</button>
         <button id="btn-branch-top" title="Copy this position into a private sandbox and try things there">🌿 Branch to sandbox</button>
@@ -197,6 +195,11 @@
           <button id="btn-redo" title="Redo the last undone phase">⤻ Redo</button>
           <button id="btn-branch" title="Copy the current position into a private sandbox">🌿 Branch to sandbox</button>
         </div>
+        <h3>Edit board</h3>
+        <div class="btnrow">
+          <button id="btn-edit" title="Freely place, move and remove units and set supply-center owners">✏ Edit board</button>
+          <button id="btn-update-published" hidden title="Push your position to the published link, so every player sees it">☁ Publish changes</button>
+        </div>
       </details>
 
       <!-- deadline (game master, published games only) -->
@@ -223,7 +226,6 @@
   </div>
 
   <nav id="mobile-tabbar">
-    <button class="mtab" data-sheet="edit" title="Edit board">✏<span>Edit</span></button>
     <button class="mtab" data-sheet="orders" title="Orders &amp; history">📝<span>Orders</span></button>
     <button class="mtab" data-sheet="standings" title="Standings">📊<span>Standings</span></button>
   </nav>

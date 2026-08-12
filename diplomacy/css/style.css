@@ -165,6 +165,7 @@ a { color: #7fb4ff; }
   padding: 12px; display: flex; flex-direction: column; gap: 14px;
 }
 .panel h2 { margin: 0 0 8px; font-size: 1.05rem; }
+.panel h3 { margin: 12px 0 6px; font-size: 0.85rem; color: #aab3c0; text-transform: uppercase; letter-spacing: .03em; }
 details.panel summary { cursor: pointer; margin-bottom: 8px; }
 details.panel summary h2 { margin: 0; display: inline; }
 details.panel summary::marker { color: #8892a0; }
@@ -373,7 +374,6 @@ dialog.modal h2 { margin: 0 0 14px; font-size: 1.1rem; }
   /* The countdown's DD:HH:MM:SS must stay whole (that's the whole point of
      the format), so it's never truncated. */
   #deadline-countdown { font-size: 0.75em; padding: 2px 4px; flex: none; white-space: nowrap; }
-  #btn-edit { display: none; } /* superseded by the mobile Edit tab */
   .settings-label { display: none; } /* icon-only ⚙ button on mobile */
 
   /* The state indicators keep their colour but drop their words — the icon
@@ -436,12 +436,8 @@ dialog.modal h2 { margin: 0 0 14px; font-size: 1.1rem; }
   }
   #sidebar.sheet-open { transform: translateY(0); }
 
-  /* Which panels belong to which mobile tab. Edit and Standings show one
-     small panel each, so the sheet stays short and the board behind it is
-     still usable — the point of the Edit tab is to tap the map. (The orders
-     box would fill the sheet and hide the board, so it is not in the Edit
-     sheet; the Orders tab is one tap away.) */
-  #sidebar[data-sheet="edit"] > .panel:not(#panel-edit) { display: none; }
+  /* Which panels belong to which mobile tab. Standings shows its own small
+     panel so the sheet stays short and the board behind it is still usable. */
   #sidebar[data-sheet="orders"] > #panel-standings { display: none; }
   #sidebar[data-sheet="standings"] > .panel:not(#panel-standings) { display: none; }
 
