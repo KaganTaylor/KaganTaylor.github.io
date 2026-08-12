@@ -2366,8 +2366,8 @@ function renderSubmissionsModal() {
       mk('✖', `Un-publish ${cap(p)} for this phase so they can resubmit`,
         () => gmUnpublish(p)),
       lateResubmitAllowed(p)
-        ? mk('🔒', `Revoke ${cap(p)}'s late-resubmit authorization for this phase`, () => setLateResubmit(p, false))
-        : mk('🔓', `Let ${cap(p)} (re)submit past the deadline for this phase`, () => setLateResubmit(p, true)),
+        ? mk('🔓', `${cap(p)} may resubmit past the deadline for this phase — click to revoke`, () => setLateResubmit(p, false))
+        : mk('🔒', `Locked to the normal deadline — click to let ${cap(p)} (re)submit past it for this phase`, () => setLateResubmit(p, true)),
     );
     rows.appendChild(row);
   }
