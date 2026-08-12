@@ -33,7 +33,7 @@ a { color: #7fb4ff; }
 [hidden] { display: none !important; }
 
 /* ---------- home ---------- */
-#home-screen { display: flex; align-items: center; justify-content: center; position: relative; }
+#home-screen { display: flex; align-items: center; justify-content: center; position: relative; overflow-y: auto; }
 /* wide enough for the three groups to sit side by side — the middle one now
    carries two labelled sections of games rather than one flat list */
 .home-card { max-width: 900px; padding: 2rem; }
