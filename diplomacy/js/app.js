@@ -423,7 +423,7 @@ function refreshAll() {
   // spectator's two Resolve buttons become a PREVIEW: the phase is
   // adjudicated on a throwaway copy and the real board comes back untouched
   // when the playback closes (previewResolve). An assigned player submits
-  // orders instead (📤 Submit moves) — previewing their own game is not a
+  // orders instead (📤 Submit orders) — previewing their own game is not a
   // real action, so Resolve/Resolve to final are hidden outright for them.
   $('btn-resolve').hidden = isPlayer;
   $('btn-resolve-final').hidden = isPlayer;
@@ -542,15 +542,13 @@ function renderBranchNote() {
 function renderDraftNote() {
   const el = $('draft-note');
   const mode = gameMode();
-  if (mode === 'sandbox') {
+  if (mode === 'sandbox' || mode === 'player') {
     el.hidden = true;
     return;
   }
   el.hidden = false;
   if (mode === 'gm') {
     el.textContent = '👑 These are the official orders. Resolve them, then ☁ Publish changes so every player sees the new board.';
-  } else if (mode === 'player') {
-    el.textContent = `✎ Private draft. Only 📤 Submit moves sends ${cap(assignedPower())}'s orders to the game — dragging pieces changes nothing until then.`;
   } else {
     el.textContent = '✎ Private scratch pad. Nothing you write, drag or preview here reaches the published game.';
   }
@@ -634,7 +632,7 @@ function prefillOrders(preserve = false) {
     $('orders-title').textContent = title('Orders');
     info.textContent = myC
       ? gameMode() === 'player'
-        ? `Write ${cap(myC)}'s orders (type or drag units), then 📤 Submit moves.`
+        ? `Write ${cap(myC)}'s orders (type or drag units), then 📤 Submit orders.`
         : `Write ${cap(myC)}'s orders (type or drag units). 👁 Preview result tries them out safely; 🌿 Branch to sandbox keeps the ideas.`
       : 'Type orders or drag units on the map. Unordered units hold.';
   } else if (game.step === 'retreat') {
@@ -1990,6 +1988,20 @@ function ordersOpen() {
   return !!game.deadline && !deadlinePassed();
 }
 
+// Has the game master specifically authorized `p` to (re)submit after the
+// deadline for the phase on the table right now? Keyed to the exact phase
+// so an authorization never silently carries over once the game moves on.
+function lateResubmitAllowed(p) {
+  const m = game.lateResubmit && game.lateResubmit[p];
+  return !!(m && matchesPhase(m));
+}
+
+// Whether `p` may (re)submit at all: the normal deadline window, or a GM's
+// explicit late-resubmit authorization for this exact phase.
+function isSubmitAllowed(p) {
+  return ordersOpen() || lateResubmitAllowed(p);
+}
+
 // In auto mode a comment edited after the deadline is void — judged by
 // GitHub's own updated_at stamp, never the client-claimed submittedAt.
 function submissionOnTime(found) {
@@ -2051,7 +2063,6 @@ function renderOnlineUI() {
   }
   $('btn-submit-moves').hidden = !assignedPower();
   $('submit-status').hidden = !assignedPower();
-  $('btn-submit-moves').disabled = !ordersOpen();
   $('online-row').hidden = !hasPlayers;
   renderCatchUpButton();
   const loadMovesBtn = $('btn-load-moves');
@@ -2115,25 +2126,33 @@ function renderSubmitStatus() {
   loadBtn.disabled = !s || matchesRecord;
   el.classList.remove('drift');
   btn.classList.remove('primary');
+  // Label reflects whether *anything* has been submitted for this phase yet,
+  // independent of whether the button is currently enabled.
+  btn.textContent = s ? '🔁 Re-submit orders' : '📤 Submit orders';
   el.classList.toggle('done', status === 'published' || status === 'revealed' || status === 'submitted');
+  const allowed = isSubmitAllowed(p);
   if (status === 'published') {
+    btn.disabled = true;
     el.textContent = '✓ Published — your moves are locked in for this phase';
     return;
   }
   if (status === 'revealed') {
+    btn.disabled = true;
     el.textContent = '✓ Revealed — the deadline passed and everyone can see your moves';
     return;
   }
   if (status === 'late') {
-    el.textContent = '⚠ Edited after the deadline — this submission is void';
+    btn.disabled = !allowed;
+    el.textContent = allowed
+      ? '⚠ Edited after the deadline — your game master has allowed you to resubmit'
+      : '⚠ Edited after the deadline — this submission is void';
     return;
   }
-  if (deadlinePassed()) {
-    el.textContent = 'Deadline passed — submissions are closed';
-    return;
-  }
-  if (!game.deadline) {
-    el.textContent = "No deadline set yet — ask your game master, then you can submit";
+  if (!allowed) {
+    btn.disabled = true;
+    el.textContent = deadlinePassed()
+      ? 'Deadline passed — submissions are closed'
+      : "No deadline set yet — ask your game master, then you can submit";
     return;
   }
   if (s) {
@@ -2142,15 +2161,18 @@ function renderSubmitStatus() {
     // the submission have parted company. Otherwise "✓ Submitted" quietly
     // refers to orders that are no longer the ones on screen.
     if (!matchesRecord) {
+      btn.disabled = false;
       el.classList.remove('done');
       el.classList.add('drift');
-      el.textContent = '✎ The box no longer matches what you submitted — 📤 Submit again to update it';
+      el.textContent = '✎ The box no longer matches what you submitted — 🔁 Re-submit to update it';
       btn.classList.add('primary');
       return;
     }
+    btn.disabled = true;
     const when = s.submittedAt ? ' · ' + new Date(s.submittedAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '';
-    el.textContent = `✓ Submitted${when} — resubmit any time before the deadline`;
+    el.textContent = `✓ Submitted${when}`;
   } else {
+    btn.disabled = false;
     el.textContent = 'Not submitted for this phase yet';
     el.classList.remove('done');
     btn.classList.add('primary');
@@ -2343,8 +2365,30 @@ function renderSubmissionsModal() {
       name, login, status,
       mk('✖', `Un-publish ${cap(p)} for this phase so they can resubmit`,
         () => gmUnpublish(p)),
+      lateResubmitAllowed(p)
+        ? mk('🔒', `Revoke ${cap(p)}'s late-resubmit authorization for this phase`, () => setLateResubmit(p, false))
+        : mk('🔓', `Let ${cap(p)} (re)submit past the deadline for this phase`, () => setLateResubmit(p, true)),
     );
     rows.appendChild(row);
+  }
+}
+
+// GM: authorize (or revoke authorization for) a power to submit/resubmit
+// orders after the deadline has passed, for the phase on the table right
+// now only — see lateResubmitAllowed().
+async function setLateResubmit(power, allow) {
+  game.lateResubmit = { ...(game.lateResubmit || {}) };
+  if (allow) game.lateResubmit[power] = { year: game.year, season: game.season, step: game.step };
+  else delete game.lateResubmit[power];
+  S.saveGame(game);
+  renderSubmissionsModal();
+  try {
+    await updatePublished(game, game.publishedState);
+    toast(allow ? `${cap(power)} may resubmit past the deadline for this phase` : `Late resubmission revoked for ${cap(power)}`, 'info');
+    await refreshOnlineStatus();
+  } catch (e) {
+    toast('Could not save the authorization: ' + e.message);
+    if (isAuthError(e)) askToken();
   }
 }
 
@@ -2506,7 +2550,7 @@ function maybeRestoreSubmission() {
 async function doSubmitMoves() {
   const power = assignedPower();
   if (!power) return;
-  if (!ordersOpen()) {
+  if (!isSubmitAllowed(power)) {
     return toast(
       game.deadline
         ? 'The deadline has passed — ask your game master to re-open with a new deadline'
@@ -2527,13 +2571,13 @@ async function doSubmitMoves() {
       orders: block,
     });
     online.restored = true; // what's in the box IS the submission now
-    toast(`Orders submitted for ${cap(power)} — resubmit any time before the deadline`, 'info');
+    toast(`Orders submitted for ${cap(power)}`, 'info');
     await refreshOnlineStatus();
   } catch (e) {
     toast('Submit failed: ' + e.message);
     if (isAuthError(e)) askToken();
   } finally {
-    btn.disabled = !ordersOpen();
+    renderSubmitStatus();
   }
 }
 

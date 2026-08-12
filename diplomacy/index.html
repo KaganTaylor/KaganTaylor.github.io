@@ -115,6 +115,27 @@
     <div id="board-pane"><div id="board"></div></div>
 
     <aside id="sidebar">
+      <!-- deadline (game master, published games only) -->
+      <details id="panel-deadline" class="panel" open hidden>
+        <summary><h2>⏰ Deadline</h2></summary>
+        <p class="hint">Submissions close when the deadline passes. Confirm a new one each phase —
+          a week for movement, a day or two for retreats and builds. Confirming a new deadline
+          re-opens submissions.</p>
+        <div class="btnrow">
+          <button id="deadline-plus-week" title="Previous deadline + 1 week (from now if none is set)">+1 week</button>
+          <button id="deadline-plus-2day" title="Previous deadline + 48 hours (from now if none is set)">+48 h</button>
+          <button id="deadline-plus-day" title="Previous deadline + 24 hours (from now if none is set)">+24 h</button>
+          <button id="deadline-clear" title="Remove the deadline — submissions stay open until you confirm a new one">✖ Clear</button>
+        </div>
+        <div class="sandbox-row">
+          <input id="deadline-input" type="datetime-local" title="Pick a custom deadline (your local time)">
+          <button id="deadline-set" title="Set the deadline to the picked date and time">Set</button>
+        </div>
+        <div class="btnrow">
+          <button id="deadline-load-btn" class="primary" title="Loads submitted orders once the deadline passes — or, with no deadline set, opens an empty box so you can skip the game forward">⬇ Load orders</button>
+        </div>
+      </details>
+
       <!-- history / branch (kept at the top: the one panel every viewer of a
            live game reaches for first — jumping to a past turn or forking a
            private copy to try something) -->
@@ -184,7 +205,7 @@
           <div id="deadline-info" class="hint"></div>
           <div class="btnrow">
             <button id="btn-load-moves" title="Fill the order box with every power's submitted moves for the current phase">⬇ Load submitted moves</button>
-            <button id="btn-submit-moves" hidden title="Submit your orders to the game — you can resubmit as often as you like before the deadline">📤 Submit moves</button>
+            <button id="btn-submit-moves" hidden title="Submit your orders to the game">📤 Submit orders</button>
           </div>
           <div id="submit-status" class="hint" hidden></div>
         </div>
@@ -215,27 +236,6 @@
         <summary><h2>Standings</h2></summary>
         <div id="win-thresholds" class="hint"></div>
         <table id="standings"></table>
-      </details>
-
-      <!-- deadline (game master, published games only) -->
-      <details id="panel-deadline" class="panel" open hidden>
-        <summary><h2>⏰ Deadline</h2></summary>
-        <p class="hint">Submissions close when the deadline passes. Confirm a new one each phase —
-          a week for movement, a day or two for retreats and builds. Confirming a new deadline
-          re-opens submissions.</p>
-        <div class="btnrow">
-          <button id="deadline-plus-week" title="Previous deadline + 1 week (from now if none is set)">+1 week</button>
-          <button id="deadline-plus-2day" title="Previous deadline + 48 hours (from now if none is set)">+48 h</button>
-          <button id="deadline-plus-day" title="Previous deadline + 24 hours (from now if none is set)">+24 h</button>
-          <button id="deadline-clear" title="Remove the deadline — submissions stay open until you confirm a new one">✖ Clear</button>
-        </div>
-        <div class="sandbox-row">
-          <input id="deadline-input" type="datetime-local" title="Pick a custom deadline (your local time)">
-          <button id="deadline-set" title="Set the deadline to the picked date and time">Set</button>
-        </div>
-        <div class="btnrow">
-          <button id="deadline-load-btn" class="primary" title="Loads submitted orders once the deadline passes — or, with no deadline set, opens an empty box so you can skip the game forward">⬇ Load orders</button>
-        </div>
       </details>
     </aside>
   </div>
