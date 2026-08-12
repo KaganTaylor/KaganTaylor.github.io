@@ -20,6 +20,7 @@ import {
   getAuthenticatedLogin, extractGistId,
   listComments, findSubmission, submitOrders,
   fetchGist, readMovesFiles, readGameFile, writeMovesFiles, upsertMovesEntry,
+  getLastServerDate,
 } from './publish.js';
 
 const $ = (id) => document.getElementById(id);
@@ -63,7 +64,7 @@ let hiddenOrdersText = '';
 // Live view of a published game's online-play state: everyone's submission
 // comments, the published moves-<power>.json files, and this browser's
 // GitHub login. Refetched on load and after every submit/publish action.
-let online = { comments: null, moves: null, login: null, restored: false };
+let online = { comments: null, moves: null, login: null, restored: false, serverOffset: 0 };
 
 // A game master who has assigned their own GitHub login to a power in 👥 Set
 // players can freely switch (⚙ Settings → 🎭 Play as) between running the
@@ -383,7 +384,7 @@ function openGame(g) {
   publishedPreview = null;
   gmOrdersLoaded = false;
   catchUpTarget = null; // re-established below/by refreshOnlineStatus() for THIS game, not whatever was last open
-  online = { comments: null, moves: null, login: null, restored: false };
+  online = { comments: null, moves: null, login: null, restored: false, serverOffset: 0 };
   S.saveGame(game);
   showScreen('game-screen');
   $('game-name').textContent = game.name;
@@ -1529,14 +1530,85 @@ function catchUpNext() {
   playback.catchUp = true;
 }
 
+// Auto mode, deadline passed: a player can resolve the phase locally from the
+// revealed on-time submissions the instant the deadline hits, without waiting
+// for the GM to publish — the whole point of "auto" when the GM is asleep.
+// Only offered when the gist hasn't already advanced past us (that case is the
+// gist-driven catchUpTarget path instead) and we haven't already provisionally
+// resolved this phase.
+function localAutoResolveAvailable() {
+  if (!game || !game.published || playback || catchUpTarget) return false;
+  // owner drives the real resolution (manual publish / autoPublishIfDue) — this
+  // optimistic local advance is for read-only players/spectators only.
+  if (!isReadOnly()) return false;
+  if (publishMode() !== 'auto' || !deadlinePassed()) return false;
+  if (game.provisionalPhase && matchesPhase(game.provisionalPhase)) return false;
+  return activePowers().some((p) => revealedEntry(p));
+}
+
+// Resolves the current phase locally from the revealed on-time submissions and
+// plays it out — the player's optimistic advance ahead of the GM's real
+// publish. Marked provisional (game.provisionalPhase) so reconcileProvisional-
+// Phase() can defer to the gist once the GM's version lands. No gist writes.
+function resolveRevealedLocally() {
+  if (!localAutoResolveAvailable()) return;
+  const phase = { year: game.year, season: game.season, step: game.step };
+  const blocks = [];
+  for (const p of activePowers()) {
+    const found = phaseSubmission(p);
+    const s = found && submissionOnTime(found) ? found.submission : null;
+    if (s && s.orders.trim()) blocks.push(p.toUpperCase() + '\n' + s.orders.trim() + '\n');
+  }
+  const text = blocks.join('\n');
+  const parsed = parseOrders(text, phaseKind());
+  const entry = S.resolvePhase(game, parsed.orders, text);
+  game.provisionalPhase = phase;
+  S.saveGame(game);
+  startPlayback(entry, false);
+  playback.catchUp = true;
+}
+
+// Once the GM publishes the phase we optimistically resolved, defer to the
+// gist. Identical outcome → just clear the provisional flag. Divergent outcome
+// (GM used late-resubmit or amended) → roll our provisional phase back so the
+// catch-up path replays the GM's authoritative version.
+function reconcileProvisionalPhase(g, fresh) {
+  if (!g.provisionalPhase) return;
+  const idx = g.history.length - 1;
+  if (idx < 0) return;
+  const ours = g.history[idx];
+  const theirs = fresh.history[idx];
+  // The gist hasn't reached our provisional phase yet — nothing to reconcile.
+  if (!ours || !theirs) return;
+  const same = JSON.stringify(ours.unitsAfter) === JSON.stringify(theirs.unitsAfter)
+    && JSON.stringify(ours.scOwnersAfter) === JSON.stringify(theirs.scOwnersAfter);
+  if (same) {
+    g.provisionalPhase = null;
+    return;
+  }
+  // Divergent: undo our provisional phase and let catch-up replay the GM's.
+  S.undoLastPhase(g);
+  g.redoStack = [];
+  g.provisionalPhase = null;
+  S.saveGame(g);
+}
+
 function renderCatchUpButton() {
   const btn = $('btn-catch-up');
-  const behind = !!catchUpTarget;
-  btn.hidden = !behind;
-  if (behind) {
+  if (catchUpTarget) {
+    btn.hidden = false;
     const n = catchUpTarget.history.length - game.history.length;
     btn.textContent = `▶ Resolve new orders! (${n} phase${n === 1 ? '' : 's'})`;
+    btn.onclick = catchUpNext;
+    return;
   }
+  if (localAutoResolveAvailable()) {
+    btn.hidden = false;
+    btn.textContent = '▶ Resolve new orders!';
+    btn.onclick = resolveRevealedLocally;
+    return;
+  }
+  btn.hidden = true;
 }
 
 // `preview` is the throwaway game the entry was resolved on (previewResolve);
@@ -1977,9 +2049,19 @@ function publishMode() {
   return game && game.publishMode === 'auto' ? 'auto' : 'manual';
 }
 
+// Trusted wall clock: the local device time corrected by the offset to
+// GitHub's server `Date` header (captured on every gist read). A player can
+// spoof Date.now() to peek at auto-mode orders early; they cannot spoof
+// GitHub's server clock. Falls back to the raw local clock until the first
+// server date is seen (offline/first paint) — the safe direction, since a
+// player with no network simply can't reveal yet.
+function trustedNow() {
+  return Date.now() + (online.serverOffset || 0);
+}
+
 function deadlinePassed() {
   const d = deadlineDate();
-  return !!d && d.getTime() <= Date.now();
+  return !!d && d.getTime() <= trustedNow();
 }
 
 // Orders can only be submitted while a deadline is set and hasn't passed yet
@@ -2497,6 +2579,13 @@ async function refreshOnlineStatus() {
     online.moves = moves;
     online.comments = comments;
     online.login = login;
+    // Correct our clock against GitHub's server time so the deadline gate
+    // (deadlinePassed → trustedNow) can't be beaten by a spoofed device clock.
+    const serverDate = getLastServerDate();
+    if (serverDate) {
+      const parsed = Date.parse(serverDate);
+      if (!isNaN(parsed)) online.serverOffset = parsed - Date.now();
+    }
     // Resolved for the owner too — that's what lets a GM who assigned
     // themselves a power in 👥 Set players genuinely 🎭 Play as that power.
     let assigned = null;
@@ -2511,6 +2600,14 @@ async function refreshOnlineStatus() {
     // player may deliberately switch to the all-countries view
     if (assigned && changed) g.myCountry = assigned;
     S.saveGame(g);
+    // If this browser optimistically resolved a phase locally (auto mode, see
+    // resolveRevealedLocally) and the GM has since published that same phase,
+    // reconcile: the gist is authoritative. When the GM's published outcome
+    // matches ours (the common case — same adjudicator, same on-time orders),
+    // just confirm it. When it diverges (GM used late-resubmit or amended),
+    // roll our provisional phase back so the catch-up path below replays the
+    // GM's real version.
+    if (fresh && Array.isArray(fresh.history)) reconcileProvisionalPhase(g, fresh);
     // A read-only viewer's local board is never silently replaced (see
     // catchUpNext()) — if the gist has resolved further than this browser has
     // seen, flag it instead so ▶ Resolve new orders! can walk them there.
@@ -3096,7 +3193,8 @@ async function init() {
   };
   $('btn-submit-moves').onclick = doSubmitMoves;
   $('btn-load-moves').onclick = doLoadPublishedMoves;
-  $('btn-catch-up').onclick = catchUpNext;
+  // btn-catch-up's onclick is set per-render by renderCatchUpButton() — it
+  // toggles between the gist-driven catchUpNext and the local auto-resolve.
   $('btn-set-players').onclick = openPlayersModal;
   $('players-save').onclick = savePlayers;
   $('players-modal-close').onclick = closePlayersModal;

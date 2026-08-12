@@ -28,8 +28,19 @@ function stripForPublish(game) {
   return rest;
 }
 
+// GitHub stamps every response with a `Date` header from its own servers —
+// a trustworthy wall clock no client can tamper with. We cache the most
+// recent one so callers can gate deadline decisions on server time rather
+// than the local (spoofable) device clock. See app.js trustedNow().
+let lastServerDate = null;
+export function getLastServerDate() {
+  return lastServerDate;
+}
+
 async function ghFetch(url, opts) {
   const res = await fetch(url, opts);
+  const d = res.headers.get('Date');
+  if (d) lastServerDate = d;
   if (!res.ok) {
     let msg = res.statusText;
     try { msg = (await res.json()).message || msg; } catch { /* ignore */ }
