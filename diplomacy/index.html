@@ -125,7 +125,7 @@
           <button id="btn-replay" title="Step through this past phase again">Replay</button>
           <button id="btn-undo" title="Undo the most recent phase — the board goes back and your orders return to the box">⤺ Undo</button>
           <button id="btn-redo" title="Redo the last undone phase">⤻ Redo</button>
-          <button id="btn-branch" title="Copy the current position into a private sandbox">🌿 Branch to sandbox</button>
+          <button id="btn-branch" title="Copy the current position into a private sandbox">🌿 Branch</button>
         </div>
         <div id="edit-board-section">
           <h3>Edit board</h3>
@@ -166,23 +166,27 @@
         <div class="sandbox-row" id="country-row" hidden>
           <select id="country-select" title="Choose your country to write its orders"></select>
         </div>
-        <div class="btnrow" id="submit-row" hidden>
-          <button id="btn-submit-moves" title="Submit your orders to the game — you can resubmit as often as you like before the deadline">📤 Submit moves</button>
-          <span id="submit-status" class="hint"></span>
-        </div>
-        <div id="online-row" hidden>
-          <div id="deadline-info" class="hint"></div>
-          <div class="btnrow">
-            <button id="btn-load-moves" title="Fill the order box with every power's published moves for the current phase">⬇ Load published moves</button>
-            <button id="btn-refresh-online" title="Re-check submissions and published moves">🔄</button>
-          </div>
-        </div>
-        <div id="phase-info"></div>
-        <textarea id="orders-text" spellcheck="false" placeholder="FRANCE&#10;A Par - Bur&#10;F Bre - MAO&#10;A Mar S A Par - Bur"></textarea>
+        <button id="btn-catch-up" class="primary catch-up-btn" hidden
+                title="A new phase has been published since you last looked — step through it to bring your board up to date">
+          ▶ Resolve new orders!
+        </button>
+        <details id="orders-box">
+          <summary>Order box</summary>
+          <div id="phase-info"></div>
+          <textarea id="orders-text" spellcheck="false" placeholder="FRANCE&#10;A Par - Bur&#10;F Bre - MAO&#10;A Mar S A Par - Bur"></textarea>
+        </details>
         <div id="parse-status"></div>
         <div class="btnrow">
           <button id="btn-resolve" class="primary">Resolve</button>
           <button id="btn-resolve-final" title="Resolve and jump straight to the final position — animates the moves without stepping through each order first">⏭ Resolve to final</button>
+        </div>
+        <div id="online-row" hidden>
+          <div id="deadline-info" class="hint"></div>
+          <div class="btnrow">
+            <button id="btn-load-moves" title="Fill the order box with every power's submitted moves for the current phase">⬇ Load submitted moves</button>
+            <button id="btn-submit-moves" hidden title="Submit your orders to the game — you can resubmit as often as you like before the deadline">📤 Submit moves</button>
+          </div>
+          <div id="submit-status" class="hint" hidden></div>
         </div>
         <p class="hint" id="drag-hint">Drag a unit to its destination to write the order · drop on itself to hold · <b>⇧-drop</b> on a unit to support it (or turn on 🤝&nbsp;Support and just drag) · <b>Ctrl-drop</b> a fleet at sea onto a moving army to convoy (or turn on ⚓&nbsp;Convoy) · unordered units hold.<span id="arrange-hint" hidden><br><b>Alt-drag</b> a piece (or turn on ✋&nbsp;Arrange) to put it anywhere, rules ignored — sandboxes only.</span></p>
       </details>

@@ -79,6 +79,15 @@ let gmOrdersLoaded = false;
 // a previous auto-publish is still in flight.
 let autoPublishing = false;
 
+// The full published game (fetched via refreshOnlineStatus/loadPublishedGame)
+// once it has moved on further than this browser's local copy — set only for
+// a read-only viewer (player/spectator), never silently applied. Drives the
+// ▶ Resolve new orders! button; catchUpNext() steps the local game through
+// game.history[game.history.length] .. catchUpTarget.history[last] one phase
+// at a time so a returning player is never dropped onto a board they haven't
+// seen resolve, see DECISIONS.md.
+let catchUpTarget = null;
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
@@ -373,12 +382,17 @@ function openGame(g) {
   playback = null;
   publishedPreview = null;
   gmOrdersLoaded = false;
+  catchUpTarget = null; // re-established below/by refreshOnlineStatus() for THIS game, not whatever was last open
   online = { comments: null, moves: null, login: null, restored: false };
   S.saveGame(game);
   showScreen('game-screen');
   $('game-name').textContent = game.name;
   mobileSheet = null;
   setEditMode(isSandbox() && game.units.length === 0);
+  // A real player's order box is a second thing to check, not the reason
+  // they opened the game — collapsed by default so the panel opens onto the
+  // history/catch-up controls instead. Everyone else still wants it open.
+  $('orders-box').open = gameMode() !== 'player';
   refreshAll();
   if (game.published && game.gistId) refreshOnlineStatus();
 }
@@ -431,9 +445,13 @@ function refreshAll() {
   $('btn-edit').hidden = ro;
   $('edit-board-section').hidden = ro;
   // a viewer's local copy is never allowed to move, so there is nothing to
-  // undo there — 🌿 Branch to sandbox is the way to explore instead
-  $('btn-undo').disabled = ro || !game.history.length;
-  $('btn-redo').disabled = ro || !(game.redoStack && game.redoStack.length);
+  // undo there — and never anything to publish either — so the buttons
+  // disappear entirely rather than sitting there disabled; 🌿 Branch is the
+  // way to explore instead
+  $('btn-undo').hidden = ro;
+  $('btn-redo').hidden = ro;
+  $('btn-undo').disabled = !game.history.length;
+  $('btn-redo').disabled = !(game.redoStack && game.redoStack.length);
   $('btn-publish').hidden = ro || !!game.published;
   $('btn-update-published').hidden = !(game.published && isOwnerView());
   $('btn-update-published').disabled = !boardDirty();
@@ -609,8 +627,9 @@ function prefillOrders(preserve = false) {
   const ta = $('orders-text');
   const info = $('phase-info');
   const myC = myCountry();
-  // a viewer's box is a draft, and the heading says so on every phase
-  const title = (base) => (isReadOnly() ? 'Draft ' + base.toLowerCase() : base) + ' — ' + S.phaseLabel(game);
+  // the current phase is already shown in the topbar, so the heading itself
+  // stays a plain, constant label
+  const title = (base) => base;
   if (game.step === 'movement') {
     $('orders-title').textContent = title('Orders');
     info.textContent = myC
@@ -1487,6 +1506,41 @@ function partialVerdicts(entry, revealedOrders) {
   return map;
 }
 
+// ▶ Resolve new orders! — plays the next not-yet-seen phase from
+// catchUpTarget.history (already fully resolved and fetched from the gist)
+// onto the real, local game, exactly like a live resolve does (see
+// resolveCurrent): the game object is advanced first, then startPlayback()
+// just shows it happening. endPlayback() chains straight into the next one
+// while any remain, so a player who missed several phases steps through each
+// in turn instead of being dropped on a board they never saw resolve.
+function catchUpNext() {
+  if (!catchUpTarget || playback) return;
+  const raw = catchUpTarget.history[game.history.length];
+  if (!raw) { catchUpTarget = null; refreshAll(); return; }
+  const entry = structuredClone(raw);
+  game.units = structuredClone(entry.unitsAfter);
+  game.scOwners = structuredClone(entry.scOwnersAfter);
+  game.pending = structuredClone(entry.pendingAfter) || null;
+  game.season = entry.seasonAfter;
+  game.year = entry.yearAfter;
+  game.step = entry.stepAfter;
+  game.history.push(entry);
+  game.redoStack = [];
+  S.saveGame(game);
+  startPlayback(entry, false);
+  playback.catchUp = true;
+}
+
+function renderCatchUpButton() {
+  const btn = $('btn-catch-up');
+  const behind = !!catchUpTarget;
+  btn.hidden = !behind;
+  if (behind) {
+    const n = catchUpTarget.history.length - game.history.length;
+    btn.textContent = `▶ Resolve new orders! (${n} phase${n === 1 ? '' : 's'})`;
+  }
+}
+
 // `preview` is the throwaway game the entry was resolved on (previewResolve);
 // null for a real resolution or a replay of a past turn. `gmPending`, when
 // set, marks this as the game master's real resolution-in-waiting for a
@@ -1632,7 +1686,20 @@ function stepPlayback(delta) {
 
 function endPlayback() {
   const wasPreview = !!(playback && playback.preview);
+  const wasCatchUp = !!(playback && playback.catchUp);
   playback = null;
+  // More phases to see before this browser matches the published game —
+  // step straight into the next one instead of dropping back to the order
+  // box in between (see catchUpNext()).
+  if (wasCatchUp && catchUpTarget && game.history.length < catchUpTarget.history.length) {
+    catchUpNext();
+    return;
+  }
+  if (wasCatchUp) {
+    catchUpTarget = null;
+    game.publishedState = S.boardSnapshot(game);
+    S.saveGame(game);
+  }
   refreshAll(); // re-renders the real position over whatever the playback drew
   // a resolved-but-unpublished turn is invisible to the table, so say so once,
   // right after the moment it happens (the ● pill keeps saying it afterwards)
@@ -1982,9 +2049,11 @@ function renderOnlineUI() {
   if (document.activeElement !== $('autopublish-toggle')) {
     $('autopublish-toggle').checked = publishMode() === 'auto';
   }
-  $('submit-row').hidden = !assignedPower();
+  $('btn-submit-moves').hidden = !assignedPower();
+  $('submit-status').hidden = !assignedPower();
   $('btn-submit-moves').disabled = !ordersOpen();
   $('online-row').hidden = !hasPlayers;
+  renderCatchUpButton();
   const loadMovesBtn = $('btn-load-moves');
   if (assignedPower()) {
     loadMovesBtn.title = 'Replace the box with your currently published orders, discarding local changes';
@@ -1992,7 +2061,7 @@ function renderOnlineUI() {
     // step with every keystroke by renderSubmitStatus(), not here
   } else {
     loadMovesBtn.disabled = false;
-    loadMovesBtn.title = "Fill the order box with every power's published moves for the current phase";
+    loadMovesBtn.title = "Fill the order box with every power's submitted moves for the current phase";
   }
   if (game.published && isOwnerView()) {
     const loadBtn = $('deadline-load-btn');
@@ -2400,6 +2469,12 @@ async function refreshOnlineStatus() {
     // player may deliberately switch to the all-countries view
     if (assigned && changed) g.myCountry = assigned;
     S.saveGame(g);
+    // A read-only viewer's local board is never silently replaced (see
+    // catchUpNext()) — if the gist has resolved further than this browser has
+    // seen, flag it instead so ▶ Resolve new orders! can walk them there.
+    if (fresh && isReadOnly() && Array.isArray(fresh.history)) {
+      catchUpTarget = fresh.history.length > g.history.length ? fresh : null;
+    }
     if (changed) {
       renderCountrySelect();
       prefillOrders(true);
@@ -2472,7 +2547,9 @@ async function doLoadPublishedMoves() {
   const btn = $('btn-load-moves');
   btn.disabled = true;
   try {
-    if (!online.comments || !online.moves) await refreshOnlineStatus();
+    // no dedicated refresh button — this is also how a viewer re-checks for
+    // new submissions/published moves
+    await refreshOnlineStatus();
     const power = assignedPower();
     if (power) {
       const s = mySubmission();
@@ -2862,17 +2939,27 @@ async function loadPublishedGame(idOrUrl) {
       S.saveGame(local);
       return openGame(local);
     }
+    // A returning read-only viewer keeps the board they last saw — jumping
+    // straight to whatever the gist now holds would drop them onto a new
+    // position without ever showing them how it got there. Instead open the
+    // local copy as-is and let ▶ Resolve new orders! (see catchUpNext()) walk
+    // them through anything published since.
+    if (!isOwner && local) {
+      openGame(local);
+      if (Array.isArray(fetched.history) && fetched.history.length > local.history.length) {
+        catchUpTarget = fetched;
+        renderCatchUpButton();
+      }
+      return;
+    }
     const g = S.importGame(JSON.stringify(fetched));
     g.gistId = id;
     g.published = true;
     g.isOwner = isOwner;
-    g.name = local ? local.name : uniqueName(g.name || 'Published game');
-    g.myCountry = local ? local.myCountry : null; // keep the viewer's chosen country
-    // keep the known assignment so the power lock renders immediately;
-    // refreshOnlineStatus() re-verifies it against the token's login
-    g.assignedPower = local ? local.assignedPower : null;
-    if (g.assignedPower) g.myCountry = g.assignedPower;
-    g.playAs = local ? local.playAs : null;
+    g.name = uniqueName(g.name || 'Published game');
+    g.myCountry = null;
+    g.assignedPower = null;
+    g.playAs = null;
     // this position was just fetched from the published gist, so it *is*
     // the published state — without this, boardDirty() sees no
     // publishedState and reports dirty even though nothing has changed yet
@@ -2985,7 +3072,7 @@ async function init() {
   };
   $('btn-submit-moves').onclick = doSubmitMoves;
   $('btn-load-moves').onclick = doLoadPublishedMoves;
-  $('btn-refresh-online').onclick = () => refreshOnlineStatus();
+  $('btn-catch-up').onclick = catchUpNext;
   $('btn-set-players').onclick = openPlayersModal;
   $('players-save').onclick = savePlayers;
   $('players-modal-close').onclick = closePlayersModal;
