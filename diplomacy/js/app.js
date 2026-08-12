@@ -2909,7 +2909,6 @@ async function init() {
   }
 
   $('btn-new').onclick = () => openGame(S.newGame(uniqueName($('new-name').value.trim() || 'Game')));
-  $('btn-sandbox').onclick = () => openGame(S.sandboxGame(uniqueName(($('new-name').value.trim() || 'Sandbox'))));
   $('import-file').onchange = (e) => e.target.files[0] && importFile(e.target.files[0]);
   $('btn-home').onclick = () => {
     // a GM walking away from an unpublished turn is the one exit worth
@@ -2978,7 +2977,6 @@ async function init() {
   $('btn-open-source').onclick = openBranchSource;
   $('btn-sync').onclick = doUpdatePublished;
   $('btn-exit-preview').onclick = exitPublishedPreview;
-  $('btn-load-gist').onclick = () => loadPublishedGame($('load-gist-input').value);
   $('country-select').onchange = () => {
     game.myCountry = $('country-select').value || null;
     S.saveGame(game);
@@ -3114,7 +3112,14 @@ async function init() {
   renderHome();
   showScreen('home-screen');
   const gistParam = new URLSearchParams(location.search).get('gist');
-  if (gistParam) await loadPublishedGame(gistParam);
+  if (gistParam) {
+    $('home-loading').hidden = false;
+    try {
+      await loadPublishedGame(gistParam);
+    } finally {
+      $('home-loading').hidden = true;
+    }
+  }
   autotest();
 }
 

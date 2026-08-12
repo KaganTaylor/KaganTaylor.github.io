@@ -33,7 +33,7 @@ a { color: #7fb4ff; }
 [hidden] { display: none !important; }
 
 /* ---------- home ---------- */
-#home-screen { display: flex; align-items: center; justify-content: center; }
+#home-screen { display: flex; align-items: center; justify-content: center; position: relative; }
 /* wide enough for the three groups to sit side by side — the middle one now
    carries two labelled sections of games rather than one flat list */
 .home-card { max-width: 900px; padding: 2rem; }
@@ -88,11 +88,21 @@ a { color: #7fb4ff; }
 .filebtn:hover { background: #394050; }
 .filebtn input { display: none; }
 .credits { color: #77808e; font-size: 0.85em; }
-.linklike {
-  background: none; border: none; padding: 0; margin: 0;
-  color: #77808e; font: inherit; text-decoration: underline; cursor: pointer;
+
+/* Covers the home card while a shared game link (?gist=…) is being fetched,
+   so opening a link doesn't sit on the bare home screen with no feedback. */
+.home-loading {
+  position: absolute; inset: 0; z-index: 1;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+  background: #1a1d23dd; border-radius: 10px;
+  color: #aab3c0;
 }
-.linklike:hover { color: #aab3c0; }
+.spinner {
+  width: 32px; height: 32px; border-radius: 50%;
+  border: 3px solid #3a4150; border-top-color: #4f7ec0;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ---------- game screen ---------- */
 #game-screen { display: flex; flex-direction: column; }

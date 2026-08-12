@@ -66,7 +66,7 @@ Every game is one of two things, and the app never leaves you guessing which:
 | Undo / Redo | yes | game master only |
 | Becomes | an online game, if you 📣 Publish it | — |
 
-Branches, practice copies and the old empty-board sandbox are all just sandboxes. **Publishing a sandbox is what makes it the real game.**
+Branches and practice copies are all just sandboxes. **Publishing a sandbox is what makes it the real game.**
 
 **Telling them apart.** The chip beside the game's name says which (`🧪 Sandbox`, `☁ Live · 👑 Game master`, `☁ Live · 🇫🇷 France`, `☁ Live · 👁 Watching`), a stripe along the top of the topbar carries the same colour, and so does a ring around the board. On the home screen your games are grouped into ☁ Online games and 🧪 Sandboxes, each row showing its role badge (a flag for an assigned power), its deadline countdown, and — for a branch — the game it came from.
 
