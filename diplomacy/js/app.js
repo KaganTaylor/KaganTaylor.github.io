@@ -2458,18 +2458,28 @@ async function gmLoadOrders() {
   if (ordersOpen()) return toast('Wait for the deadline before loading orders');
   try {
     if (!online.comments) await refreshOnlineStatus();
+    // Every active power gets a header — submitted powers get their orders,
+    // everyone else gets the blank per-phase template — so the box always
+    // shows the full roster to fill in by hand, submissions or not.
+    const defaultByPower = splitOrdersByPower(defaultOrdersText());
     const blocks = [];
+    let submitted = 0;
     for (const p of activePowers()) {
       const found = phaseSubmission(p);
       const s = found && found.submission;
-      if (s && s.orders.trim()) blocks.push(p.toUpperCase() + '\n' + s.orders.trim() + '\n');
+      if (s && s.orders.trim()) {
+        blocks.push(p.toUpperCase() + '\n' + s.orders.trim() + '\n');
+        submitted++;
+      } else if (defaultByPower.has(p)) {
+        blocks.push(defaultByPower.get(p).join('\n'));
+      }
     }
     applyOrdersText(blocks.join('\n'));
     gmOrdersLoaded = true;
     refreshAll();
     toast(
-      blocks.length
-        ? `Loaded ${blocks.length} submission${blocks.length === 1 ? '' : 's'} — resolve when ready`
+      submitted
+        ? `Loaded ${submitted} submission${submitted === 1 ? '' : 's'} — resolve when ready`
         : 'No submissions yet — order box is open for you to fill in',
       'info'
     );
