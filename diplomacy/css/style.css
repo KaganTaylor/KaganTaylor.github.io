@@ -33,10 +33,13 @@ a { color: #7fb4ff; }
 [hidden] { display: none !important; }
 
 /* ---------- home ---------- */
-#home-screen { display: flex; align-items: center; justify-content: center; position: relative; overflow-y: auto; }
+#home-screen { display: flex; justify-content: center; position: relative; overflow-y: auto; }
 /* wide enough for the three groups to sit side by side — the middle one now
-   carries two labelled sections of games rather than one flat list */
-.home-card { max-width: 900px; padding: 2rem; }
+   carries two labelled sections of games rather than one flat list.
+   Centered via margin:auto (not align-items:center) so that when the
+   card grows taller than the viewport, the margins collapse to 0
+   instead of clipping the top out of scroll range. */
+.home-card { max-width: 900px; padding: 2rem; margin: auto; }
 .home-card h1 { margin: 0 0 0.4rem; }
 .subtitle { color: #aab3c0; margin-top: 0; }
 .home-actions { display: flex; gap: 2rem; margin: 1.5rem 0; flex-wrap: wrap; }
