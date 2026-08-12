@@ -2363,8 +2363,6 @@ function renderSubmissionsModal() {
     };
     row.append(
       name, login, status,
-      mk('✖', `Un-publish ${cap(p)} for this phase so they can resubmit`,
-        () => gmUnpublish(p)),
       lateResubmitAllowed(p)
         ? mk('🔓', `${cap(p)} may resubmit past the deadline for this phase — click to revoke`, () => setLateResubmit(p, false))
         : mk('🔒', `Locked to the normal deadline — click to let ${cap(p)} (re)submit past it for this phase`, () => setLateResubmit(p, true)),
@@ -2755,24 +2753,6 @@ async function autoPublishIfDue() {
     toast('Auto-publish failed: ' + e.message);
   } finally {
     autoPublishing = false;
-  }
-}
-
-// GM: drop a power's published entry for the current phase, reopening its
-// submission window (the player can edit their comment and republish).
-async function gmUnpublish(power) {
-  try {
-    const moves = await readMovesFiles(await fetchGist(game.gistId));
-    const doc = moves[power];
-    if (!doc || !doc.history.some(matchesPhase))
-      return toast(`${cap(power)} has nothing published for this phase`);
-    doc.history = doc.history.filter((h) => !matchesPhase(h));
-    await writeMovesFiles(game.gistId, { [power]: doc });
-    toast(`Un-published ${cap(power)} for this phase — they can resubmit`, 'info');
-    await refreshOnlineStatus();
-  } catch (e) {
-    toast('Un-publish failed: ' + e.message);
-    if (isAuthError(e)) askToken();
   }
 }
 

@@ -14,7 +14,8 @@
 //
 // A power already published for the current phase is skipped, and a comment
 // edited after the deadline (GitHub's updated_at stamp) is void — no late
-// entries. The game master can un-publish from the app to allow a correction.
+// entries. The game master can authorize a late resubmission from the app
+// (⚙ Settings → 🔍 Submissions → 🔒/🔓) to allow a correction.
 //
 // Environment:
 //   DIPLOMACY_GIST_TOKEN  (required) the game master's classic PAT, gist scope
