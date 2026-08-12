@@ -2509,9 +2509,20 @@ function renderPlayAsControls() {
 
 function setPlayAs(mode) {
   if (!game) return;
-  game.playAs = mode === 'player' ? 'player' : 'gm';
+  const toPlayer = mode === 'player';
+  game.playAs = toPlayer ? 'player' : 'gm';
   S.saveGame(game);
   refreshAll();
+  // Switching into playing your own power should surface your submitted
+  // orders the same way opening the game on a second device does. refreshAll()
+  // has just reset the box to the blank template, so re-arm the one-shot
+  // restore (an earlier GM-view poll never consumed it — assignedPower() was
+  // empty then) and fill the box from this phase's submission comment now,
+  // rather than leaving it blank until the next background poll.
+  if (toPlayer) {
+    online.restored = false;
+    maybeRestoreSubmission();
+  }
 }
 
 // "Set players" modal (⚙ Settings) — assigns the GitHub username for each
