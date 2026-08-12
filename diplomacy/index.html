@@ -61,7 +61,6 @@
     <!-- the game master's local position has moved on from the shared link -->
     <button id="btn-sync" class="sync-pill" hidden><span class="sp-dot">●</span><span class="sp-text"></span></button>
     <span id="deadline-countdown" class="badge" hidden title="Whether orders are open for submission"></span>
-    <span id="published-preview-banner" class="badge published" hidden>👁 Viewing published state</span>
     <span id="hover-info"></span>
     <span class="spacer"></span>
     <!-- order-mode toggles: a tappable stand-in for ⇧-drop / Ctrl-drop, so a
@@ -75,22 +74,14 @@
               title="Convoy mode — drag a fleet at sea onto an army that already has a move order (same as Ctrl-drop)">
         <span class="mode-icon">⚓</span><span class="mode-label">Convoy</span>
       </button>
-      <!-- sandboxes only: drag a piece anywhere instead of ordering it -->
-      <button id="btn-mode-arrange" class="mode-btn" aria-pressed="false" hidden
-              title="Arrange mode — drag any piece anywhere on the board, ignoring the rules (same as Alt-drag). Sandboxes only; stays on until you switch it off.">
-        <span class="mode-icon">✋</span><span class="mode-label">Arrange</span>
-      </button>
     </div>
-    <button id="btn-exit-preview" hidden title="Stop viewing the published state and go back to your own position">◀ Back to my position</button>
     <div id="settings-wrap">
       <button id="settings-btn" title="Game settings">
         <span class="settings-icon">⚙</span><span class="settings-label">Settings</span>
       </button>
       <div id="settings-menu">
         <button id="btn-publish" title="Publish this game as a read-only, shareable link">📣 Publish</button>
-        <button id="btn-view-published" hidden title="See the position that's actually live at the published link, without touching your own">👁 View published state</button>
         <button id="btn-revert-published" hidden title="Throw away local changes and reload the position from the published link">⟲ Revert to published</button>
-        <button id="btn-branch-top" title="Copy this position into a private sandbox and try things there">🌿 Branch to sandbox</button>
         <button id="btn-open-source" hidden title="Go back to the game this sandbox was branched from">↩ Open source game</button>
         <button id="btn-game-settings" title="Victory thresholds and support house-rule for this game">🎲 Game settings</button>
         <button id="btn-export" title="Download this game as a JSON file">📤 Export</button>
@@ -162,6 +153,7 @@
       <div id="panel-edit" class="panel" hidden>
         <h2>Edit board</h2>
         <div class="btnrow" id="edit-tools">
+          <button class="tool" data-tool="move" title="Drag any unit to reposition it freely, ignoring the rules">Move</button>
           <button class="tool active" data-tool="A" title="Click a province to place an army">Army</button>
           <button class="tool" data-tool="F" title="Click to place a fleet; click again to switch coast">Fleet</button>
           <button class="tool" data-tool="sc" title="Click a supply center to give it to the selected power; click again for neutral">SC owner</button>
@@ -210,7 +202,7 @@
           </div>
           <div id="submit-status" class="hint" hidden></div>
         </div>
-        <p class="hint" id="drag-hint">Drag a unit to its destination to write the order · drop on itself to hold · <b>⇧-drop</b> on a unit to support it (or turn on 🤝&nbsp;Support and just drag) · <b>Ctrl-drop</b> a fleet at sea onto a moving army to convoy (or turn on ⚓&nbsp;Convoy) · unordered units hold.<span id="arrange-hint" hidden><br><b>Alt-drag</b> a piece (or turn on ✋&nbsp;Arrange) to put it anywhere, rules ignored — sandboxes only.</span></p>
+        <p class="hint" id="drag-hint">Drag a unit to its destination to write the order · drop on itself to hold · <b>⇧-drop</b> on a unit to support it (or turn on 🤝&nbsp;Support and just drag) · <b>Ctrl-drop</b> a fleet at sea onto a moving army to convoy (or turn on ⚓&nbsp;Convoy) · unordered units hold.</p>
       </details>
 
       <!-- playback (replaces the orders panel while stepping through a resolve) -->

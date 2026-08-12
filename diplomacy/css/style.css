@@ -163,9 +163,6 @@ a { color: #7fb4ff; }
 #game-screen[data-mode="gm"] #board-pane { box-shadow: inset 0 0 0 2px rgba(79, 126, 192, .40); }
 #game-screen[data-mode="player"] #board-pane { box-shadow: inset 0 0 0 2px rgba(79, 126, 192, .26); }
 #game-screen[data-mode="spectator"] #board-pane { box-shadow: inset 0 0 0 2px rgba(91, 100, 114, .30); }
-/* ✋ Arrange is sticky, so it has to be loud: while it is armed a drag moves a
-   piece instead of ordering it, and the board says so the whole time. */
-#board-pane.arranging { box-shadow: inset 0 0 0 4px rgba(224, 176, 112, .8) !important; }
 #board { margin: auto; width: 100%; height: 100%; }
 #board svg { width: 100%; height: 100%; display: block; }
 
@@ -239,12 +236,6 @@ details.panel:not([open]) summary { margin-bottom: 0; }
 .mode-btn { display: inline-flex; align-items: center; gap: 6px; }
 .mode-btn[aria-pressed="true"] { background: #2f4d6b; border-color: #5a90c9; color: #dcecff; }
 .mode-btn[aria-pressed="true"]:hover { background: #37597b; }
-/* ✋ Arrange wears the sandbox's amber, not the order-writing blue — it is the
-   one toggle that stops writing orders and starts moving the pieces, and the
-   ring it puts round the board is the same colour. */
-#btn-mode-arrange[aria-pressed="true"] { background: #5c4426; border-color: #c99a56; color: #ffe0b0; }
-#btn-mode-arrange[aria-pressed="true"]:hover { background: #6b4f2b; }
-#btn-mode-arrange[aria-pressed="true"] .mode-label { color: #ffe0b0; }
 
 #standings { width: 100%; border-collapse: collapse; font-size: 0.9em; }
 #standings td { padding: 2px 6px; }

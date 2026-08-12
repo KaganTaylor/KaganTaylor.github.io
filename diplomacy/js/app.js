@@ -41,7 +41,6 @@ const POWER_FLAGS = {
 let board;
 let game = null;
 let playback = null; // {entry, step, orders, readonly, animating}
-let publishedPreview = null; // board fields of the live published game, while 👁 viewing it
 let editMode = false;
 let editTool = 'A';
 let lastParsed = { orders: [], errors: [], byProv: new Map() };
@@ -49,11 +48,7 @@ let lastParsed = { orders: [], errors: [], byProv: new Map() };
 // mode — { u, from, dest, route: [seaProv…] } (see startConvoyRoute)
 let convoyPick = null;
 let mobileSheet = null; // null | 'orders' | 'standings' — mobile bottom-sheet state
-let orderMode = null; // null | 'support' | 'convoy' | 'arrange' — see setOrderMode()
-// Whether the drag under way was started as a free reposition — read at
-// pointerdown (when Alt was held) so releasing Alt mid-drag cannot turn a
-// reposition into a move order half way through. See wantArrange().
-let arrangeDrag = false;
+let orderMode = null; // null | 'support' | 'convoy' — see setOrderMode()
 
 // Gist viewers drag/click units for ANY power to sketch out what opponents
 // might do, but the orders textarea only ever shows the power they're
@@ -381,7 +376,6 @@ function openGame(g) {
   game = g;
   g.settings = S.gameSettings(g); // fill defaults for games saved before settings existed
   playback = null;
-  publishedPreview = null;
   gmOrdersLoaded = false;
   catchUpTarget = null; // re-established below/by refreshOnlineStatus() for THIS game, not whatever was last open
   online = { comments: null, moves: null, login: null, restored: false, serverOffset: 0 };
@@ -456,7 +450,6 @@ function refreshAll() {
   $('btn-publish').hidden = ro || !!game.published;
   $('btn-update-published').hidden = !(game.published && isOwnerView());
   $('btn-update-published').disabled = !boardDirty();
-  $('btn-view-published').hidden = !(game.published && isOwnerView());
   $('panel-deadline').hidden = !(game.published && isOwnerView());
   if (game.published && isOwnerView()) {
     const input = $('deadline-input');
@@ -467,7 +460,6 @@ function refreshAll() {
   $('autopublish-row').hidden = !(game.published && isOwnerView());
   $('btn-revert-published').hidden = !isOnline();
   $('btn-open-source').hidden = !game.branchedFrom;
-  $('arrange-hint').hidden = !isSandbox();
   renderModeChip();
   renderBranchNote();
   renderDraftNote();
@@ -518,7 +510,7 @@ function renderModeChip() {
 function updateSyncPill() {
   const pill = $('btn-sync');
   const dirty = boardDirty();
-  pill.hidden = !dirty || !!publishedPreview;
+  pill.hidden = !dirty;
   if (dirty) {
     const live = game.publishedState ? S.phaseLabel(game.publishedState) : null;
     pill.querySelector('.sp-text').textContent = live
@@ -634,7 +626,7 @@ function prefillOrders(preserve = false) {
     info.textContent = myC
       ? gameMode() === 'player'
         ? `Write ${cap(myC)}'s orders (type or drag units), then 📤 Submit orders.`
-        : `Write ${cap(myC)}'s orders (type or drag units). 👁 Preview result tries them out safely; 🌿 Branch to sandbox keeps the ideas.`
+        : `Write ${cap(myC)}'s orders (type or drag units). 👁 Preview result tries them out safely; 🌿 Branch keeps the ideas.`
       : 'Type orders or drag units on the map. Unordered units hold.';
   } else if (game.step === 'retreat') {
     $('orders-title').textContent = title('Retreats');
@@ -930,10 +922,9 @@ function selectOrderLine(unitProv) {
 function attachBoardHandlers() {
   board.handlers = {
     canDrag(p, ev) {
-      if (convoyPick || playback || publishedPreview || !game) return null;
+      if (convoyPick || playback || !game) return null;
       const base = prov(p);
-      arrangeDrag = wantArrange(ev);
-      if (editMode || arrangeDrag || game.step === 'movement') {
+      if (editMode || game.step === 'movement') {
         const u = unitAt(base);
         if (u) return { color: ARROW_COLORS[u.power] };
       }
@@ -947,16 +938,13 @@ function attachBoardHandlers() {
     onDrop(from, to, ev) {
       from = prov(from);
       const toProv = prov(to);
-      const arranging = arrangeDrag || wantArrange(ev);
-      arrangeDrag = false;
-      if (editMode || arranging) return editDrop(from, toProv, ev);
+      if (editMode) return editDrop(from, toProv, ev);
       if (game.step === 'movement') return orderDrop(from, toProv, ev);
       if (game.step === 'retreat') return retreatDrop(from, toProv, ev);
     },
     onClick(p, ev) {
-      arrangeDrag = false;
       if (convoyPick) return convoyRouteClick(prov(p), ev);
-      if (playback || publishedPreview || !game) return;
+      if (playback || !game) return;
       const base = prov(p);
       if (editMode) return editClick(base, ev);
       if (game.step === 'retreat') {
@@ -988,7 +976,6 @@ function attachBoardHandlers() {
       drawLive(prov(p)); // hide this unit's old arrow while dragging
     },
     onDragEnd() {
-      arrangeDrag = false;
       drawLive();
     },
   };
@@ -1013,46 +1000,20 @@ function toggleOrderMode(mode) {
   setOrderMode(orderMode === mode ? null : mode);
   if (orderMode === 'support') toast('Support: drag a unit onto the one it should support', 'info');
   if (orderMode === 'convoy') toast('Convoy: drag a fleet at sea onto a moving army', 'info');
-  if (orderMode === 'arrange') toast('Arrange: drag any piece anywhere. Switch it off to write orders again.', 'info');
-}
-
-// ✋ Arrange — sandboxes only.
-//
-// A sandbox exists to think in, and thinking means "what if that army were
-// over here?" as often as it means "what if it moved there?". So a sandbox
-// gets a second meaning for a drag: reposition the piece, ignoring adjacency
-// and ignoring whose phase it is. Alt-drag does it with a keyboard; the toggle
-// is the touchscreen equivalent, exactly as 🤝/⚓ are for ⇧/Ctrl. Which meaning
-// a drag has is decided at pointerdown, so releasing Alt half way through
-// cannot turn a reposition into a move order.
-//
-// Unlike those two it is NOT one-shot. Rearranging is something you do to five
-// pieces in a row, and re-arming between each would be the whole interaction.
-// The risk that trades against — a stray drag silently teleporting a unit — is
-// covered instead by making the mode loud: the board wears a thick amber ring
-// the entire time it is armed (#board-pane.arranging).
-function wantArrange(ev) {
-  return isSandbox() && !editMode && !playback && !convoyPick
-    && (orderMode === 'arrange' || !!(ev && ev.altKey));
 }
 
 // The support/convoy toggles only make sense where a drag writes a movement
 // order at all — the same condition canDrag() uses — so they are hidden during
-// edit mode, playback and the retreat/build phases. Arrange has its own rule:
-// any sandbox, any phase.
+// edit mode, playback and the retreat/build phases.
 function updateOrderModeUI() {
-  const live = !!game && !playback && !publishedPreview && !editMode;
+  const live = !!game && !playback && !editMode;
   const movement = live && game.step === 'movement';
-  const arrange = live && isSandbox();
-  if ((orderMode === 'arrange' && !arrange) || (orderMode !== 'arrange' && !movement)) orderMode = null;
-  $('order-modes').hidden = !movement && !arrange;
+  if (!movement) orderMode = null;
+  $('order-modes').hidden = !movement;
   $('btn-mode-support').hidden = !movement;
   $('btn-mode-convoy').hidden = !movement;
-  $('btn-mode-arrange').hidden = !arrange;
   $('btn-mode-support').setAttribute('aria-pressed', String(orderMode === 'support'));
   $('btn-mode-convoy').setAttribute('aria-pressed', String(orderMode === 'convoy'));
-  $('btn-mode-arrange').setAttribute('aria-pressed', String(orderMode === 'arrange'));
-  $('board-pane').classList.toggle('arranging', orderMode === 'arrange');
 }
 
 function orderDrop(from, to, ev) {
@@ -1287,9 +1248,8 @@ function toggleEditMode() {
     'Edit the official board?\n\n' +
     'You are about to change the published game\'s position by hand. ' +
     'Players see nothing until you ☁ Publish changes.\n\n' +
-    'To try ideas out instead, cancel and use 🌿 Branch to sandbox.'
+    'To try ideas out instead, cancel and use 🌿 Branch.'
   )) return;
-  if (publishedPreview) exitPublishedPreview();
   setEditMode(!editMode);
   if (editMode && playback) endPlayback();
 }
@@ -1338,7 +1298,9 @@ function editClick(p, ev) {
   if (!info) return;
   const power = $('edit-power').value;
   const at = game.units.findIndex((x) => prov(x.loc) === p);
-  if (editTool === 'erase') {
+  if (editTool === 'move') {
+    return; // Move repositions by dragging; a plain click does nothing
+  } else if (editTool === 'erase') {
     if (at >= 0) game.units.splice(at, 1);
   } else if (editTool === 'A') {
     if (info.type === 'water') return toast('Armies cannot be placed at sea');
@@ -1463,7 +1425,6 @@ async function resolveAndSkip() {
 }
 
 function redoPhase() {
-  if (publishedPreview) exitPublishedPreview();
   const entry = S.redoPhase(game);
   if (!entry) return toast('Nothing to redo');
   playback = null;
@@ -1950,7 +1911,6 @@ function replaySelected() {
 }
 
 function undoPhase() {
-  if (publishedPreview) exitPublishedPreview();
   // undoing a published turn walks the official position backwards — fine (it
   // is how a GM fixes a mis-entered order) but worth being deliberate about
   if (isOwnerView() && game.published && game.history.length && !confirm(
@@ -2943,7 +2903,6 @@ async function doPublish() {
 // moves (the GM playing their own power) and from 📣 Publish results (the
 // order-reveal flow). Only enabled while boardDirty() — see refreshAll().
 async function doUpdatePublished() {
-  if (publishedPreview) exitPublishedPreview();
   try {
     await updatePublished(game);
     game.publishedState = S.boardSnapshot(game);
@@ -2964,11 +2923,10 @@ async function doUpdatePublished() {
 }
 
 // The way back from any accident on a published game: throw the local copy
-// away and take the gist's again. 👁 View published state shows you the
-// difference; this is the button that resolves it the other way from ☁ Publish
-// changes. The order box is deliberately left alone — an unsubmitted draft is
-// the one thing here worth more than the position, which can always be
-// re-fetched.
+// away and take the gist's again — the button that resolves a divergence the
+// other way from ☁ Publish changes. The order box is deliberately left alone —
+// an unsubmitted draft is the one thing here worth more than the position,
+// which can always be re-fetched.
 async function revertToPublished() {
   if (!isOnline() || !game.gistId) return;
   if (!confirm(
@@ -2988,7 +2946,6 @@ async function revertToPublished() {
       assignedPower: game.assignedPower,
       playAs: game.playAs,
     };
-    if (publishedPreview) exitPublishedPreview();
     playback = null;
     game = Object.assign(S.importGame(JSON.stringify(fresh)), keep);
     game.settings = S.gameSettings(game);
@@ -3000,52 +2957,6 @@ async function revertToPublished() {
   } catch (e) {
     toast('Could not reload: ' + e.message);
   }
-}
-
-// GM: read the shared link's actual game.json and show it on the board —
-// without touching the local game object, so it's safe to check the live
-// position mid-plan. Anything that would move the real position (resolve,
-// undo, redo, board edits) exits the preview first.
-async function doViewPublished() {
-  if (!game || !game.gistId) return;
-  const btn = $('btn-view-published');
-  btn.disabled = true;
-  try {
-    const fresh = await readGameFile(await fetchGist(game.gistId));
-    if (!fresh) return toast('Could not read the published game');
-    if (playback) endPlayback();
-    if (editMode) setEditMode(false);
-    publishedPreview = {
-      year: fresh.year, season: fresh.season, step: fresh.step,
-      units: fresh.units, scOwners: fresh.scOwners, pending: fresh.pending,
-    };
-    renderPublishedPreview();
-  } catch (e) {
-    toast('Could not load the published game: ' + e.message);
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-function renderPublishedPreview() {
-  const p = publishedPreview;
-  $('panel-orders').hidden = true;
-  $('panel-edit').hidden = true;
-  $('panel-playback').hidden = true;
-  $('published-preview-banner').hidden = false;
-  $('btn-exit-preview').hidden = false;
-  board.clearOrders();
-  board.setPhaseText(S.phaseLabel(p) + ' — published');
-  board.setInfluence(p.scOwners);
-  board.setUnits(p.units, p.step === 'retreat' && p.pending ? p.pending.dislodged : []);
-  updateOrderModeUI();
-}
-
-function exitPublishedPreview() {
-  publishedPreview = null;
-  $('published-preview-banner').hidden = true;
-  $('btn-exit-preview').hidden = true;
-  refreshAll();
 }
 
 // GitHub answers a bad or under-scoped token with 401/403
@@ -3137,7 +3048,6 @@ async function init() {
       'Leave anyway? They stay saved here — ☁ Publish changes when you come back.'
     )) return;
     playback = null;
-    publishedPreview = null;
     renderHome();
     showScreen('home-screen');
   };
@@ -3145,7 +3055,6 @@ async function init() {
   $('btn-edit').onclick = toggleEditMode;
   $('btn-mode-support').onclick = () => toggleOrderMode('support');
   $('btn-mode-convoy').onclick = () => toggleOrderMode('convoy');
-  $('btn-mode-arrange').onclick = () => toggleOrderMode('arrange');
   // on mobile the toggles float just below the topbar, whose height depends on
   // the phone's font size and on whether the phase label wraps
   const topbarH = () =>
@@ -3190,12 +3099,9 @@ async function init() {
   $('btn-token').onclick = doEditToken;
   $('btn-publish').onclick = doPublish;
   $('btn-update-published').onclick = doUpdatePublished;
-  $('btn-view-published').onclick = doViewPublished;
   $('btn-revert-published').onclick = revertToPublished;
-  $('btn-branch-top').onclick = branchCurrent;
   $('btn-open-source').onclick = openBranchSource;
   $('btn-sync').onclick = doUpdatePublished;
-  $('btn-exit-preview').onclick = exitPublishedPreview;
   $('country-select').onchange = () => {
     game.myCountry = $('country-select').value || null;
     S.saveGame(game);
