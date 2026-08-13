@@ -2516,6 +2516,87 @@ function renderPlayersAssignRows() {
   }
 }
 
+// The published position as a viewer should see it. Deliberately NOT
+// state.js's boardSnapshot(): that includes redoStack, which is the game
+// master's private undo bookkeeping. A viewer who catches up clears their own
+// (catchUpNext) while the gist may still carry the GM's, and that difference
+// is not a divergence — comparing it would reload the board on every refresh.
+function viewerPosition(g) {
+  return JSON.stringify({
+    year: g.year,
+    season: g.season,
+    step: g.step,
+    units: g.units,
+    scOwners: g.scOwners,
+    pending: g.pending || null,
+    history: g.history || [],
+  });
+}
+
+// True when the gist is simply further along the same road: every phase we
+// have seen is still there, unchanged, with more on the end.
+function extendsOurHistory(g, fresh) {
+  const ours = g.history || [];
+  if (fresh.history.length <= ours.length) return false;
+  return JSON.stringify(fresh.history.slice(0, ours.length)) === JSON.stringify(ours);
+}
+
+// Take the gist's position in place of ours. Mutates `g` rather than replacing
+// the game object (revertToPublished() can reassign `game`; this runs inside
+// refreshOnlineStatus(), which holds its own reference and would lose it), and
+// touches the position only — name, gist identity, country and play-as choice
+// are the viewer's, not the gist's. The order box is left alone on purpose,
+// exactly as in revertToPublished(): an unsubmitted draft is worth more than a
+// position that can always be re-fetched.
+function adoptPublishedPosition(g, fresh) {
+  playback = null;
+  catchUpTarget = null;
+  g.year = fresh.year;
+  g.season = fresh.season;
+  g.step = fresh.step;
+  g.units = structuredClone(fresh.units);
+  g.scOwners = structuredClone(fresh.scOwners);
+  g.pending = structuredClone(fresh.pending) || null;
+  g.history = structuredClone(fresh.history || []);
+  g.redoStack = structuredClone(fresh.redoStack || []);
+  g.publishedState = S.boardSnapshot(g);
+  S.saveGame(g);
+  refreshAll();
+}
+
+// A read-only viewer's local board, reconciled against the gist on every
+// refresh. Three outcomes:
+//   • The gist has phases we haven't seen, on top of the ones we have — the
+//     normal case. Flag it so ▶ Resolve new orders! walks the viewer through
+//     each one rather than teleporting them (see catchUpNext).
+//   • The gist's position is no longer one our history leads to: the game
+//     master undid a phase, or edited the board. Ours is then a position that
+//     does not exist anymore, and there is nothing to step *through* — so take
+//     theirs and say so. Previously this case was simply not detected (the
+//     check was `fresh.history.length > g.history.length`), which left a
+//     viewer parked on a retracted phase indefinitely, still able to replay
+//     orders the game master had since pulled back. Comparing the position
+//     rather than the history length also catches ✏ Edit board changes, which
+//     never touch history at all.
+//   • Identical — nothing to do.
+function syncViewerToGist(g, fresh) {
+  catchUpTarget = null;
+  // An optimistic local resolve is *meant* to sit ahead of the gist until the
+  // GM publishes; reconcileProvisionalPhase() owns that comparison.
+  if (g.provisionalPhase) return;
+  if (viewerPosition(g) === viewerPosition(fresh)) return;
+  if (extendsOurHistory(g, fresh)) {
+    catchUpTarget = fresh;
+    return;
+  }
+  // isReadOnly() is also true for the game master while 🎭 Playing as their own
+  // power — but that is still the GM's own authoritative copy, possibly holding
+  // unpublished work. Never overwrite it; ⟲ Revert to published is their door.
+  if (g.isOwner) return;
+  adoptPublishedPosition(g, fresh);
+  toast('The game master changed the board — reloaded the published position', 'info');
+}
+
 // Re-reads the gist's game.json (for fresh player assignments), the published
 // moves files, everyone's submission comments, and this browser's login —
 // then re-renders all online UI. Safe to call often; all reads are public.
@@ -2579,12 +2660,7 @@ async function refreshOnlineStatus() {
     // roll our provisional phase back so the catch-up path below replays the
     // GM's real version.
     if (fresh && Array.isArray(fresh.history)) reconcileProvisionalPhase(g, fresh);
-    // A read-only viewer's local board is never silently replaced (see
-    // catchUpNext()) — if the gist has resolved further than this browser has
-    // seen, flag it instead so ▶ Resolve new orders! can walk them there.
-    if (fresh && isReadOnly() && Array.isArray(fresh.history)) {
-      catchUpTarget = fresh.history.length > g.history.length ? fresh : null;
-    }
+    if (fresh && isReadOnly() && Array.isArray(fresh.history)) syncViewerToGist(g, fresh);
     if (changed) {
       renderCountrySelect();
       prefillOrders(true);
