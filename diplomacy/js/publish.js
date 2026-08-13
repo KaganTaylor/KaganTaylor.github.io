@@ -49,6 +49,30 @@ async function ghFetch(url, opts) {
   return res.json();
 }
 
+// A public read, signed with the stored token when this browser happens to
+// have one. Everything read here is public either way — the point is purely
+// GitHub's rate limit: anonymous requests get 60/hr shared across everyone
+// on the same IP, authenticated ones get 5,000/hr per user. A household or
+// office of players shares one anonymous budget and quietly runs dry (and
+// refreshOnlineStatus() swallows the failure, leaving a stale board), while
+// almost every player already holds a token because submitting requires one.
+// Signing costs nothing and must change nothing: a bad, revoked or
+// wrong-scope token falls straight back to the anonymous request that would
+// have worked anyway, so a spectator with no token — and a player with a
+// broken one — always keeps reading.
+async function ghRead(url) {
+  const token = getToken();
+  if (!token) return ghFetch(url);
+  try {
+    return await ghFetch(url, {
+      headers: { Authorization: `token ${token}`, Accept: 'application/vnd.github+json' },
+    });
+  } catch (e) {
+    if (/\b(401|403)\b/.test(e.message)) return ghFetch(url);
+    throw e;
+  }
+}
+
 // Creates a new public gist holding the game. Returns {id, url}.
 export async function publishGame(game) {
   const token = getToken();
@@ -82,11 +106,12 @@ export async function updatePublished(game, boardOverride) {
   });
 }
 
-// Reads a published game by gist id. No auth needed — gists are public.
+// Reads a published game by gist id. No auth needed — gists are public — but
+// signed when a token is around, for the rate limit (see ghRead).
 // Returns {game, ownerLogin} so callers can tell whether their own token
 // belongs to the account that published it.
 export async function fetchPublished(gistId) {
-  const json = await ghFetch(`${API}/gists/${gistId}`);
+  const json = await ghRead(`${API}/gists/${gistId}`);
   const file = json.files && json.files['game.json'];
   if (!file) throw new Error('gist has no game.json file');
   const content = file.truncated ? await (await fetch(file.raw_url)).text() : file.content;
@@ -131,11 +156,12 @@ export async function getAuthenticatedLogin(token) {
 
 export const ORDERS_MARKER = 'DIPLOMACY-ORDERS v1';
 
-// Reads every comment on the gist. Public data — no auth needed.
+// Reads every comment on the gist. Public data — no auth needed, signed when
+// available (see ghRead). This is the heaviest read: one call per 100 comments.
 export async function listComments(gistId) {
   const out = [];
   for (let page = 1; page <= 10; page++) {
-    const batch = await ghFetch(`${API}/gists/${gistId}/comments?per_page=100&page=${page}`);
+    const batch = await ghRead(`${API}/gists/${gistId}/comments?per_page=100&page=${page}`);
     out.push(...batch);
     if (batch.length < 100) break;
   }
@@ -193,11 +219,15 @@ export async function submitOrders(gistId, payload) {
   return { login, submission };
 }
 
-// Full gist JSON (files + metadata). Public — no auth needed.
+// Full gist JSON (files + metadata). Public — no auth needed, signed when
+// available (see ghRead).
 export function fetchGist(gistId) {
-  return ghFetch(`${API}/gists/${gistId}`);
+  return ghRead(`${API}/gists/${gistId}`);
 }
 
+// The truncated-file fallback stays a plain anonymous fetch on purpose:
+// raw.githubusercontent.com is not the REST API, so it neither accepts the
+// token nor draws on the rate limit ghRead() exists to protect.
 async function gistFileContent(file) {
   if (!file) return null;
   return file.truncated ? await (await fetch(file.raw_url)).text() : file.content;
