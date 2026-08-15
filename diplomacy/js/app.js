@@ -82,6 +82,38 @@ let autoPublishing = false;
 let creatingMailbox = false;
 const mailboxesMade = new Set();
 
+// A comment this browser has just written, held until a poll comes back
+// carrying it. Our own writes are the one thing we know for certain, and the
+// UI must never contradict them: "I changed my orders, pressed Resubmit, and
+// nothing happened" was this gap — the refresh that follows a submit read a
+// cached copy of the comment from before the edit, so the box still looked
+// unsubmitted and the button stayed lit. The cache bypass in publish.js
+// ghRead() fixes the cause; this makes the display independent of the read
+// altogether, which also covers GitHub's own replicas lagging a write.
+let justWrote = null;
+
+function rememberWrite(c) {
+  if (!c || !c.id) return;
+  justWrote = c;
+  applyJustWrote();
+}
+
+// Folds `justWrote` into online.comments, and lets it go once the server's own
+// copy is at least as new — from then on the fetched list is the better truth.
+function applyJustWrote() {
+  if (!justWrote || !online.comments) return;
+  const stamp = (c) => Date.parse((c && c.updated_at) || 0) || 0;
+  const i = online.comments.findIndex((c) => String(c.id) === String(justWrote.id));
+  if (i >= 0 && stamp(online.comments[i]) >= stamp(justWrote)) {
+    justWrote = null;
+    return;
+  }
+  const list = online.comments.slice();
+  if (i >= 0) list[i] = justWrote;
+  else list.push(justWrote);
+  online.comments = list;
+}
+
 // The full published game (fetched via refreshOnlineStatus/loadPublishedGame)
 // once it has moved on further than this browser's local copy — set only for
 // a read-only viewer (player/spectator), never silently applied. Drives the
@@ -386,6 +418,7 @@ function openGame(g) {
   gmOrdersLoaded = false;
   catchUpTarget = null; // re-established below/by refreshOnlineStatus() for THIS game, not whatever was last open
   online = { comments: null, moves: null, login: null, restored: false, serverOffset: 0 };
+  justWrote = null; // belongs to whichever game we just left
   S.saveGame(game);
   showScreen('game-screen');
   $('game-name').textContent = game.name;
@@ -2637,6 +2670,7 @@ async function refreshOnlineStatus() {
     }
     online.moves = moves;
     online.comments = comments;
+    applyJustWrote(); // a submit of ours the fetched list may not show yet
     online.login = login;
     // Correct our clock against GitHub's server time so the deadline gate
     // (deadlinePassed → trustedNow) can't be beaten by a spoofed device clock.
@@ -2749,11 +2783,13 @@ async function doSubmitMoves() {
   const btn = $('btn-submit-moves');
   btn.disabled = true;
   try {
-    await submitOrders(game.gistId, {
+    const { comment } = await submitOrders(game.gistId, {
       power, year: game.year, season: game.season, step: game.step,
       orders: block,
     });
     online.restored = true; // what's in the box IS the submission now
+    rememberWrite(comment);
+    renderSubmitStatus(); // reflect the submit at once, off our own write
     toast(`Orders submitted for ${cap(power)}`, 'info');
     await refreshOnlineStatus();
   } catch (e) {

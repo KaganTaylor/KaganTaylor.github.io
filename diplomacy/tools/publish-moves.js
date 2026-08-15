@@ -83,22 +83,31 @@ function parseSubmission(body) {
 const samePhase = (phase, s) =>
   s && s.year === phase.year && s.season === phase.season && s.step === phase.step;
 
-// first valid submission comment by this login — the app edits that same
-// comment in place, so any later duplicates are ignored, matching the app.
-// Returns {sub, updatedAt}; updatedAt is GitHub's own edit stamp.
+// The submission comment by this login, matching the app's rule in
+// js/publish.js exactly — keep the two in step. Returns {sub, updatedAt};
+// updatedAt is GitHub's own edit stamp.
 //
-// Not backstopped with created_at (and neither is the app's copy in
-// js/publish.js): the comment is created empty when the player first opens the
-// game, so created_at can predate the submission by days and would wave a late
-// edit through as on time.
+// The MOST RECENTLY EDITED submission wins, not the first found (comments
+// arrive oldest-first). The app now only ever edits one comment per player, but
+// duplicates exist on games played before that was true, and preferring an
+// older one would both publish superseded orders and let a player submit on
+// time, edit a duplicate after the deadline, and pick their stamp.
+//
+// updated_at is not backstopped with created_at (and neither is the app's
+// copy): the comment is created empty when the player first opens the game, so
+// created_at can predate the submission by days and would wave a late edit
+// through as on time.
 function findSubmission(comments, login) {
+  const editedAt = (c) => Date.parse(c.updated_at || c.created_at || 0) || 0;
+  let best = null;
   for (const c of comments) {
-    if (c.user && c.user.login.toLowerCase() === login.toLowerCase()) {
-      const sub = parseSubmission(c.body);
-      if (sub) return { sub, updatedAt: c.updated_at || null };
+    if (!c.user || c.user.login.toLowerCase() !== login.toLowerCase()) continue;
+    if (!parseSubmission(c.body)) continue;
+    if (!best || editedAt(c) > editedAt(best) || (editedAt(c) === editedAt(best) && Number(c.id) > Number(best.id))) {
+      best = c;
     }
   }
-  return null;
+  return best ? { sub: parseSubmission(best.body), updatedAt: best.updated_at || null } : null;
 }
 
 async function processGame(gistId, description) {
