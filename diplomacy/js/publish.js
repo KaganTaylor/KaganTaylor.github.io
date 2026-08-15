@@ -107,18 +107,36 @@ export async function getAuthenticatedLogin(token) {
 // Online move submission.
 //
 // Players cannot write files into the GM's gist (gists have no collaborators),
-// so each player instead maintains ONE gist comment, posted with their own
-// token and edited in place on every resubmit. Comments are separate API
-// objects, so simultaneous submissions from different players can never
-// conflict; GitHub stamps each comment with the author's login (identity)
+// so each player instead maintains ONE gist comment — their "mailbox" — posted
+// with their own token and edited in place on every submit. Comments are
+// separate API objects, so simultaneous submissions from different players can
+// never conflict; GitHub stamps each comment with the author's login (identity)
 // and updated_at (late-edit detection), so a submission cannot be forged or
 // quietly changed after the deadline. Once the deadline passes the game
 // either reveals the comments to everyone directly (auto publish) or waits
 // for the GM to review and copy them into per-power files —
 // moves-<power>.json — written with the GM's token, the files' only writer.
+//
+// A mailbox is CREATED EMPTY and only ever edited, because GitHub emails the
+// body of every newly created gist comment to everyone subscribed to the gist
+// — the whole table — and does not notify on edits. Creating a comment that
+// already held orders mailed those orders to the player's opponents. Nothing
+// here may ever POST order text; see DECISIONS.md.
 // ---------------------------------------------------------------------------
 
 export const ORDERS_MARKER = 'DIPLOMACY-ORDERS v1';
+
+// The body a mailbox is created with. It deliberately starts with the marker
+// (so findMyComment recognises it) but omits power/year/season/step (so
+// parseSubmission rejects it and it is never mistaken for a submission). It is
+// also the one notification the table ever receives about a player, so it
+// explains itself.
+export const MAILBOX_BODY =
+  ORDERS_MARKER + '\n' +
+  JSON.stringify({
+    mailbox: true,
+    note: 'Orders mailbox — edited in place each phase. Edits send no notifications.',
+  }, null, 1);
 
 // Reads every comment on the gist. Public data — no auth needed.
 export async function listComments(gistId) {
@@ -150,19 +168,64 @@ export function parseSubmission(body) {
 // The one submission comment a given GitHub account holds on this gist.
 // Returns {commentId, submission, updatedAt} or null — updatedAt is GitHub's
 // own edit stamp, the arbiter of whether a submission beat the deadline.
+//
+// updated_at is NOT backstopped with created_at: a mailbox is created when the
+// player first opens the game, so created_at can predate the submission by
+// days, and treating it as a submission time would wave a late edit through as
+// on time. An absent updated_at means "unknown", which submissionOnTime()
+// resolves in the player's favour deliberately rather than by accident.
 export function findSubmission(comments, login) {
   if (!login) return null;
   for (const c of comments) {
     if (c.user && c.user.login.toLowerCase() === login.toLowerCase()) {
       const sub = parseSubmission(c.body);
-      if (sub) return { commentId: c.id, submission: sub, updatedAt: c.updated_at || c.created_at || null };
+      if (sub) return { commentId: c.id, submission: sub, updatedAt: c.updated_at || null };
     }
   }
   return null;
 }
 
-// Creates or updates the caller's submission comment. `payload` carries
+// The caller's mailbox comment id, whatever its body currently holds — a real
+// submission, or the empty placeholder it was created as. A comment must carry
+// the marker to qualify, so an ordinary chat comment on the gist is never
+// overwritten. A real submission wins over a bare placeholder, so a player
+// holding both always gets the submission patched.
+export function findMyComment(comments, login) {
+  if (!login) return null;
+  let fallback = null;
+  for (const c of comments) {
+    if (!c.user || c.user.login.toLowerCase() !== login.toLowerCase()) continue;
+    if (!c.body || !c.body.startsWith(ORDERS_MARKER)) continue;
+    if (parseSubmission(c.body)) return c.id;
+    if (fallback === null) fallback = c.id;
+  }
+  return fallback;
+}
+
+// Creates the caller's mailbox if they have none yet, and returns its id.
+// Takes an already-fetched comment list (refreshOnlineStatus has one on every
+// poll) so the common "already have one" case costs no request at all.
+export async function ensureMailbox(gistId, comments, login) {
+  const existing = findMyComment(comments, login);
+  if (existing) return existing;
+  const token = getToken();
+  if (!token) throw new Error('no GitHub token set');
+  const json = await ghFetch(`${API}/gists/${gistId}/comments`, {
+    method: 'POST',
+    headers: { Authorization: `token ${token}`, Accept: 'application/vnd.github+json' },
+    body: JSON.stringify({ body: MAILBOX_BODY }),
+  });
+  return json.id;
+}
+
+// Writes the caller's orders into their mailbox. `payload` carries
 // {power, year, season, step, orders}; submittedAt is stamped here.
+//
+// This ALWAYS edits, never creates-with-content: a mailbox is created empty
+// first (normally long before, when the player opened the game) precisely so
+// that the notification GitHub sends on creation carries no orders. Keep it
+// that way — a POST with a filled-in body here would email every player's
+// moves to the whole table.
 export async function submitOrders(gistId, payload) {
   const token = getToken();
   if (!token) throw new Error('no GitHub token set');
@@ -170,12 +233,9 @@ export async function submitOrders(gistId, payload) {
   if (!login) throw new Error('token was not accepted by GitHub');
   const submission = { ...payload, submittedAt: new Date().toISOString() };
   const body = ORDERS_MARKER + '\n' + JSON.stringify(submission, null, 1);
-  const mine = findSubmission(await listComments(gistId), login);
-  const url = mine
-    ? `${API}/gists/${gistId}/comments/${mine.commentId}`
-    : `${API}/gists/${gistId}/comments`;
-  await ghFetch(url, {
-    method: mine ? 'PATCH' : 'POST',
+  const commentId = await ensureMailbox(gistId, await listComments(gistId), login);
+  await ghFetch(`${API}/gists/${gistId}/comments/${commentId}`, {
+    method: 'PATCH',
     headers: { Authorization: `token ${token}`, Accept: 'application/vnd.github+json' },
     body: JSON.stringify({ body }),
   });

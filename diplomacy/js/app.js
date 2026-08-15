@@ -18,7 +18,7 @@ import { PROVINCES, POWERS } from './map-data.js';
 import {
   getToken, setToken, publishGame, updatePublished, fetchPublished,
   getAuthenticatedLogin, extractGistId,
-  listComments, findSubmission, submitOrders,
+  listComments, findSubmission, findMyComment, ensureMailbox, submitOrders,
   fetchGist, readMovesFiles, readGameFile, writeMovesFiles, upsertMovesEntry,
 } from './publish.js';
 
@@ -69,6 +69,13 @@ let gmOrdersLoaded = false;
 // Guards autoPublishIfDue() against overlapping runs from the 60s tick while
 // a previous auto-publish is still in flight.
 let autoPublishing = false;
+// Guards ensureMyMailbox() the same way — the 60s tick must not race itself
+// into posting a second mailbox comment before the first POST returns. The set
+// remembers mailboxes made this session as well, since a refresh whose comment
+// list was fetched before the POST landed would otherwise look stale and post
+// a duplicate.
+let creatingMailbox = false;
+const mailboxesMade = new Set();
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -2372,8 +2379,42 @@ async function refreshOnlineStatus() {
     maybeRestoreSubmission();
     renderOnlineUI();
     renderPlayAsControls();
+    ensureMyMailbox(g); // fire-and-forget; see below
   } catch {
     // offline or rate-limited — keep whatever state we already had
+  }
+}
+
+// Makes sure this player already has an (empty) mailbox comment on the gist,
+// long before they submit anything into it.
+//
+// GitHub emails the body of a newly created gist comment to everyone
+// subscribed to the gist — the whole table — and sends nothing at all when one
+// is edited. So the mailbox is created here, on load, rather than at submit
+// time: the single "X commented" notification it produces then lands when the
+// player opens the game, carrying neither orders nor any hint of when they
+// wrote them. Every actual submission afterwards is a silent edit.
+//
+// This costs no extra request in the ordinary case. refreshOnlineStatus() has
+// already fetched every comment on the gist (it does so on load and on each
+// 60s tick), so "do I have one?" is a lookup in memory; the POST happens at
+// most once per player per game. Failure is silent — submitOrders() creates a
+// mailbox on demand if this never ran.
+async function ensureMyMailbox(g) {
+  if (creatingMailbox) return;
+  if (!g.published || !g.gistId || !online.comments || !online.login) return;
+  if (!g.assignedPower || !getToken()) return;
+  const made = g.gistId + '|' + online.login.toLowerCase();
+  if (mailboxesMade.has(made)) return;
+  if (findMyComment(online.comments, online.login)) return;
+  creatingMailbox = true;
+  try {
+    await ensureMailbox(g.gistId, online.comments, online.login);
+    mailboxesMade.add(made);
+  } catch {
+    // no mailbox yet is harmless — submitting creates one
+  } finally {
+    creatingMailbox = false;
   }
 }
 

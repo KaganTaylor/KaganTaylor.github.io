@@ -101,7 +101,9 @@ A published game (a public GitHub gist) can collect each player's orders directl
 
 **No servers, no schedules.** The deadline is enforced by the app itself: submissions are gist comments, GitHub stamps every comment with an edit time, and any client can therefore tell — from public data — which submissions beat the deadline. Nothing needs to run *at* the deadline. An optional GitHub Action (`.github/workflows/diplomacy-publish-moves.yml`, manual `workflow_dispatch` only — it never runs on a schedule) can copy auto-mode games' revealed submissions into per-power `moves-<power>.json` files as a durable record; it needs a repository secret named `DIPLOMACY_GIST_TOKEN` holding the GM's gist-scope token.
 
-**Fair warning:** submissions travel as gist comments, which are public. The app only surfaces moves once published, but a determined player could read the gist's comments early — treat "don't peek" as a house rule, as in any honour-system correspondence game.
+**Nobody is emailed your orders.** Your submission lives in a single gist comment, created empty the first time you open the game and quietly edited every time you submit. That matters because GitHub emails the body of a *newly created* gist comment to everyone subscribed to the gist — the whole table — and sends nothing at all when one is edited. Writing your first orders into a fresh comment would have mailed them to your opponents; the empty mailbox is what prevents it. The only notification the table ever gets about you is the one that says you opened the game.
+
+**Fair warning:** submissions still travel as gist comments, which are public. Nobody is *told* what you ordered, but a determined player could go and read the gist's comments early — treat "don't peek" as a house rule, as in any honour-system correspondence game. Encrypting submissions so that isn't possible is designed but not built: see [`proposals/sealed-orders.md`](proposals/sealed-orders.md).
 
 ## Customising the look
 

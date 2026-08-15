@@ -85,11 +85,16 @@ const samePhase = (phase, s) =>
 // first valid submission comment by this login — the app edits that same
 // comment in place, so any later duplicates are ignored, matching the app.
 // Returns {sub, updatedAt}; updatedAt is GitHub's own edit stamp.
+//
+// Not backstopped with created_at (and neither is the app's copy in
+// js/publish.js): the comment is created empty when the player first opens the
+// game, so created_at can predate the submission by days and would wave a late
+// edit through as on time.
 function findSubmission(comments, login) {
   for (const c of comments) {
     if (c.user && c.user.login.toLowerCase() === login.toLowerCase()) {
       const sub = parseSubmission(c.body);
-      if (sub) return { sub, updatedAt: c.updated_at || c.created_at || null };
+      if (sub) return { sub, updatedAt: c.updated_at || null };
     }
   }
   return null;
