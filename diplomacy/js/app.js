@@ -18,7 +18,7 @@ import { PROVINCES, POWERS } from './map-data.js';
 import {
   getToken, setToken, publishGame, updatePublished, fetchPublished,
   getAuthenticatedLogin, extractGistId,
-  listComments, findSubmission, findMyComment, ensureMailbox, submitOrders,
+  listComments, findSubmission, ensureMailbox, submitOrders,
   fetchGist, readMovesFiles, readGameFile, writeMovesFiles, upsertMovesEntry,
   getLastServerDate,
 } from './publish.js';
@@ -2731,13 +2731,19 @@ async function refreshOnlineStatus() {
 // 60s tick), so "do I have one?" is a lookup in memory; the POST happens at
 // most once per player per game. Failure is silent — submitOrders() creates a
 // mailbox on demand if this never ran.
+//
+// ensureMailbox() is called even when we can already see a mailbox in the list,
+// rather than returning early on findMyComment(): finding it is what makes it
+// remembered, and a remembered id is what lets submitOrders() skip its read
+// entirely. Doing it here means the read-free path is armed from page load, so
+// even a player's FIRST submit of a session cannot go down a route that POSTs.
+// The call makes no request when a mailbox already exists.
 async function ensureMyMailbox(g) {
   if (creatingMailbox) return;
   if (!g.published || !g.gistId || !online.comments || !online.login) return;
   if (!g.assignedPower || !getToken()) return;
   const made = g.gistId + '|' + online.login.toLowerCase();
   if (mailboxesMade.has(made)) return;
-  if (findMyComment(online.comments, online.login)) return;
   creatingMailbox = true;
   try {
     await ensureMailbox(g.gistId, online.comments, online.login);
