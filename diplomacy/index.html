@@ -17,9 +17,8 @@
     <div class="home-actions">
       <div class="home-group">
         <h2>🧪 New sandbox</h2>
-        <input id="new-name" type="text" placeholder="Sandbox name" value="Our game">
+        <input id="new-name" type="text" placeholder="Sandbox name" value="New game">
         <button id="btn-new" class="primary">Start at 1901</button>
-        <button id="btn-sandbox">Start from an empty board</button>
         <p class="hint">A sandbox lives in this browser only: resolve as many turns as you like, drag pieces anywhere, branch whenever you want to try something. Publish one when it becomes the real game.</p>
       </div>
       <div class="home-group">
@@ -28,16 +27,25 @@
         <label class="filebtn">Import game JSON<input id="import-file" type="file" accept=".json,application/json"></label>
       </div>
       <div class="home-group">
-        <h2>☁ Join an online game</h2>
-        <p class="hint">Paste the link your game master shared. You get the live position, and if they assigned your GitHub username a power you can submit orders in-app. Nothing you do on that board can change the real game — resolving there is a preview, and 🌿 branching gives you a sandbox to plan in.</p>
-        <div class="sandbox-row">
-          <input id="load-gist-input" type="text" placeholder="gist link or ID">
-          <button id="btn-load-gist">Load</button>
-        </div>
+        <h2>🔑 Publishing</h2>
+        <p class="hint">Set the GitHub personal access token used to publish a game or submit orders online.</p>
+        <button id="btn-token">Set GitHub token</button>
       </div>
     </div>
-    <p class="credits">Map: jDip (GPL) · Rules engine validated against the 167 Diplomacy Adjudicator Test Cases · <a href="test/datc.html">run the tests</a> · <a href="test/strict.html">house-rule tests</a> · <button id="btn-token" class="linklike" title="Change or clear the GitHub personal access token used for publishing">🔑 GitHub token</button></p>
+    <p class="credits">Map: jDip (GPL) · Rules engine validated against the 167 Diplomacy Adjudicator Test Cases · <a href="test/datc.html">run the tests</a> · <a href="test/strict.html">house-rule tests</a></p>
   </div>
+  <div id="home-loading" class="home-loading" hidden>
+    <div class="spinner"></div>
+    <p>Loading game…</p>
+  </div>
+  <script>
+    // Un-hides the spinner the instant this markup is parsed, rather than
+    // waiting for js/app.js (a deferred module) to load and run init() —
+    // that gap is exactly the "blank flash" a ?gist= link used to show.
+    if (new URLSearchParams(location.search).get('gist')) {
+      document.getElementById('home-loading').hidden = false;
+    }
+  </script>
 </section>
 
 <section id="game-screen" class="screen" hidden>
@@ -53,7 +61,6 @@
     <!-- the game master's local position has moved on from the shared link -->
     <button id="btn-sync" class="sync-pill" hidden><span class="sp-dot">●</span><span class="sp-text"></span></button>
     <span id="deadline-countdown" class="badge" hidden title="Whether orders are open for submission"></span>
-    <span id="published-preview-banner" class="badge published" hidden>👁 Viewing published state</span>
     <span id="hover-info"></span>
     <span class="spacer"></span>
     <!-- order-mode toggles: a tappable stand-in for ⇧-drop / Ctrl-drop, so a
@@ -67,24 +74,14 @@
               title="Convoy mode — drag a fleet at sea onto an army that already has a move order (same as Ctrl-drop)">
         <span class="mode-icon">⚓</span><span class="mode-label">Convoy</span>
       </button>
-      <!-- sandboxes only: drag a piece anywhere instead of ordering it -->
-      <button id="btn-mode-arrange" class="mode-btn" aria-pressed="false" hidden
-              title="Arrange mode — drag any piece anywhere on the board, ignoring the rules (same as Alt-drag). Sandboxes only; stays on until you switch it off.">
-        <span class="mode-icon">✋</span><span class="mode-label">Arrange</span>
-      </button>
     </div>
-    <button id="btn-exit-preview" hidden title="Stop viewing the published state and go back to your own position">◀ Back to my position</button>
-    <button id="btn-edit" title="Freely place, move and remove units and set supply-center owners">✏ Edit board</button>
     <div id="settings-wrap">
       <button id="settings-btn" title="Game settings">
         <span class="settings-icon">⚙</span><span class="settings-label">Settings</span>
       </button>
       <div id="settings-menu">
         <button id="btn-publish" title="Publish this game as a read-only, shareable link">📣 Publish</button>
-        <button id="btn-update-published" hidden title="Push your position to the published link, so every player sees it">☁ Publish changes</button>
-        <button id="btn-view-published" hidden title="See the position that's actually live at the published link, without touching your own">👁 View published state</button>
         <button id="btn-revert-published" hidden title="Throw away local changes and reload the position from the published link">⟲ Revert to published</button>
-        <button id="btn-branch-top" title="Copy this position into a private sandbox and try things there">🌿 Branch to sandbox</button>
         <button id="btn-open-source" hidden title="Go back to the game this sandbox was branched from">↩ Open source game</button>
         <button id="btn-game-settings" title="Victory thresholds and support house-rule for this game">🎲 Game settings</button>
         <button id="btn-export" title="Download this game as a JSON file">📤 Export</button>
@@ -95,10 +92,10 @@
           <span class="switch"><input type="checkbox" id="autopublish-toggle"><span class="slider"></span></span>
         </label>
         <div id="play-as-row" class="settings-toggle-row" hidden title="Switch between running the game as its master and playing your own assigned power">
-          <span>🎭 Play as</span>
+          <span>Play as</span>
           <select id="play-as-select">
             <option value="gm">👑 Game Master</option>
-            <option value="player">🧑 Player</option>
+            <option value="player">Player</option>
           </select>
         </div>
       </div>
@@ -109,10 +106,54 @@
     <div id="board-pane"><div id="board"></div></div>
 
     <aside id="sidebar">
+      <!-- deadline (game master, published games only) -->
+      <details id="panel-deadline" class="panel" open hidden>
+        <summary><h2>⏰ Deadline</h2></summary>
+        <p class="hint">Submissions close when the deadline passes. Confirm a new one each phase —
+          a week for movement, a day or two for retreats and builds. Confirming a new deadline
+          re-opens submissions.</p>
+        <div class="btnrow">
+          <button id="deadline-plus-week" title="Previous deadline + 1 week (from now if none is set)">+1 week</button>
+          <button id="deadline-plus-2day" title="Previous deadline + 48 hours (from now if none is set)">+48 h</button>
+          <button id="deadline-plus-day" title="Previous deadline + 24 hours (from now if none is set)">+24 h</button>
+          <button id="deadline-clear" title="Remove the deadline — submissions stay open until you confirm a new one">✖ Clear</button>
+        </div>
+        <div class="sandbox-row">
+          <input id="deadline-input" type="datetime-local" title="Pick a custom deadline (your local time)">
+          <button id="deadline-set" title="Set the deadline to the picked date and time">Set</button>
+        </div>
+        <div class="btnrow">
+          <button id="deadline-load-btn" class="primary" title="Loads submitted orders once the deadline passes — or, with no deadline set, opens an empty box so you can skip the game forward">⬇ Load orders</button>
+        </div>
+      </details>
+
+      <!-- history / branch (kept at the top: the one panel every viewer of a
+           live game reaches for first — jumping to a past turn or forking a
+           private copy to try something) -->
+      <details id="panel-history" class="panel" open>
+        <summary><h2>History</h2></summary>
+        <select id="history-select"></select>
+        <div class="btnrow">
+          <button id="btn-replay" title="Step through this past phase again">Replay</button>
+          <button id="btn-undo" title="Undo the most recent phase — the board goes back and your orders return to the box">⤺ Undo</button>
+          <button id="btn-redo" title="Redo the last undone phase">⤻ Redo</button>
+          <button id="btn-branch" title="Copy the current position into a private sandbox">🌿 Branch</button>
+        </div>
+      </details>
+
+      <details id="edit-board-section" class="panel" open>
+        <summary><h2>Edit board</h2></summary>
+        <div class="btnrow">
+          <button id="btn-edit" title="Freely place, move and remove units and set supply-center owners">✏ Edit board</button>
+          <button id="btn-update-published" hidden title="Push your position to the published link, so every player sees it">☁ Publish changes</button>
+        </div>
+      </details>
+
       <!-- board editor (toggled with ✏ Edit board) -->
       <div id="panel-edit" class="panel" hidden>
         <h2>Edit board</h2>
         <div class="btnrow" id="edit-tools">
+          <button class="tool" data-tool="move" title="Drag any unit to reposition it freely, ignoring the rules">Move</button>
           <button class="tool active" data-tool="A" title="Click a province to place an army">Army</button>
           <button class="tool" data-tool="F" title="Click to place a fleet; click again to switch coast">Fleet</button>
           <button class="tool" data-tool="sc" title="Click a supply center to give it to the selected power; click again for neutral">SC owner</button>
@@ -138,27 +179,30 @@
         <p class="draft-note" id="draft-note" hidden></p>
         <div class="sandbox-row" id="country-row" hidden>
           <select id="country-select" title="Choose your country to write its orders"></select>
-          <button id="btn-copy-orders" title="Copy the orders below — paste them into your email to the game master">📋 Copy orders</button>
         </div>
-        <div class="btnrow" id="submit-row" hidden>
-          <button id="btn-submit-moves" title="Submit your orders to the game — you can resubmit as often as you like before the deadline">📤 Submit moves</button>
-          <span id="submit-status" class="hint"></span>
-        </div>
-        <div id="online-row" hidden>
-          <div id="deadline-info" class="hint"></div>
-          <div class="btnrow">
-            <button id="btn-load-moves" title="Fill the order box with every power's published moves for the current phase">⬇ Load published moves</button>
-            <button id="btn-refresh-online" title="Re-check submissions and published moves">🔄</button>
-          </div>
-        </div>
-        <div id="phase-info"></div>
-        <textarea id="orders-text" spellcheck="false" placeholder="FRANCE&#10;A Par - Bur&#10;F Bre - MAO&#10;A Mar S A Par - Bur"></textarea>
+        <button id="btn-catch-up" class="primary catch-up-btn" hidden
+                title="A new phase has been published since you last looked — step through it to bring your board up to date">
+          ▶ Resolve new orders!
+        </button>
+        <details id="orders-box">
+          <summary>Order box</summary>
+          <div id="phase-info"></div>
+          <textarea id="orders-text" spellcheck="false" placeholder="FRANCE&#10;A Par - Bur&#10;F Bre - MAO&#10;A Mar S A Par - Bur"></textarea>
+        </details>
         <div id="parse-status"></div>
         <div class="btnrow">
           <button id="btn-resolve" class="primary">Resolve</button>
           <button id="btn-resolve-final" title="Resolve and jump straight to the final position — animates the moves without stepping through each order first">⏭ Resolve to final</button>
         </div>
-        <p class="hint" id="drag-hint">Drag a unit to its destination to write the order · drop on itself to hold · <b>⇧-drop</b> on a unit to support it (or turn on 🤝&nbsp;Support and just drag) · <b>Ctrl-drop</b> a fleet at sea onto a moving army to convoy (or turn on ⚓&nbsp;Convoy) · unordered units hold.<span id="arrange-hint" hidden><br><b>Alt-drag</b> a piece (or turn on ✋&nbsp;Arrange) to put it anywhere, rules ignored — sandboxes only.</span></p>
+        <div id="online-row" hidden>
+          <div id="deadline-info" class="hint"></div>
+          <div class="btnrow">
+            <button id="btn-load-moves" title="Fill the order box with every power's submitted moves for the current phase">⬇ Load submitted moves</button>
+            <button id="btn-submit-moves" hidden title="Submit your orders to the game">📤 Submit orders</button>
+          </div>
+          <div id="submit-status" class="hint" hidden></div>
+        </div>
+        <p class="hint" id="drag-hint">Drag a unit to its destination to write the order · drop on itself to hold · <b>⇧-drop</b> on a unit to support it (or turn on 🤝&nbsp;Support and just drag) · <b>Ctrl-drop</b> a fleet at sea onto a moving army to convoy (or turn on ⚓&nbsp;Convoy) · unordered units hold.</p>
       </details>
 
       <!-- playback (replaces the orders panel while stepping through a resolve) -->
@@ -186,44 +230,10 @@
         <div id="win-thresholds" class="hint"></div>
         <table id="standings"></table>
       </details>
-
-      <!-- history -->
-      <details id="panel-history" class="panel" open>
-        <summary><h2>History</h2></summary>
-        <select id="history-select"></select>
-        <div class="btnrow">
-          <button id="btn-replay" title="Step through this past phase again">Replay</button>
-          <button id="btn-undo" title="Undo the most recent phase — the board goes back and your orders return to the box">⤺ Undo</button>
-          <button id="btn-redo" title="Redo the last undone phase">⤻ Redo</button>
-          <button id="btn-branch" title="Copy the current position into a private sandbox">🌿 Branch to sandbox</button>
-        </div>
-      </details>
-
-      <!-- deadline (game master, published games only) -->
-      <details id="panel-deadline" class="panel" open hidden>
-        <summary><h2>⏰ Deadline</h2></summary>
-        <p class="hint">Submissions close when the deadline passes. Confirm a new one each phase —
-          a week for movement, a day or two for retreats and builds. Confirming a new deadline
-          re-opens submissions.</p>
-        <div class="btnrow">
-          <button id="deadline-plus-week" title="Previous deadline + 1 week (from now if none is set)">+1 week</button>
-          <button id="deadline-plus-2day" title="Previous deadline + 48 hours (from now if none is set)">+48 h</button>
-          <button id="deadline-plus-day" title="Previous deadline + 24 hours (from now if none is set)">+24 h</button>
-          <button id="deadline-clear" title="Remove the deadline — submissions stay open until you confirm a new one">✖ Clear</button>
-        </div>
-        <div class="sandbox-row">
-          <input id="deadline-input" type="datetime-local" title="Pick a custom deadline (your local time)">
-          <button id="deadline-set" title="Set the deadline to the picked date and time">Set</button>
-        </div>
-        <div class="btnrow">
-          <button id="deadline-load-btn" class="primary" title="Loads submitted orders once the deadline passes — or, with no deadline set, opens an empty box so you can skip the game forward">⬇ Load orders</button>
-        </div>
-      </details>
     </aside>
   </div>
 
   <nav id="mobile-tabbar">
-    <button class="mtab" data-sheet="edit" title="Edit board">✏<span>Edit</span></button>
     <button class="mtab" data-sheet="orders" title="Orders &amp; history">📝<span>Orders</span></button>
     <button class="mtab" data-sheet="standings" title="Standings">📊<span>Standings</span></button>
   </nav>
@@ -257,7 +267,7 @@
       <h2>🔍 Submissions</h2>
       <p class="hint">Who's submitted for this phase and what's published — use ⚙ Settings to assign players
         or toggle Auto-Publish. Publishing happens by loading orders into the main order box and
-        resolving (⏰ Deadline → ⬇ Load orders); the one thing left here is ✖ un-publish, to let a
+        resolving (⏰ Deadline → ⬇ Load orders); the one thing left here is 🔒/🔓, to let a
         power resubmit even after the deadline.</p>
       <div id="submissions-rows"></div>
       <div class="btnrow">

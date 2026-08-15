@@ -33,10 +33,13 @@ a { color: #7fb4ff; }
 [hidden] { display: none !important; }
 
 /* ---------- home ---------- */
-#home-screen { display: flex; align-items: center; justify-content: center; }
+#home-screen { display: flex; justify-content: center; position: relative; overflow-y: auto; }
 /* wide enough for the three groups to sit side by side — the middle one now
-   carries two labelled sections of games rather than one flat list */
-.home-card { max-width: 900px; padding: 2rem; }
+   carries two labelled sections of games rather than one flat list.
+   Centered via margin:auto (not align-items:center) so that when the
+   card grows taller than the viewport, the margins collapse to 0
+   instead of clipping the top out of scroll range. */
+.home-card { max-width: 900px; padding: 2rem; margin: auto; }
 .home-card h1 { margin: 0 0 0.4rem; }
 .subtitle { color: #aab3c0; margin-top: 0; }
 .home-actions { display: flex; gap: 2rem; margin: 1.5rem 0; flex-wrap: wrap; }
@@ -88,11 +91,21 @@ a { color: #7fb4ff; }
 .filebtn:hover { background: #394050; }
 .filebtn input { display: none; }
 .credits { color: #77808e; font-size: 0.85em; }
-.linklike {
-  background: none; border: none; padding: 0; margin: 0;
-  color: #77808e; font: inherit; text-decoration: underline; cursor: pointer;
+
+/* Covers the home card while a shared game link (?gist=…) is being fetched,
+   so opening a link doesn't sit on the bare home screen with no feedback. */
+.home-loading {
+  position: absolute; inset: 0; z-index: 1;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+  background: #1a1d23dd; border-radius: 10px;
+  color: #aab3c0;
 }
-.linklike:hover { color: #aab3c0; }
+.spinner {
+  width: 32px; height: 32px; border-radius: 50%;
+  border: 3px solid #3a4150; border-top-color: #4f7ec0;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ---------- game screen ---------- */
 #game-screen { display: flex; flex-direction: column; }
@@ -153,9 +166,6 @@ a { color: #7fb4ff; }
 #game-screen[data-mode="gm"] #board-pane { box-shadow: inset 0 0 0 2px rgba(79, 126, 192, .40); }
 #game-screen[data-mode="player"] #board-pane { box-shadow: inset 0 0 0 2px rgba(79, 126, 192, .26); }
 #game-screen[data-mode="spectator"] #board-pane { box-shadow: inset 0 0 0 2px rgba(91, 100, 114, .30); }
-/* ✋ Arrange is sticky, so it has to be loud: while it is armed a drag moves a
-   piece instead of ordering it, and the board says so the whole time. */
-#board-pane.arranging { box-shadow: inset 0 0 0 4px rgba(224, 176, 112, .8) !important; }
 #board { margin: auto; width: 100%; height: 100%; }
 #board svg { width: 100%; height: 100%; display: block; }
 
@@ -165,10 +175,14 @@ a { color: #7fb4ff; }
   padding: 12px; display: flex; flex-direction: column; gap: 14px;
 }
 .panel h2 { margin: 0 0 8px; font-size: 1.05rem; }
+.panel h3 { margin: 12px 0 6px; font-size: 0.85rem; color: #aab3c0; text-transform: uppercase; letter-spacing: .03em; }
 details.panel summary { cursor: pointer; margin-bottom: 8px; }
 details.panel summary h2 { margin: 0; display: inline; }
 details.panel summary::marker { color: #8892a0; }
 details.panel:not([open]) summary { margin-bottom: 0; }
+.catch-up-btn { display: block; width: 100%; margin: 8px 0; font-weight: 600; }
+#orders-box { margin: 8px 0; }
+#orders-box summary { cursor: pointer; margin-bottom: 6px; font-size: 0.85rem; color: #aab3c0; text-transform: uppercase; letter-spacing: .03em; }
 #phase-info { color: #aab3c0; font-size: 0.9em; margin-bottom: 8px; white-space: pre-wrap; }
 #orders-text { width: 100%; min-height: 260px; resize: vertical; font-family: Consolas, ui-monospace, monospace; font-size: 13px; line-height: 1.45; }
 #parse-status { font-size: 0.85em; margin: 6px 0; min-height: 1.2em; white-space: pre-wrap; }
@@ -197,8 +211,7 @@ details.panel:not([open]) summary { margin-bottom: 0; }
 #panel-playback.preview #playback-title { color: #8fb4ea; }
 
 /* ---------- online play (submissions + player assignments) ---------- */
-#submit-row { align-items: center; }
-#submit-status { align-self: center; }
+#submit-status { margin: 6px 0; }
 #submit-status.done { color: #6fce7f; }
 #submit-status.drift { color: #ffc46b; }
 #submissions-rows, #players-assign-rows { display: flex; flex-direction: column; gap: 6px; }
@@ -226,12 +239,6 @@ details.panel:not([open]) summary { margin-bottom: 0; }
 .mode-btn { display: inline-flex; align-items: center; gap: 6px; }
 .mode-btn[aria-pressed="true"] { background: #2f4d6b; border-color: #5a90c9; color: #dcecff; }
 .mode-btn[aria-pressed="true"]:hover { background: #37597b; }
-/* ✋ Arrange wears the sandbox's amber, not the order-writing blue — it is the
-   one toggle that stops writing orders and starts moving the pieces, and the
-   ring it puts round the board is the same colour. */
-#btn-mode-arrange[aria-pressed="true"] { background: #5c4426; border-color: #c99a56; color: #ffe0b0; }
-#btn-mode-arrange[aria-pressed="true"]:hover { background: #6b4f2b; }
-#btn-mode-arrange[aria-pressed="true"] .mode-label { color: #ffe0b0; }
 
 #standings { width: 100%; border-collapse: collapse; font-size: 0.9em; }
 #standings td { padding: 2px 6px; }
@@ -373,7 +380,6 @@ dialog.modal h2 { margin: 0 0 14px; font-size: 1.1rem; }
   /* The countdown's DD:HH:MM:SS must stay whole (that's the whole point of
      the format), so it's never truncated. */
   #deadline-countdown { font-size: 0.75em; padding: 2px 4px; flex: none; white-space: nowrap; }
-  #btn-edit { display: none; } /* superseded by the mobile Edit tab */
   .settings-label { display: none; } /* icon-only ⚙ button on mobile */
 
   /* The state indicators keep their colour but drop their words — the icon
@@ -436,12 +442,8 @@ dialog.modal h2 { margin: 0 0 14px; font-size: 1.1rem; }
   }
   #sidebar.sheet-open { transform: translateY(0); }
 
-  /* Which panels belong to which mobile tab. Edit and Standings show one
-     small panel each, so the sheet stays short and the board behind it is
-     still usable — the point of the Edit tab is to tap the map. (The orders
-     box would fill the sheet and hide the board, so it is not in the Edit
-     sheet; the Orders tab is one tap away.) */
-  #sidebar[data-sheet="edit"] > .panel:not(#panel-edit) { display: none; }
+  /* Which panels belong to which mobile tab. Standings shows its own small
+     panel so the sheet stays short and the board behind it is still usable. */
   #sidebar[data-sheet="orders"] > #panel-standings { display: none; }
   #sidebar[data-sheet="standings"] > .panel:not(#panel-standings) { display: none; }
 

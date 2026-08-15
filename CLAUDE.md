@@ -17,11 +17,13 @@ python -m http.server 8123
 # open http://localhost:8123/diplomacy/
 ```
 
-Tests: `diplomacy/test/datc.html` runs the full DATC (Diplomacy Adjudicator Test Cases) suite in-browser against `diplomacy/js/adjudicator.js`, driven by `diplomacy/test/datc-runner.js` parsing `diplomacy/tools/datc_v2.4_06.txt`. Serve the folder and open `test/datc.html`; the page title reports the score (target `DATC 167/167`) and lists failures by case number. There is no CLI test runner or lint config — verify changes by loading the page in a browser.
+Tests: `diplomacy/test/datc.html` runs the full DATC (Diplomacy Adjudicator Test Cases) suite in-browser against `diplomacy/js/adjudicator.js`, driven by `diplomacy/test/datc-runner.js` parsing `diplomacy/tools/datc_v2.4_06.txt`. Serve the folder and open `test/datc.html`; the page title reports the score (target `DATC 167/167`) and lists failures by case number. `diplomacy/test/strict.html` runs the house-rule cases (strict support-hold, strict convoy) each both ways to pin the difference from standard rules. There is no CLI test runner or lint config — verify changes by loading the page in a browser.
 
 ## Workflow
 
 By default, commit and push changes made in this repo (not just `diplomacy/`) so GitHub Pages picks them up and the user can review the live result — don't wait to be asked for the push step specifically. Do this immediately after finishing a change, not batched at the end of a longer session — the user checks results on the live GitHub Pages site, so a change sitting uncommitted/unpushed blocks them from seeing it.
+
+`.claude/` (Claude Code's local project config) is gitignored — never add or commit it.
 
 ## Architecture
 

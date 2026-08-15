@@ -2962,7 +2962,7 @@ input, select, textarea {
 
 		/* Basic */
 
-			html, body {
+			#wrapper {
 				overflow-x: hidden;
 			}
 
