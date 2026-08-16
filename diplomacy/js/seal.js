@@ -38,7 +38,7 @@ export function newSealKey() {
 }
 
 // importKey costs a call per use otherwise, and every comment on the gist is
-// unsealed on every 60s poll.
+// unsealed on every refresh.
 const imported = new Map();
 function importKey(keyB64) {
   let p = imported.get(keyB64);

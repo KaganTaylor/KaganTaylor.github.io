@@ -444,6 +444,35 @@ export async function createMailbox(gistId, login) {
   return json;
 }
 
+// The fallback when a player reaches Submit with no mailbox at all — the
+// mailbox creation on game load failed, or their comment was deleted since.
+// Rare, and the player should not be made to press the button twice for it.
+//
+// SEALED: post the submission outright. GitHub will email it to the table, and
+// that is fine, because what the email carries is ciphertext. Posting empty and
+// editing a second later — the old shape — leaks exactly as much (GitHub
+// renders the mail body when its mailer runs, not at creation) while costing an
+// extra request, so there is nothing left to buy by splitting it.
+//
+// UNSEALED (a game with no key): never post order text. Create the empty
+// mailbox and edit it, which is the best available and the reason the mailbox
+// exists at all. The gap is a second, so this can still leak — the status line
+// warns the player their orders are unencrypted, and the real answer is for the
+// GM to open the game once so a key gets written.
+async function createSubmission(gistId, login, body, sealed) {
+  const token = getToken();
+  const headers = { Authorization: `token ${token}`, Accept: 'application/vnd.github+json' };
+  const url = `${API}/gists/${gistId}/comments`;
+  if (sealed) {
+    const json = await ghFetch(url, { method: 'POST', headers, body: JSON.stringify({ body }) });
+    rememberMailbox(gistId, login, json.id);
+    return json;
+  }
+  const json = await ghFetch(url, { method: 'POST', headers, body: JSON.stringify({ body: MAILBOX_BODY }) });
+  rememberMailbox(gistId, login, json.id);
+  return patchComment(gistId, json.id, body);
+}
+
 function patchComment(gistId, commentId, body) {
   return ghFetch(`${API}/gists/${gistId}/comments/${commentId}`, {
     method: 'PATCH',
@@ -461,10 +490,11 @@ function patchComment(gistId, commentId, body) {
 // its cached list and have the UI update from the write rather than a later
 // poll (see rememberWrite in app.js).
 //
-// This ONLY edits. It cannot create a comment at all: a mailbox is created
-// empty when the player opens the game, and if somehow there isn't one this
-// throws NO_MAILBOX rather than posting. A POST from here is how orders got
-// mailed to the whole table, twice — the capability is gone, not guarded.
+// Normally this only ever EDITS: the mailbox was created empty when the player
+// opened the game, so GitHub's one notification went out long before there were
+// orders to leak. If somehow there is no mailbox, this posts the submission
+// itself rather than bouncing the player back to press the button again —
+// see createSubmission() for why that is now the safe way round.
 export async function submitOrders(gistId, payload, sealKey) {
   const token = getToken();
   if (!token) throw new Error('no GitHub token set');
@@ -500,7 +530,10 @@ export async function submitOrders(gistId, payload, sealKey) {
     }
   }
   const mailbox = findMyMailbox(await listComments(gistId), login);
-  if (!mailbox) throw new Error('NO_MAILBOX: no orders mailbox on this gist yet');
+  if (!mailbox) {
+    const created = await createSubmission(gistId, login, body, !!sealKey);
+    return { login, submission, comment: { ...created, body: plain }, sealed: !!sealKey };
+  }
   rememberMailbox(gistId, login, mailbox.id);
   const c = await patchComment(gistId, mailbox.id, body);
   return { login, submission, comment: { ...c, body: plain }, sealed: !!sealKey };
