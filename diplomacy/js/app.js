@@ -18,7 +18,8 @@ import { PROVINCES, POWERS } from './map-data.js';
 import {
   getToken, setToken, publishGame, updatePublished, fetchPublished,
   getAuthenticatedLogin, extractGistId,
-  listComments, findSubmission, ensureMailbox, submitOrders,
+  listComments, findSubmission, findMyMailbox, createMailbox, rememberMailbox,
+  submitOrders, readSealKey, ensureSealKey, unsealComments,
   fetchGist, readMovesFiles, readGameFile, writeMovesFiles, upsertMovesEntry,
   getLastServerDate,
 } from './publish.js';
@@ -59,7 +60,10 @@ let hiddenOrdersText = '';
 // Live view of a published game's online-play state: everyone's submission
 // comments, the published moves-<power>.json files, and this browser's
 // GitHub login. Refetched on load and after every submit/publish action.
-let online = { comments: null, moves: null, login: null, restored: false, serverOffset: 0 };
+// `sealKey` is the game's shared order-obfuscation key, read straight out of
+// the gist (see js/seal.js) — comments arrive sealed and are decrypted once,
+// at the edge, so everything below works on cleartext.
+let online = { comments: null, moves: null, login: null, restored: false, serverOffset: 0, sealKey: null };
 
 // A game master who has assigned their own GitHub login to a power in 👥 Set
 // players can freely switch (⚙ Settings → 🎭 Play as) between running the
@@ -75,12 +79,16 @@ let gmOrdersLoaded = false;
 // a previous auto-publish is still in flight.
 let autoPublishing = false;
 // Guards ensureMyMailbox() the same way — the 60s tick must not race itself
-// into posting a second mailbox comment before the first POST returns. The set
-// remembers mailboxes made this session as well, since a refresh whose comment
-// list was fetched before the POST landed would otherwise look stale and post
-// a duplicate.
+// into posting a second mailbox comment before the first POST returns.
+//
+// An in-flight guard only: there is deliberately no "already made it this
+// session" latch any more. Such a latch made a deleted mailbox invisible until
+// the page was reloaded, and the submit path then created one and filled it
+// with orders a second later — which is how orders got emailed to the table.
+// Whether a mailbox exists is now re-decided from the fetched comment list on
+// every poll; the freshly created comment is folded in via rememberWrite() so
+// a list that lags the POST still can't provoke a duplicate.
 let creatingMailbox = false;
-const mailboxesMade = new Set();
 
 // A comment this browser has just written, held until a poll comes back
 // carrying it. Our own writes are the one thing we know for certain, and the
@@ -417,7 +425,7 @@ function openGame(g) {
   playback = null;
   gmOrdersLoaded = false;
   catchUpTarget = null; // re-established below/by refreshOnlineStatus() for THIS game, not whatever was last open
-  online = { comments: null, moves: null, login: null, restored: false, serverOffset: 0 };
+  online = { comments: null, moves: null, login: null, restored: false, serverOffset: 0, sealKey: null };
   justWrote = null; // belongs to whichever game we just left
   S.saveGame(game);
   showScreen('game-screen');
@@ -2091,11 +2099,18 @@ function submissionOnTime(found) {
   return !d || !found.updatedAt || new Date(found.updatedAt) <= d;
 }
 
+// Submissions reach us sealed and are decrypted in refreshOnlineStatus, so by
+// the time anything here looks at one it holds cleartext `orders`. One that
+// still doesn't (no key on this browser, or a blob that won't open) is treated
+// as no submission at all — visibly "waiting", rather than quietly resolved or
+// published as a power that ordered nothing.
+const readable = (s) => !!s && typeof s.orders === 'string';
+
 // The power's valid submission comment for the current phase, or null.
 function phaseSubmission(p) {
   const login = (game.players || {})[p];
   const found = login && online.comments && findSubmission(online.comments, login);
-  if (found && matchesPhase(found.submission) && found.submission.power === p) return found;
+  if (found && readable(found.submission) && matchesPhase(found.submission) && found.submission.power === p) return found;
   return null;
 }
 
@@ -2191,7 +2206,7 @@ function mySubmission() {
   if (!p) return null;
   const found = online.comments && online.login && findSubmission(online.comments, online.login);
   const s = found && found.submission;
-  return s && matchesPhase(s) && s.power === p ? s : null;
+  return readable(s) && matchesPhase(s) && s.power === p ? s : null;
 }
 
 function renderSubmitStatus() {
@@ -2252,7 +2267,12 @@ function renderSubmitStatus() {
     }
     btn.disabled = true;
     const when = s.submittedAt ? ' · ' + new Date(s.submittedAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '';
-    el.textContent = `✓ Submitted${when}`;
+    // Say which it was. Falling back to cleartext when the gist has no key
+    // keeps the game playable, but a player should never have to guess whether
+    // their orders are sitting in public view.
+    el.textContent = online.sealKey
+      ? `🔒 Submitted${when}`
+      : `✓ Submitted${when} · unencrypted (this game has no key)`;
   } else {
     btn.disabled = false;
     el.textContent = 'Not submitted for this phase yet';
@@ -2647,7 +2667,14 @@ async function refreshOnlineStatus() {
     const gistJson = await fetchGist(g.gistId);
     const fresh = await readGameFile(gistJson);
     const moves = await readMovesFiles(gistJson);
-    const comments = await listComments(g.gistId);
+    // The seal key rides along in the gist we just fetched, so reading it costs
+    // nothing. The owner writes one on the first load of a game that has none,
+    // which is how games published before sealing existed pick it up.
+    let sealKey = await readSealKey(gistJson);
+    if (!sealKey && g.isOwner && getToken()) {
+      try { sealKey = await ensureSealKey(g.gistId, gistJson); } catch { /* next poll */ }
+    }
+    const comments = await unsealComments(await listComments(g.gistId), sealKey, g.gistId);
     const token = getToken();
     const login = token ? await getAuthenticatedLogin(token) : null;
     if (game !== g) return; // user switched games while we were fetching
@@ -2669,6 +2696,7 @@ async function refreshOnlineStatus() {
       renderStandings();
     }
     online.moves = moves;
+    online.sealKey = sealKey;
     online.comments = comments;
     applyJustWrote(); // a submit of ours the fetched list may not show yet
     online.login = login;
@@ -2726,30 +2754,41 @@ async function refreshOnlineStatus() {
 // player opens the game, carrying neither orders nor any hint of when they
 // wrote them. Every actual submission afterwards is a silent edit.
 //
-// This costs no extra request in the ordinary case. refreshOnlineStatus() has
-// already fetched every comment on the gist (it does so on load and on each
-// 60s tick), so "do I have one?" is a lookup in memory; the POST happens at
-// most once per player per game. Failure is silent — submitOrders() creates a
-// mailbox on demand if this never ran.
+// The gap matters, and cannot be measured. GitHub renders a notification's
+// body when its mailer runs rather than capturing it at creation, and that
+// delay is undocumented and unbounded — a mailbox created empty and filled one
+// second later was mailed out complete with the orders. So creating it here,
+// at load, is not a tidiness preference: it is the only way to make the gap
+// large (minutes to days) instead of accidental. It is still not a guarantee,
+// which is why the orders are sealed as well (js/seal.js).
 //
-// ensureMailbox() is called even when we can already see a mailbox in the list,
-// rather than returning early on findMyComment(): finding it is what makes it
-// remembered, and a remembered id is what lets submitOrders() skip its read
-// entirely. Doing it here means the read-free path is armed from page load, so
-// even a player's FIRST submit of a session cannot go down a route that POSTs.
-// The call makes no request when a mailbox already exists.
+// THIS IS THE ONLY PLACE IN THE APP THAT MAY CREATE A COMMENT, and it decides
+// from online.comments — the list refetched on every poll, i.e. server truth.
+// Never from a remembered id: that is what made a deleted mailbox invisible.
+// Finding one still records its id, because a remembered id is what lets
+// submitOrders() PATCH with no read in front of it.
+//
+// It costs no extra request in the ordinary case: refreshOnlineStatus() has
+// already fetched every comment, so "do I have one?" is a lookup in memory.
+// Re-checking every poll is what makes a deleted mailbox come back within 60
+// seconds, with no reload.
 async function ensureMyMailbox(g) {
   if (creatingMailbox) return;
   if (!g.published || !g.gistId || !online.comments || !online.login) return;
   if (!g.assignedPower || !getToken()) return;
-  const made = g.gistId + '|' + online.login.toLowerCase();
-  if (mailboxesMade.has(made)) return;
+  const existing = findMyMailbox(online.comments, online.login);
+  if (existing) {
+    rememberMailbox(g.gistId, online.login, existing.id);
+    return;
+  }
   creatingMailbox = true;
   try {
-    await ensureMailbox(g.gistId, online.comments, online.login);
-    mailboxesMade.add(made);
+    // Folded into online.comments immediately: the next poll's list may have
+    // been fetched before this POST landed, and without this we would read it
+    // as "still no mailbox" and post a second one.
+    rememberWrite(await createMailbox(g.gistId, online.login));
   } catch {
-    // no mailbox yet is harmless — submitting creates one
+    // transient — the next poll tries again
   } finally {
     creatingMailbox = false;
   }
@@ -2789,18 +2828,28 @@ async function doSubmitMoves() {
   const btn = $('btn-submit-moves');
   btn.disabled = true;
   try {
-    const { comment } = await submitOrders(game.gistId, {
+    const { comment, sealed } = await submitOrders(game.gistId, {
       power, year: game.year, season: game.season, step: game.step,
       orders: block,
-    });
+    }, online.sealKey);
     online.restored = true; // what's in the box IS the submission now
-    rememberWrite(comment);
+    rememberWrite(comment); // the cleartext copy — see submitOrders
     renderSubmitStatus(); // reflect the submit at once, off our own write
-    toast(`Orders submitted for ${cap(power)}`, 'info');
+    toast(`Orders submitted for ${cap(power)}${sealed ? '' : ' (unencrypted)'}`, 'info');
     await refreshOnlineStatus();
   } catch (e) {
-    toast('Submit failed: ' + e.message);
-    if (isAuthError(e)) askToken();
+    // submitOrders cannot create a comment — by design, since a create is what
+    // GitHub emails. If the mailbox that should have been made at load time
+    // isn't there, make it now and let the player press Submit again: two
+    // separate actions, seconds or minutes apart, rather than a POST and a
+    // PATCH back to back.
+    if (/NO_MAILBOX/.test(e.message)) {
+      ensureMyMailbox(game);
+      toast('Setting up your orders mailbox — press Submit again in a moment');
+    } else {
+      toast('Submit failed: ' + e.message);
+      if (isAuthError(e)) askToken();
+    }
   } finally {
     renderSubmitStatus();
   }

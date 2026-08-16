@@ -1,7 +1,18 @@
 # Proposal: sealed orders (client-side encryption of submissions)
 
-**Status:** proposed, not implemented. Deferred deliberately — see *Relationship to the mailbox
-change* below for what is already done and what this adds.
+**Status:** proposed, not implemented — and superseded for now by a deliberately weaker scheme.
+
+Order text **is** encrypted today (`js/seal.js`, AES-GCM-256), but under a single key kept in the
+game's own gist, so every player can decrypt. That closes the leaks that actually happened —
+notification emails and casual reading of the gist page — at the cost of no ceremony, no key to
+lose, and an Action that can still publish moves unattended. See *Orders are obfuscated, not secret*
+in `DECISIONS.md`.
+
+**This document remains the design to reach for if the table ever wants orders genuinely hidden from
+each other and from the GM.** Everything below is unchanged and still accurate as a plan; read
+"cleartext" in it as "obfuscated under a public key" where the shipped scheme applies. Note also
+that its cost is real: per-player ECDH, a wrapped GM key, a rotation story, and no more unattended
+publishing.
 
 ---
 

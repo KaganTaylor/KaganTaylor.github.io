@@ -3,6 +3,8 @@
 // only the publisher (who holds a personal access token, kept in this
 // browser's localStorage) can update it.
 
+import { seal, unseal, aadFor, newSealKey } from './seal.js';
+
 const TOKEN_KEY = 'diplomacysim:ghtoken';
 const API = 'https://api.github.com';
 
@@ -178,12 +180,34 @@ export async function getAuthenticatedLogin(token) {
 // — the whole table — and does not notify on edits. Creating a comment that
 // already held orders mailed those orders to the player's opponents. Nothing
 // here may ever POST order text; see DECISIONS.md.
+//
+// That asymmetry is necessary but NOT sufficient: GitHub renders a
+// notification's body when its mailer runs, not when the comment is created,
+// so a comment created empty and edited moments later can still be mailed out
+// holding the orders. Order text is therefore also sealed (js/seal.js) — the
+// only thing that makes a leak harmless whenever it happens.
 // ---------------------------------------------------------------------------
 
-export const ORDERS_MARKER = 'DIPLOMACY-ORDERS v1';
+export const ORDERS_MARKER = 'DIPLOMACY-ORDERS';
+
+// LEGACY v1 — remove once the current game ends.
+// Comments written before orders were sealed. Still recognised so that game's
+// mailboxes are edited rather than duplicated and its submissions still read;
+// nothing writes this marker any more.
+const LEGACY_MARKER_V1 = 'DIPLOMACY-ORDERS v1';
+
+// The marker line a comment carries, or null if it is not one of ours. Matched
+// as a whole first line, never as a prefix — 'DIPLOMACY-ORDERS v1' starts with
+// 'DIPLOMACY-ORDERS' and must not be mistaken for it.
+function markerOf(body) {
+  const line = (body || '').split('\n', 1)[0].trim();
+  if (line === ORDERS_MARKER) return ORDERS_MARKER;
+  if (line === LEGACY_MARKER_V1) return LEGACY_MARKER_V1; // LEGACY v1 — remove once the current game ends
+  return null;
+}
 
 // The body a mailbox is created with. It deliberately starts with the marker
-// (so findMyComment recognises it) but omits power/year/season/step (so
+// (so findMyMailbox recognises it) but omits power/year/season/step (so
 // parseSubmission rejects it and it is never mistaken for a submission). It is
 // also the one notification the table ever receives about a player, so it
 // explains itself.
@@ -193,6 +217,57 @@ export const MAILBOX_BODY =
     mailbox: true,
     note: 'Orders mailbox — edited in place each phase. Edits send no notifications.',
   }, null, 1);
+
+// ---------------------------------------------------------------------------
+// The shared seal key, kept in the gist itself (see js/seal.js for why that is
+// deliberate). Any viewer can read it, so decryption needs no coordination and
+// the unattended Action can still publish moves.
+// ---------------------------------------------------------------------------
+
+export const SEAL_FILE = 'seal-key.json';
+
+// The gist's seal key, or null if this game has none (older games, or a gist
+// whose owner hasn't opened it since sealing shipped).
+export async function readSealKey(gistJson) {
+  try {
+    const content = await gistFileContent((gistJson.files || {})[SEAL_FILE]);
+    const doc = content ? JSON.parse(content) : null;
+    return doc && typeof doc.key === 'string' ? doc.key : null;
+  } catch {
+    return null;
+  }
+}
+
+// Owner-only: writes a seal key into the gist if it has none, and returns the
+// key either way. A named-files PATCH leaves every other file alone, the same
+// mechanism writeMovesFiles relies on.
+export async function ensureSealKey(gistId, gistJson) {
+  const existing = await readSealKey(gistJson);
+  if (existing) return existing;
+  const token = getToken();
+  if (!token) return null;
+  const key = newSealKey();
+  await ghFetch(`${API}/gists/${gistId}`, {
+    method: 'PATCH',
+    headers: { Authorization: `token ${token}`, Accept: 'application/vnd.github+json' },
+    body: JSON.stringify({
+      files: {
+        [SEAL_FILE]: {
+          content: JSON.stringify({
+            v: 1,
+            alg: 'AES-GCM',
+            key,
+            note:
+              'Shared key for this game\'s order comments. Public on purpose: it stops orders ' +
+              'being readable by accident (in notification emails, or by glancing at this gist), ' +
+              'not by anyone determined to decrypt them.',
+          }, null, 1),
+        },
+      },
+    }),
+  });
+  return key;
+}
 
 // Reads every comment on the gist. Public data — no auth needed, signed when
 // available (see ghRead). This is the heaviest read: one call per 100 comments.
@@ -207,19 +282,56 @@ export async function listComments(gistId) {
 }
 
 // A submission comment is the marker line followed by a JSON payload:
-//   DIPLOMACY-ORDERS v1
-//   {"power":"france","year":1901,"season":"spring","step":"movement","orders":"..."}
+//   DIPLOMACY-ORDERS
+//   {"power":"france","year":1901,"season":"spring","step":"movement","sealed":"..."}
 // Returns the payload, or null if the body is not a well-formed submission.
+//
+// The phase metadata stays cleartext: renderSubmitStatus, findSubmission and
+// the deadline gate all need it, and it gives away nothing GitHub's own comment
+// listing doesn't already publish. Only the order text is sealed.
+//
+// `orders` (cleartext) is accepted alongside `sealed` — that is what LEGACY v1
+// comments carry, what a game with no seal key falls back to, and what
+// app.js's unseal pass rewrites a sealed body into so everything downstream
+// stays synchronous.
 export function parseSubmission(body) {
-  if (!body || !body.startsWith(ORDERS_MARKER)) return null;
+  const marker = markerOf(body);
+  if (!marker) return null;
   try {
-    const sub = JSON.parse(body.slice(ORDERS_MARKER.length));
+    const sub = JSON.parse(body.slice(marker.length));
     if (!sub || !sub.power || !sub.year || !sub.season || !sub.step) return null;
-    if (typeof sub.orders !== 'string') return null;
+    if (typeof sub.orders !== 'string' && typeof sub.sealed !== 'string') return null;
     return sub;
   } catch {
     return null;
   }
+}
+
+export function submissionBody(sub) {
+  return ORDERS_MARKER + '\n' + JSON.stringify(sub, null, 1);
+}
+
+// Decrypt once, at the edge. Every sealed comment in a freshly fetched list is
+// replaced by an equivalent CLEARTEXT one — same id, author and timestamps,
+// only the body rewritten — so the whole app downstream (parseSubmission,
+// findSubmission, phaseSubmission, powerOnlineStatus, revealedEntry,
+// gmLoadOrders, autoPublishIfDue) keeps working on plain synchronous strings
+// and knows nothing about sealing. That is what keeps sealing a small change.
+//
+// A comment that won't open (no key, wrong key, tampered blob, replayed into
+// another phase) is left exactly as it is: it still parses as a submission,
+// just one with no readable orders, which reads as "submitted" in the UI and
+// is skipped rather than silently treated as empty when publishing.
+export async function unsealComments(comments, sealKey, gistId) {
+  if (!sealKey) return comments;
+  return Promise.all(comments.map(async (c) => {
+    const sub = parseSubmission(c.body);
+    if (!sub || typeof sub.sealed !== 'string') return c;
+    const orders = await unseal(sealKey, sub.sealed, aadFor(gistId, sub));
+    if (orders === null) return c;
+    const { sealed, ...rest } = sub;
+    return { ...c, body: submissionBody({ ...rest, orders }) };
+  }));
 }
 
 const mine = (c, login) => !!c.user && c.user.login.toLowerCase() === login.toLowerCase();
@@ -265,25 +377,26 @@ export function findSubmission(comments, login) {
   return { commentId: best.id, submission: parseSubmission(best.body), updatedAt: best.updated_at || null };
 }
 
-// The caller's mailbox comment id, whatever its body currently holds — a real
+// The caller's mailbox comment, whatever its body currently holds — a real
 // submission, or the empty placeholder it was created as. A comment must carry
 // the marker to qualify, so an ordinary chat comment on the gist is never
 // overwritten. A real submission wins over a bare placeholder, so a player
 // holding both always gets the submission patched; among equals the most
 // recently edited wins, exactly as in findSubmission — the two MUST agree, or a
 // resubmit would edit one comment while the UI went on reading another.
-export function findMyComment(comments, login) {
+//
+// Returns the comment object, not just the id: the caller deciding whether to
+// create one is looking at server truth and may want the rest of it.
+export function findMyMailbox(comments, login) {
   if (!login) return null;
   let submission = null;
   let placeholder = null;
   for (const c of comments) {
-    if (!mine(c, login)) continue;
-    if (!c.body || !c.body.startsWith(ORDERS_MARKER)) continue;
+    if (!mine(c, login) || !markerOf(c.body)) continue;
     if (parseSubmission(c.body)) submission = laterOf(submission, c);
     else placeholder = laterOf(placeholder, c);
   }
-  const pick = submission || placeholder;
-  return pick ? pick.id : null;
+  return submission || placeholder || null;
 }
 
 // ---------------------------------------------------------------------------
@@ -304,7 +417,7 @@ function rememberedMailbox(gistId, login) {
   try { return localStorage.getItem(mailboxKey(gistId, login)) || null; } catch { return null; }
 }
 
-function rememberMailbox(gistId, login, id) {
+export function rememberMailbox(gistId, login, id) {
   try { localStorage.setItem(mailboxKey(gistId, login), String(id)); } catch { /* private mode */ }
 }
 
@@ -312,17 +425,14 @@ function forgetMailbox(gistId, login) {
   try { localStorage.removeItem(mailboxKey(gistId, login)); } catch { /* private mode */ }
 }
 
-// Creates the caller's mailbox if they have none yet, and returns its id.
-// Takes an already-fetched comment list (refreshOnlineStatus has one on every
-// poll) so the common "already have one" case costs no request at all.
-export async function ensureMailbox(gistId, comments, login) {
-  const remembered = rememberedMailbox(gistId, login);
-  if (remembered) return remembered;
-  const existing = findMyComment(comments, login);
-  if (existing) {
-    rememberMailbox(gistId, login, existing);
-    return existing;
-  }
+// Posts an empty mailbox and returns GitHub's copy of the new comment.
+//
+// It creates unconditionally — it never decides WHETHER one is needed. That
+// judgement belongs to the single caller that holds a freshly fetched comment
+// list (ensureMyMailbox in app.js), because deciding it from a remembered id
+// is exactly how a deleted mailbox went unnoticed and the submit path ended up
+// creating a comment one second before filling it with orders.
+export async function createMailbox(gistId, login) {
   const token = getToken();
   if (!token) throw new Error('no GitHub token set');
   const json = await ghFetch(`${API}/gists/${gistId}/comments`, {
@@ -331,7 +441,7 @@ export async function ensureMailbox(gistId, comments, login) {
     body: JSON.stringify({ body: MAILBOX_BODY }),
   });
   rememberMailbox(gistId, login, json.id);
-  return json.id;
+  return json;
 }
 
 function patchComment(gistId, commentId, body) {
@@ -343,23 +453,34 @@ function patchComment(gistId, commentId, body) {
 }
 
 // Writes the caller's orders into their mailbox. `payload` carries
-// {power, year, season, step, orders}; submittedAt is stamped here.
-// Returns {login, submission, comment} — `comment` is GitHub's own copy of the
-// edited comment, which the caller folds straight into its cached list so the
-// UI updates from the write itself rather than from a later poll.
+// {power, year, season, step, orders}; submittedAt is stamped here, and the
+// order text is sealed under `sealKey` before it goes anywhere near GitHub.
+// Returns {login, submission, comment, sealed} — `submission` is the CLEARTEXT
+// payload, and `comment` GitHub's own copy of the edited comment with its body
+// swapped back to that cleartext form, so the caller can fold it straight into
+// its cached list and have the UI update from the write rather than a later
+// poll (see rememberWrite in app.js).
 //
-// This ALWAYS edits, never creates-with-content: a mailbox is created empty
-// first (normally long before, when the player opened the game) precisely so
-// that the notification GitHub sends on creation carries no orders. Keep it
-// that way — a POST with a filled-in body here would email every player's
-// moves to the whole table.
-export async function submitOrders(gistId, payload) {
+// This ONLY edits. It cannot create a comment at all: a mailbox is created
+// empty when the player opens the game, and if somehow there isn't one this
+// throws NO_MAILBOX rather than posting. A POST from here is how orders got
+// mailed to the whole table, twice — the capability is gone, not guarded.
+export async function submitOrders(gistId, payload, sealKey) {
   const token = getToken();
   if (!token) throw new Error('no GitHub token set');
   const login = await getAuthenticatedLogin(token);
   if (!login) throw new Error('token was not accepted by GitHub');
   const submission = { ...payload, submittedAt: new Date().toISOString() };
-  const body = ORDERS_MARKER + '\n' + JSON.stringify(submission, null, 1);
+  // No key on this gist (an older game, or the GM hasn't reopened it since
+  // sealing shipped) — write cleartext rather than refusing to play. The UI
+  // says so outright; a silent downgrade would be worse than none.
+  let wire = submission;
+  if (sealKey) {
+    const { orders, ...rest } = submission;
+    wire = { ...rest, sealed: await seal(sealKey, orders, aadFor(gistId, submission)) };
+  }
+  const body = submissionBody(wire);
+  const plain = submissionBody(submission);
 
   // Fast path: our comment id is already known, so this is a single PATCH with
   // no read in front of it — nothing that can go stale, nothing that can decide
@@ -367,17 +488,22 @@ export async function submitOrders(gistId, payload) {
   const remembered = rememberedMailbox(gistId, login);
   if (remembered) {
     try {
-      return { login, submission, comment: await patchComment(gistId, remembered, body) };
+      const c = await patchComment(gistId, remembered, body);
+      return { login, submission, comment: { ...c, body: plain }, sealed: !!sealKey };
     } catch (e) {
       // Only a 404 (the comment was deleted) may fall through to the slow path.
       // Auth failures, rate limits and network errors must surface as failures:
-      // retrying them down a route that can POST is how orders get mailed out.
+      // retrying them down a route that reads and re-decides is how a stale
+      // answer turns into a second comment.
       if (!/\b404\b/.test(e.message)) throw e;
       forgetMailbox(gistId, login);
     }
   }
-  const commentId = await ensureMailbox(gistId, await listComments(gistId), login);
-  return { login, submission, comment: await patchComment(gistId, commentId, body) };
+  const mailbox = findMyMailbox(await listComments(gistId), login);
+  if (!mailbox) throw new Error('NO_MAILBOX: no orders mailbox on this gist yet');
+  rememberMailbox(gistId, login, mailbox.id);
+  const c = await patchComment(gistId, mailbox.id, body);
+  return { login, submission, comment: { ...c, body: plain }, sealed: !!sealKey };
 }
 
 // Full gist JSON (files + metadata). Public — no auth needed, signed when

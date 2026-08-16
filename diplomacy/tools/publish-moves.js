@@ -12,6 +12,12 @@
 // deadline, and manual-mode games are published by the game master in the
 // app after review.
 //
+// Order text in those comments is sealed (AES-GCM-256) under a key kept in the
+// game gist itself as seal-key.json, so this script needs no secret beyond the
+// token it already has — that is precisely why the key is shared rather than
+// per-player. See diplomacy/js/seal.js and DECISIONS.md. A submission that
+// cannot be unsealed is logged and skipped, never published as an empty one.
+//
 // A power already published for the current phase is skipped, and a comment
 // edited after the deadline (GitHub's updated_at stamp) is void — no late
 // entries. The game master can authorize a late resubmission from the app
@@ -32,8 +38,15 @@ const DRY_RUN = !!process.env.DRY_RUN;
 const IGNORE_DEADLINE = !!process.env.IGNORE_DEADLINE;
 
 const API = 'https://api.github.com';
-const ORDERS_MARKER = 'DIPLOMACY-ORDERS v1';
+const ORDERS_MARKER = 'DIPLOMACY-ORDERS';
+// LEGACY v1 — remove once the current game ends. Comments written before order
+// text was sealed; recognised so the game in progress survives the upgrade,
+// never written.
+const LEGACY_MARKER_V1 = 'DIPLOMACY-ORDERS v1';
 const DESCRIPTION_PREFIX = 'Diplomacy Simulator — ';
+const SEAL_FILE = 'seal-key.json';
+const IV_BYTES = 12;
+const subtle = globalThis.crypto.subtle;
 
 async function gh(path, opts = {}) {
   const res = await fetch(API + path, {
@@ -67,14 +80,66 @@ async function fileContent(file) {
   return res.text();
 }
 
-// same format the app writes: marker line + JSON payload
+// Matched as a whole first line, never as a prefix — 'DIPLOMACY-ORDERS v1'
+// starts with 'DIPLOMACY-ORDERS' and must not be taken for it.
+function markerOf(body) {
+  const line = (body || '').split('\n', 1)[0].trim();
+  if (line === ORDERS_MARKER) return ORDERS_MARKER;
+  if (line === LEGACY_MARKER_V1) return LEGACY_MARKER_V1; // LEGACY v1 — remove once the current game ends
+  return null;
+}
+
+// same format the app writes: marker line + JSON payload. Order text arrives
+// as a `sealed` blob; `orders` is cleartext, which is what LEGACY v1 comments
+// carry, what a game with no seal key falls back to, and what unsealComments
+// rewrites a sealed payload into.
 function parseSubmission(body) {
-  if (!body || !body.startsWith(ORDERS_MARKER)) return null;
+  const marker = markerOf(body);
+  if (!marker) return null;
   try {
-    const sub = JSON.parse(body.slice(ORDERS_MARKER.length));
+    const sub = JSON.parse(body.slice(marker.length));
     if (!sub || !sub.power || !sub.year || !sub.season || !sub.step) return null;
-    if (typeof sub.orders !== 'string') return null;
+    if (typeof sub.orders !== 'string' && typeof sub.sealed !== 'string') return null;
     return sub;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Unsealing. Order text is encrypted with a key kept in the gist itself, so
+// this script needs no secret beyond the token it already has — that is the
+// whole reason the key is shared rather than per-player (see js/seal.js).
+// AES-GCM-256, iv(12) || ciphertext, base64; phase and power are bound as
+// additionalData so a blob can't be replayed under another power.
+// ---------------------------------------------------------------------------
+
+async function readSealKey(gist) {
+  const file = gist.files && gist.files[SEAL_FILE];
+  if (!file) return null;
+  try {
+    const doc = JSON.parse(await fileContent(file));
+    return doc && typeof doc.key === 'string' ? doc.key : null;
+  } catch {
+    return null;
+  }
+}
+
+async function unsealOrders(keyB64, sub, gistId) {
+  try {
+    const key = await subtle.importKey(
+      'raw', Buffer.from(keyB64, 'base64'), 'AES-GCM', false, ['decrypt']
+    );
+    const raw = Buffer.from(sub.sealed, 'base64');
+    const aad = Buffer.from(
+      `${gistId}|${sub.power}|${sub.year}|${sub.season}|${sub.step}`
+    );
+    const pt = await subtle.decrypt(
+      { name: 'AES-GCM', iv: raw.subarray(0, IV_BYTES), additionalData: aad },
+      key,
+      raw.subarray(IV_BYTES)
+    );
+    return Buffer.from(pt).toString('utf8');
   } catch {
     return null;
   }
@@ -152,6 +217,7 @@ async function processGame(gistId, description) {
   }
 
   const comments = await paged(`/gists/${gistId}/comments`);
+  const sealKey = await readSealKey(gist);
   const updates = {};
   for (const [power, login] of Object.entries(players)) {
     if (!login) continue;
@@ -165,6 +231,18 @@ async function processGame(gistId, description) {
     if (!sub || !samePhase(phase, sub) || sub.power !== power) {
       console.log(`  ${power}: no submission for this phase (@${login})`);
       continue;
+    }
+    if (typeof sub.orders !== 'string') {
+      // sealed — decrypt with the gist's own key
+      const orders = sealKey ? await unsealOrders(sealKey, sub, gistId) : null;
+      if (orders === null) {
+        // Never fall through as "nothing submitted": that would publish this
+        // power as having ordered nothing when they in fact ordered something
+        // we merely couldn't read.
+        console.log(`  ${power}: submission could not be unsealed — skipping (@${login})`);
+        continue;
+      }
+      sub.orders = orders;
     }
     if (deadline && found.updatedAt && new Date(found.updatedAt) > deadline) {
       console.log(`  ${power}: comment edited after the deadline (${found.updatedAt}) — void`);
