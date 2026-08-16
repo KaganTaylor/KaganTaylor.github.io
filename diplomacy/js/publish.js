@@ -444,21 +444,29 @@ export async function createMailbox(gistId, login) {
   return json;
 }
 
-// The fallback when a player reaches Submit with no mailbox at all — the
-// mailbox creation on game load failed, or their comment was deleted since.
-// Rare, and the player should not be made to press the button twice for it.
+// The fallback when a player reaches Submit with no mailbox at all — creation
+// at game load failed, or their comment was deleted since. Rare, and not worth
+// making the player press the button twice for.
 //
-// SEALED: post the submission outright. GitHub will email it to the table, and
-// that is fine, because what the email carries is ciphertext. Posting empty and
-// editing a second later — the old shape — leaks exactly as much (GitHub
-// renders the mail body when its mailer runs, not at creation) while costing an
-// extra request, so there is nothing left to buy by splitting it.
+// ONE POST, NOT TWO. Posting an empty comment and editing it a moment later
+// looks safer and isn't. GitHub's notification mail is a queue — worker pools
+// draining a backlog, minutes at the ninetieth percentile during their own
+// February 2025 incident — and the body is composed when the job RUNS, not
+// when the comment is created: that is why a comment created at 20:40:39 and
+// edited at 20:40:40 was mailed out complete with the orders. An empty POST
+// followed immediately by a PATCH is a bet that a worker fires inside that one
+// second. It almost never does, and the bet costs a request.
 //
-// UNSEALED (a game with no key): never post order text. Create the empty
-// mailbox and edit it, which is the best available and the reason the mailbox
-// exists at all. The gap is a second, so this can still leak — the status line
-// warns the player their orders are unencrypted, and the real answer is for the
-// GM to open the game once so a key gets written.
+// What actually protects the orders is that they are sealed: the mail carries
+// ciphertext whenever it is composed. The mailbox created at game load matters
+// for the same reason in reverse — minutes-to-days beats the queue easily,
+// where seconds do not. See DECISIONS.md.
+//
+// UNSEALED (a game whose GM has not opened it since sealing shipped, so the
+// gist has no key): never POST readable order text. Here the empty-then-edit
+// split IS the only thing on offer, sliver of a chance though it is, so this
+// path keeps it. The status line tells the player their orders went out
+// unencrypted; the real fix is the GM opening the game once so a key exists.
 async function createSubmission(gistId, login, body, sealed) {
   const token = getToken();
   const headers = { Authorization: `token ${token}`, Accept: 'application/vnd.github+json' };
