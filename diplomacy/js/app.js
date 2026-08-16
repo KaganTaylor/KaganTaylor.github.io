@@ -3040,6 +3040,18 @@ async function gmPublishPreview() {
 // auto-publish. Switch back to the GM view (⚙ Settings → 🎭 Play as) and the
 // next tick publishes as normal.
 //
+// KNOWN LIMITATION, deliberately accepted for now: a GM who leaves their
+// browser in 🧑 Player mode therefore never auto-publishes at all, and has to
+// change hats (or ☁ Publish changes) when a deadline falls due. Nothing is
+// lost when they don't — the deadline and its stamp stay put — but for a GM
+// playing their own power, which is the common case, this is a worse deal than
+// before. Publishing without ever entering the GM view is expected to come
+// back; the fix is NOT to re-widen this gate to raw game.isOwner (that is the
+// collision described above) but to make the authoritative publish resolve the
+// phase named by deadlineFor rather than whatever phase is on the table, or to
+// let a GM's own resolveRevealedLocally() confirm and publish what it resolved.
+// See DECISIONS.md, "A deadline belongs to a phase, not to a clock".
+//
 // It also stands down while a preview is open (`playback`), so it never yanks
 // the board out from under one.
 async function autoPublishIfDue() {
