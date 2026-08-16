@@ -22,9 +22,16 @@ function stripForPublish(game) {
   // it is shared state every viewer needs to know their assignment.
   // publishedState is the game master's own bookkeeping of what's already
   // live (see js/app.js boardDirty()) — never itself part of the position.
+  // provisionalPhase and playAs are likewise strictly per-browser: the first
+  // marks an optimistic local resolve awaiting the game master's real one
+  // (app.js resolveRevealedLocally), the second is which hat this browser is
+  // wearing. Publishing either hands every viewer a flag about someone else's
+  // session — and an inherited provisionalPhase is actively harmful, since
+  // syncViewerToGist() treats it as "I am deliberately ahead of the gist" and
+  // stops reconciling (it reached the gist once; see DECISIONS.md).
   const {
     gistId, gistUrl, published, isOwner, myCountry, assignedPower, publishedState,
-    branchedFrom, sandbox,
+    branchedFrom, sandbox, provisionalPhase, playAs,
     ...rest
   } = game;
   return rest;

@@ -82,6 +82,9 @@ let gmOrdersLoaded = false;
 // Guards autoPublishIfDue() against overlapping runs from the 60s tick while
 // a previous auto-publish is still in flight.
 let autoPublishing = false;
+// The phase label autoPublishIfDue() has already told the GM it is standing
+// down on (nobody submitted anything). One notice per phase, not one a minute.
+let autoPublishIdleFor = null;
 // Guards ensureMyMailbox() the same way — two refreshes close together (a load
 // followed by a 🔄, say) must not race each other into posting a second
 // mailbox comment before the first POST returns.
@@ -2077,6 +2080,29 @@ function deadlinePassed() {
   return !!d && d.getTime() <= trustedNow();
 }
 
+// A deadline is confirmed for one specific phase (game.deadlineFor, stamped by
+// setDeadline) — "orders for Spring 1901 are due at 11pm", never a bare
+// timestamp floating free of what it was due for. Once the board moves on, the
+// old timestamp is stale and must not gate anything again.
+//
+// This exists because it didn't, once. A game master playing their own power
+// (🎭 Play as) used the player-side ▶ Resolve new orders! button, which
+// advances the board optimistically and — correctly, for a player — neither
+// clears the deadline nor writes anything. autoPublishIfDue() then woke up,
+// saw only "deadline in the past", and published the NEXT phase, for which
+// nobody had submitted anything, as an all-hold. Asking "in the past?" without
+// also asking "for this phase?" lets one expired deadline consume every phase
+// it is carried into.
+//
+// Deliberately lenient about a missing stamp: games published before this
+// existed carry a deadline and no deadlineFor, and must keep resolving. The
+// guards in autoPublishIfDue() cover that case from the other side.
+function deadlineIsForCurrentPhase() {
+  if (!game || !game.deadline) return false;
+  if (!game.deadlineFor) return true;
+  return matchesPhase(game.deadlineFor);
+}
+
 // Orders can only be submitted while a deadline is set and hasn't passed yet
 // — with no deadline at all there is nothing to be "on time" against.
 function ordersOpen() {
@@ -2405,6 +2431,9 @@ function isoToLocalInput(iso) {
 
 async function setDeadline(date) {
   game.deadline = date ? date.toISOString() : null;
+  // Stamp the phase this deadline is for, so it can never outlive it — see
+  // deadlineIsForCurrentPhase().
+  game.deadlineFor = date ? { year: game.year, season: game.season, step: game.step } : null;
   S.saveGame(game);
   renderDeadlineInfo();
   try {
@@ -2694,6 +2723,7 @@ async function refreshOnlineStatus() {
       // history) stays local-authoritative for the owner, since that's the
       // GM's possibly-unpublished in-progress position.
       g.deadline = fresh.deadline || null;
+      g.deadlineFor = fresh.deadlineFor || null; // travels with it, always
       g.publishMode = fresh.publishMode || null;
       // the GM owns the rules — pick up any change so every player's board,
       // standings reminder, and local previews match the GM's resolution
@@ -2976,6 +3006,7 @@ async function gmPublishPreview() {
     S.saveGame(game);
     await gmWriteLoadedMovesFiles(pb.pendingText);
     game.deadline = null;
+    game.deadlineFor = null;
     await updatePublished(game);
     game.publishedState = S.boardSnapshot(game);
     S.saveGame(game);
@@ -2992,26 +3023,64 @@ async function gmPublishPreview() {
 
 // Auto-publish mode's whole point: no GM action required. Runs off the 60s
 // online-status tick (only in the GM's own browser — only it can advance the
-// game) and, once the deadline has actually passed (never merely cleared —
-// deadlinePassed() is false whenever game.deadline is null), loads on-time
-// submissions, resolves and publishes exactly like gmPublishPreview() would,
-// skipping the step-through UI entirely. Gated on the raw game.isOwner fact,
-// not isOwnerView() — this must still fire while the GM is 🎭 Playing as
-// their own power, since that's a view change, not a different browser; it
-// only stands down while a preview (theirs or a real player's) is actually
-// open (`playback`), so it never yanks the board out from under one.
+// game) and, once the deadline for the phase on the table has passed, loads
+// on-time submissions, resolves and publishes exactly like gmPublishPreview()
+// would, skipping the step-through UI entirely.
+//
+// Gated on isOwnerView(), so it stands down entirely while the GM is 🎭
+// Playing as their own power. This was once the raw game.isOwner fact, on the
+// reasoning that play-as is a view change rather than a different browser and
+// auto-publish should not care — but in that mode the GM is *also* offered the
+// player-side ▶ Resolve new orders! button, and the two paths ran into each
+// other: the button advanced the board optimistically (no gist write, deadline
+// untouched, by design) and this function then published the following phase
+// off the same expired deadline, all-hold, with nobody having ordered. The two
+// cannot share a browser, so the view decides which one is live: playing your
+// power gives you the player's optimistic resolve, running the game gives you
+// auto-publish. Switch back to the GM view (⚙ Settings → 🎭 Play as) and the
+// next tick publishes as normal.
+//
+// It also stands down while a preview is open (`playback`), so it never yanks
+// the board out from under one.
 async function autoPublishIfDue() {
-  if (!game || !game.published || !game.isOwner || playback || autoPublishing) return;
+  if (!game || !game.published || !isOwnerView() || playback || autoPublishing) return;
   if (publishMode() !== 'auto') return;
-  if (!game.deadline || !deadlinePassed()) return;
+  if (!deadlineIsForCurrentPhase() || !deadlinePassed()) return;
+  // The board came from an optimistic local resolve that no GM has confirmed
+  // (a play-as session earlier in this browser). Its phase is not ours to
+  // publish — belt and braces for games too old to carry a deadlineFor stamp.
+  if (game.provisionalPhase) return;
   autoPublishing = true;
   try {
     await refreshOnlineStatus();
+    // refreshOnlineStatus() re-reads deadline/deadlineFor/publishMode from the
+    // gist (it is authoritative for all three), so re-test before committing
+    // to a resolution — the GM may have moved the deadline from another device
+    // in the moments since the gate above.
+    if (publishMode() !== 'auto' || !deadlineIsForCurrentPhase() || !deadlinePassed()) return;
     const blocks = [];
     for (const p of activePowers()) {
       const found = phaseSubmission(p);
       const s = found && submissionOnTime(found) ? found.submission : null;
       if (s && s.orders.trim()) blocks.push(p.toUpperCase() + '\n' + s.orders.trim() + '\n');
+    }
+    // Not one power submitted anything readable and on time. Resolving that is
+    // a whole-board all-hold nobody asked for — never a result worth committing
+    // unattended, and the shape every "the deadline outlived its phase" bug
+    // takes. Stand down and leave it to the GM. Note this counts *submissions*,
+    // not orders: a power that deliberately submits nothing but holds has a
+    // non-empty block and counts, which is the (rare, legal) all-hold phase
+    // players actually chose.
+    if (!blocks.length) {
+      const label = S.phaseLabel(game);
+      if (autoPublishIdleFor !== label) {
+        autoPublishIdleFor = label;
+        toast(
+          `Auto-publish paused — no orders were submitted for ${label}. ` +
+          'Resolve it yourself in ⏰ Deadline, or confirm a new deadline to re-open submissions.'
+        );
+      }
+      return;
     }
     const text = blocks.join('\n');
     const parsed = parseOrders(text, phaseKind());
@@ -3019,9 +3088,11 @@ async function autoPublishIfDue() {
     S.saveGame(game);
     await gmWriteLoadedMovesFiles(text);
     game.deadline = null;
+    game.deadlineFor = null;
     await updatePublished(game);
     game.publishedState = S.boardSnapshot(game);
     S.saveGame(game);
+    autoPublishIdleFor = null;
     refreshAll();
     toast(`Auto-published ${entry.label} — confirm the next deadline`, 'info');
   } catch (e) {

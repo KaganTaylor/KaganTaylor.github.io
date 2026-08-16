@@ -308,6 +308,8 @@ The countdown lives in the topbar — not just the sidebar, where the old deadli
 
 `gameMode()` is unaffected by any of this — it already derives from `isOwnerView()`, not raw `isOwner`, so it naturally reports `player` while `isPlayingAsPlayer()` is true and `gm` otherwise.
 
+The one thing that genuinely *is* suspended while playing as a player is auto-publish — see "A deadline belongs to a phase, not to a clock" below for why running the game and playing in it cannot both be live in one browser.
+
 ---
 
 ## Repositioning a piece lives in ✏ Edit board, as a `Move` tool
@@ -317,3 +319,19 @@ A sandbox exists to think in, and thinking is "what if that army were over *here
 Instead it is folded into ✏ Edit board as the **`Move` tool**, sitting beside Army / Fleet / SC owner / Erase. In edit mode a drag repositions the dragged unit (`editDrop`) regardless of which tool is selected — ignoring adjacency, unit-type routing and whose phase it is — so `Move` isn't the default (Army stays default, keeping the empty-sandbox "click to place your first units" flow intact). What `Move` adds is a *click*-that-does-nothing mode, so an existing board can be dragged and panned without a stray tap placing or erasing anything. Being inside the editor is the loud, deliberate signal that a drag now moves pieces rather than writing orders — replacing the old amber ring.
 
 The full ✏ Edit board (move, place, erase, set supply-center owners, reset to 1901) is available in *every* sandbox rather than only an empty one — a branched position is exactly where you want to add a hypothetical fleet. On a published game it stays available to the game master, who occasionally has to correct the official board by hand, but asks first and points at branching as the alternative.
+
+---
+
+## A deadline belongs to a phase, not to a clock
+
+`game.deadline` is an instant, and for a long time that was all it was — every gate in the app asked only "is it in the past?". That question is incomplete, and a live game paid for it: a Spring 1901 deadline outlived its own phase and auto-published an all-hold Fall 1901 that no player had ordered a single move in.
+
+The route there took three separate weaknesses, and the fix closes all three, because any one of them alone will eventually find another route:
+
+**The deadline is stamped with its phase.** `setDeadline()` writes `game.deadlineFor = {year, season, step}` alongside the timestamp, and `deadlineIsForCurrentPhase()` is what `autoPublishIfDue()` gates on. A deadline is a promise about one specific set of orders — "Spring 1901 is due at 11pm" — and the moment the board moves past that phase the promise is spent, whatever the clock says. It is deliberately lenient about a *missing* stamp so games published before this keep resolving; the other two guards cover that case. The stamp travels with the deadline everywhere the deadline does: `refreshOnlineStatus()` re-reads it from the gist (authoritative for both), and every path that clears `game.deadline` clears it too.
+
+**A phase nobody submitted for is never auto-published.** `autoPublishIfDue()` stands down when *no* power has a readable, on-time submission, and says so once. An unattended whole-board all-hold is not a plausible turn — it is what this class of bug looks like on the way out, and it is worth refusing on its own merits even when the cause is innocent (everyone genuinely forgot). Note the test counts submissions, not moves: a power that submits nothing but holds has said something, and a phase where every power chose that resolves normally.
+
+**Running the game and playing in it cannot both be live in one browser.** `autoPublishIfDue()` was gated on the raw `game.isOwner` fact rather than `isOwnerView()`, reasoning that 🎭 Play as is a view change, not a different browser, and the GM's duty to publish shouldn't lapse because of where they're looking. But in that mode the GM is also offered the player-side **▶ Resolve new orders!** button (`resolveRevealedLocally()`), which advances the board optimistically, writes nothing, and — correctly, for a player — leaves the deadline alone. One GM click, one 60-second tick, and auto-publish woke up behind an already-advanced board holding an already-spent deadline. Two mechanisms for advancing the same board, one authoritative and one optimistic, cannot run in the same browser; `isOwnerView()` makes the view the switch between them. The cost is real and accepted: a GM who leaves their browser in 🧑 Player never auto-publishes. That is the safe direction — nothing is published that the GM didn't ask for — and it matches what play-as already promises everywhere else, that the GM's browser runs the player's code paths and no others.
+
+One related leak the same incident exposed: `stripForPublish()` now drops `provisionalPhase` and `playAs`. Both are per-browser session facts, and a published `provisionalPhase` is worse than noise — a viewer who inherits one is treated by `syncViewerToGist()` as deliberately ahead of the gist, and quietly stops reconciling with it.
