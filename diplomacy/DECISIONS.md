@@ -103,6 +103,28 @@ The topbar's actions live behind one ⚙ Settings drop-down at every width (`#se
 
 ---
 
+## The resolution is watched from the map, not from a sheet
+
+The step-through is the one part of the app whose whole point is the map: arrows appear, verdicts land, units slide to their destinations. Its controls, though, lived in the sidebar — which on mobile is a sheet, and an open sheet insets the board (above). So watching a resolution on a phone meant watching it in the letterbox left above the controls driving it.
+
+Three things fix it, all in service of the same rule — **while a resolution plays, the map gets the screen**:
+
+- **`startPlayback()` closes the mobile sheet.** The 📝 Orders tab is one tap away for the full order list, `📋 Copy results` and the rest; nothing is lost, and the map is full-size for the part worth seeing.
+- **`#pb-float`: the step controls float over the bottom-right of the map** (⏮ ◀ ▶ ⏭, the current step's text, and whatever the sidebar's primary action is — Continue / Publish results / ✕ back). It is a *mirror*, not a second implementation: `updatePlaybackFloat()` copies the sidebar buttons' labels, hidden and disabled state and shares their click handlers, so the two can never disagree about what stepping is currently allowed. It exists only in the mobile media query, since on desktop the sidebar is already on screen beside the board. It hides itself whenever a sheet is open, because the sidebar's own copy is then visible.
+- **The board follows the order being described** (`Board.focusOn()`, called from `renderPlayback()`). A phone is usually zoomed in far enough to read one corner of the map, so an order two provinces away would otherwise be revealed off-screen. `focusOn` eases the viewBox until every province the order touches — mover, destination, supported unit, named convoy seas — is in frame.
+
+`focusOn` is deliberately conservative, because the view belongs to the viewer:
+
+- It **never zooms in**, only pans, and zooms *out* only as far as it takes to fit. A player who has zoomed into the Balkans to watch them keeps that zoom.
+- It **does nothing when the locations are already in frame** (inset by a 12% margin so an order hugging the edge still triggers a pan). At the default zoom everything is in frame, so a desktop board never moves and pays nothing.
+- **A hand on the map cancels it** — `cancelViewAnim()` on pointerdown, wheel and reset — so an auto-pan can never fight a drag.
+
+At the resolution reveal (and so through the move animation that `Continue` plays) it fits *every* ordered province instead of one, since that step is about the whole board.
+
+Note that the 🤝 Support / ⚓ Convoy toggles are already hidden throughout a playback: `updateOrderModeUI()` gates them on `!playback`, the same condition that stops a drag from writing an order at all. That leaves the map's bottom-right corner free for these controls and its top-right corner empty.
+
+---
+
 ## The home button is a home icon
 
 It was a ☰ burger. The button does not open a drawer or expand a menu — it leaves the game and switches to the menu screen — so it is a 🏠. Same button, same behaviour, on desktop and mobile.

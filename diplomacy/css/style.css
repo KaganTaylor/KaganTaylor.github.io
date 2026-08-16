@@ -360,8 +360,12 @@ dialog.modal h2 { margin: 0 0 14px; font-size: 1.1rem; }
 }
 .modal-card h2 { margin: 0 0 8px; }
 
-/* ---------- mobile tab bar (hidden on desktop) ---------- */
-#mobile-tabbar { display: none; }
+/* ---------- mobile tab bar + floating playback controls (hidden on desktop) */
+/* On desktop the sidebar is always on screen beside the board, so the floating
+   copy of the playback controls would only be a second set of the same
+   buttons. It exists purely for the mobile layout, where the sidebar is a
+   sheet that has to be closed for the map to be worth watching. */
+#mobile-tabbar, #pb-float { display: none; }
 
 /* ===================================================================== */
 /* ---------- mobile-centric layout (full-screen map + sheets) --------- */
@@ -465,4 +469,33 @@ dialog.modal h2 { margin: 0 0 14px; font-size: 1.1rem; }
   #mobile-tabbar .mtab:hover { background: #2c313a; }
 
   #toast { bottom: calc(var(--tabbar-h) + 12px); }
+
+  /* Bottom-right of the map, above the tab bar and clear of the ⇧/⚓ toggles
+     at the top (which are hidden during a playback anyway — see
+     updateOrderModeUI). Right-aligned so the buttons sit under the thumb of a
+     hand already holding the phone. */
+  #pb-float:not([hidden]) {
+    display: flex; flex-direction: column; align-items: stretch; gap: 6px;
+    position: fixed; z-index: 22;
+    right: 10px; bottom: calc(var(--tabbar-h) + 10px);
+    max-width: min(300px, calc(100vw - 20px));
+    padding: 8px;
+    background: rgba(34, 38, 46, 0.94);
+    border: 1px solid #454c58; border-radius: 14px;
+    box-shadow: 0 2px 14px rgba(0, 0, 0, .5);
+  }
+  /* what step you are on, without opening the Orders sheet to read it */
+  #pbf-label {
+    color: #ffd479; font-size: 13px; line-height: 1.35;
+    text-align: center; min-height: 1.35em;
+  }
+  #pbf-controls { display: flex; gap: 6px; justify-content: center; }
+  #pbf-controls button {
+    flex: 1; min-width: 0; min-height: 48px; padding: 6px 4px;
+    font-size: 17px; border-radius: 10px;
+  }
+  #pbf-actions { display: flex; gap: 6px; }
+  #pbf-actions button { min-height: 44px; border-radius: 10px; font-size: 14px; }
+  #pbf-back { flex: none; }
+  #pbf-continue { flex: 1; min-width: 0; }
 }

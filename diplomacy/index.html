@@ -238,6 +238,26 @@
     <button class="mtab" data-sheet="standings" title="Standings">📊<span>Standings</span></button>
   </nav>
 
+  <!-- Playback controls floated over the map (mobile only). The sidebar's copy
+       of these lives in a bottom sheet that shrinks the map to a strip, which
+       made the resolution — the one thing worth watching full-screen — the
+       hardest thing on the page to watch. These stay on the map instead, and
+       the sheet is closed while a playback runs; the 📝 Orders tab still has
+       the full order list and the rest of the buttons. -->
+  <div id="pb-float" hidden>
+    <div id="pbf-label"></div>
+    <div id="pbf-controls">
+      <button id="pbf-start" title="Back to the start">⏮</button>
+      <button id="pbf-prev" title="Previous order">◀</button>
+      <button id="pbf-next" class="primary" title="Next order">▶</button>
+      <button id="pbf-end" title="Skip to the results">⏭</button>
+    </div>
+    <div id="pbf-actions">
+      <button id="pbf-back" title="Leave the step-through">✕</button>
+      <button id="pbf-continue" class="primary"></button>
+    </div>
+  </div>
+
   <div id="coast-picker" hidden></div>
   <div id="convoy-route-bar" hidden>
     <span id="convoy-route-status">Convoy route</span>

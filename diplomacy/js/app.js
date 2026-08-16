@@ -456,6 +456,7 @@ function refreshAll() {
   board.setUnits(game.units, game.step === 'retreat' ? game.pending.dislodged : []);
   board.clearOrders();
   $('panel-playback').hidden = true;
+  updatePlaybackFloat();
   // The GM's order box stays out of the way until they deliberately ⬇ Load
   // orders (⏰ Deadline panel) — see gmLoadOrders()/gmOrdersLoaded. Everyone
   // else (sandboxes, players, spectators) sees it as before.
@@ -1321,6 +1322,7 @@ function applyMobileSheetUI() {
     b.classList.toggle('active', b.dataset.sheet === mobileSheet);
   }
   updateSheetInset();
+  updatePlaybackFloat(); // the on-map controls stand down while a sheet is up
 }
 
 // Reserve the open sheet's height at the bottom of the board pane so the map
@@ -1641,6 +1643,12 @@ function startPlayback(entry, readonly, preview = null, gmPending = null) {
     pendingText: gmPending ? gmPending.text : null,
   };
   setOrderMode(null);
+  // On mobile an open sheet shrinks the map to a strip (updateSheetInset), so
+  // a resolution started from the Orders tab would play out in a letterbox.
+  // Close it: the floating controls (#pb-float) drive the step-through from
+  // the map itself, and the tab is one tap away for the full order list.
+  mobileSheet = null;
+  applyMobileSheetUI();
   $('panel-orders').hidden = true;
   $('panel-edit').hidden = true;
   $('panel-playback').hidden = false;
@@ -1689,6 +1697,50 @@ function startPlayback(entry, readonly, preview = null, gmPending = null) {
 const outcomeStep = () => playback.orders.length;
 const finalStep = () => playback.orders.length + 1;
 
+// Every province an order touches — what has to be on screen for the step to
+// read as anything: the mover and where it is going, a supporter and what it
+// is supporting, the sea provinces a convoy is routed through.
+function orderFocusLocs(o) {
+  const locs = [o.loc, o.destLoc || o.dest];
+  if (o.target) locs.push(o.target.loc, o.target.dest);
+  if (o.convoyRoute) locs.push(...o.convoyRoute);
+  return locs.filter(Boolean);
+}
+
+// Mirrors the sidebar's playback controls onto the floating on-map set. On
+// mobile the sidebar is a sheet, and a sheet open over the map is exactly what
+// makes a resolution unwatchable there — so while a playback runs the sheet is
+// closed (startPlayback) and these take over. Hidden the moment the viewer
+// opens a sheet themselves, since the sidebar's own copy is then on screen.
+function updatePlaybackFloat() {
+  const float = $('pb-float');
+  if (!playback || mobileSheet) {
+    float.hidden = true;
+    return;
+  }
+  float.hidden = false;
+  const n = playback.orders.length;
+  // only while a single order is being shown — the reveal and the animation
+  // are about the whole board, not one numbered step of it
+  const showing = playback.step > 0 && playback.step < n && !playback.animating;
+  $('pbf-label').textContent =
+    (showing ? `${playback.step}/${n} · ` : '') + $('pb-step-label').textContent;
+  $('pbf-prev').disabled = $('pb-prev').disabled;
+  $('pbf-start').disabled = $('pb-prev').disabled;
+  $('pbf-next').disabled = $('pb-next').disabled;
+  $('pbf-end').disabled = $('pb-next').disabled;
+  const cont = $('pb-continue');
+  $('pbf-continue').hidden = cont.hidden;
+  $('pbf-continue').textContent = cont.textContent;
+  $('pbf-continue').disabled = playback.animating;
+  // ✕ is the sidebar's "Back to current turn"/"Back — amend an order", and
+  // exists on the float only when there is one: a live resolve has no way out
+  // but forward, and offering a dead ✕ there would suggest otherwise.
+  $('pbf-back').hidden = $('pb-back-current').hidden;
+  $('pbf-back').disabled = playback.animating;
+  $('pbf-actions').hidden = $('pbf-continue').hidden && $('pbf-back').hidden;
+}
+
 function renderPlayback() {
   const { entry, step, orders } = playback;
   const isAdjustment = entry.step === 'adjustment';
@@ -1735,11 +1787,18 @@ function renderPlayback() {
         ), entry.dislodged);
       }
       $('pb-step-label').textContent = 'Resolution! ✓ = success, ✕ = failed — ▶ to watch the moves';
+      // the verdicts are spread over the whole board, and the move animation
+      // that follows is too — pull back far enough to take all of it in
+      board.focusOn(orders.flatMap((r) => orderFocusLocs(r.order)));
     } else {
       const r = orders[step - 1];
       $('pb-step-label').textContent = step === 0
         ? 'Board before orders — step through with ▶'
         : `${cap(r.order.power)}: ${fmtOrder(r.order)}`;
+      // A zoomed-in map (the normal state of a phone) would otherwise reveal
+      // orders happening off-screen. Panning to the order being described is
+      // what makes the step-through watchable from the map alone.
+      if (step > 0) board.focusOn(orderFocusLocs(r.order));
     }
   }
 
@@ -1760,6 +1819,7 @@ function renderPlayback() {
   // Forward stepping stops at the resolution reveal (outcomeStep) — the final
   // move animation is played only by "Continue", never by stepping.
   $('pb-next').disabled = step >= outcomeStep();
+  updatePlaybackFloat();
 }
 
 function stepPlayback(delta) {
@@ -1807,6 +1867,7 @@ function continuePlayback() {
   board.clearOrders(); // arrows disappear as the moves execute
   $('pb-step-label').textContent = 'Executing moves…';
   $('pb-next').disabled = true;
+  updatePlaybackFloat();
   board.animateFinal(pb.entry).then(() => {
     if (playback !== pb) return;
     // a preview has no next phase to advance into — it stops on the position
@@ -2999,6 +3060,7 @@ async function gmPublishPreview() {
   board.clearOrders();
   $('pb-step-label').textContent = 'Executing moves…';
   $('pb-next').disabled = true;
+  updatePlaybackFloat();
   await board.animateFinal(pb.entry);
   if (playback !== pb) return;
   try {
@@ -3463,10 +3525,18 @@ async function init() {
   $('pb-prev').onclick = () => stepPlayback(-1);
   $('pb-start').onclick = () => stepPlayback(-999);
   $('pb-end').onclick = () => stepPlayback(999);
-  $('pb-continue').onclick = () => (playback && playback.gmPublish ? gmPublishPreview() : continuePlayback());
+  const pbContinue = () => (playback && playback.gmPublish ? gmPublishPreview() : continuePlayback());
+  $('pb-continue').onclick = pbContinue;
   $('pb-back-current').onclick = endPlayback;
   $('pb-copy').onclick = copyResults;
   $('pb-branch').onclick = branchCurrent;
+  // the floating on-map set drives the same playback as the sidebar's
+  $('pbf-next').onclick = () => stepPlayback(1);
+  $('pbf-prev').onclick = () => stepPlayback(-1);
+  $('pbf-start').onclick = () => stepPlayback(-999);
+  $('pbf-end').onclick = () => stepPlayback(999);
+  $('pbf-continue').onclick = pbContinue;
+  $('pbf-back').onclick = endPlayback;
   document.addEventListener('keydown', (e) => {
     if (playback && !$('panel-playback').hidden && document.activeElement.tagName !== 'TEXTAREA') {
       if (e.key === 'ArrowRight') stepPlayback(1);

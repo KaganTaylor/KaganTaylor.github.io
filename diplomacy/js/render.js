@@ -396,7 +396,71 @@ export class Board {
   }
 
   resetZoom() {
+    this.cancelViewAnim();
     this.setViewBox(this.vb0.x, this.vb0.y, this.vb0.w, this.vb0.h);
+  }
+
+  cancelViewAnim() {
+    if (this._vbAnim) cancelAnimationFrame(this._vbAnim);
+    this._vbAnim = null;
+  }
+
+  // Eases the viewBox from where it is to `to`. setViewBox clamps every frame,
+  // so a target that runs off the map's edge simply slides up against it.
+  _animateViewBox(to, duration) {
+    this.cancelViewAnim();
+    if (duration <= 0) return this.setViewBox(to.x, to.y, to.w, to.h);
+    const from = { ...this.vb };
+    const t0 = performance.now();
+    const ease = (t) => (t < 0.5 ? 2 * t * t : 1 - ((-2 * t + 2) ** 2) / 2);
+    const frame = (now) => {
+      const k = ease(Math.min(1, (now - t0) / duration));
+      this.setViewBox(
+        from.x + (to.x - from.x) * k,
+        from.y + (to.y - from.y) * k,
+        from.w + (to.w - from.w) * k,
+        from.h + (to.h - from.h) * k
+      );
+      this._vbAnim = k < 1 ? requestAnimationFrame(frame) : null;
+    };
+    this._vbAnim = requestAnimationFrame(frame);
+  }
+
+  // Brings every named location into view, panning and — only when panning
+  // alone cannot do it — zooming out. Deliberately never zooms *in*: the view
+  // is the viewer's, and this only ever borrows it to stop something happening
+  // off-screen. A no-op when they are all comfortably in frame already, which
+  // at the default zoom is always, so a full-size board pays nothing for it.
+  // Used by the resolution step-through, where a phone shows one order at a
+  // time on a map zoomed in far enough to read it.
+  focusOn(locs, opts = {}) {
+    const { duration = 420, margin = 0.12 } = opts;
+    const pts = [];
+    for (const l of locs || []) {
+      const c = this.coords.get(l) || this.coords.get(prov(l));
+      if (c) pts.push({ x: c.x + UNIT_W / 2, y: c.y + UNIT_H / 2 });
+    }
+    if (!pts.length) return;
+    // the unit symbol, not just the point it hangs from, has to clear the edge
+    const pad = UNIT_W;
+    const minX = Math.min(...pts.map((p) => p.x)) - pad;
+    const maxX = Math.max(...pts.map((p) => p.x)) + pad;
+    const minY = Math.min(...pts.map((p) => p.y)) - pad;
+    const maxY = Math.max(...pts.map((p) => p.y)) + pad;
+    const vb = this.vb;
+    // the whole map is already on screen; nothing a pan could add
+    if (vb.w >= this.vb0.w) return;
+    const ix = vb.w * margin, iy = vb.h * margin;
+    if (minX >= vb.x + ix && maxX <= vb.x + vb.w - ix &&
+        minY >= vb.y + iy && maxY <= vb.y + vb.h - iy) return;
+    const aspect = this.vb0.w / this.vb0.h;
+    const fit = 1 - 2 * margin; // the box has to land inside the inset, not just inside the view
+    const w = Math.max(vb.w, (maxX - minX) / fit, ((maxY - minY) / fit) * aspect);
+    const h = w / aspect;
+    this._animateViewBox(
+      { x: (minX + maxX) / 2 - w / 2, y: (minY + maxY) / 2 - h / 2, w, h },
+      duration
+    );
   }
 
   // ---- pointer interaction ----------------------------------------------------
@@ -458,6 +522,8 @@ export class Board {
     svg.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
       e.preventDefault(); // no text selection while dragging on the board
+      // a hand on the map outranks any auto-focus still easing (see focusOn)
+      this.cancelViewAnim();
       activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
       if (activePointers.size === 2) {
@@ -587,6 +653,7 @@ export class Board {
 
     svg.addEventListener('wheel', (e) => {
       e.preventDefault();
+      this.cancelViewAnim();
       const factor = e.deltaY < 0 ? 1 / 1.25 : 1.25;
       const pt = this.clientToBoard(e.clientX, e.clientY);
       const w = this.vb.w * factor;
