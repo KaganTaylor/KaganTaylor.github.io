@@ -200,6 +200,30 @@ function toast(msg, kind = '') {
   toastTimer = setTimeout(() => (t.hidden = true), 2800);
 }
 
+// A natively `disabled` button swallows its own click, so it can never say why
+// it is greyed out — and a `title` tooltip, the only explanation this app had,
+// does not exist on a touchscreen. setGated() marks a button unavailable the
+// ARIA way and leaves it clickable; the capture-phase listener installed in
+// init() eats the click and toasts `reason` instead of letting the handler run.
+//
+// `reason` is the same sentence any visible status line gives for the same
+// state — the toast and the page must never offer two different explanations.
+// Transient in-flight guards (btn.disabled = true … finally) keep using the
+// native property: those want real inertness and have nothing to explain.
+function setGated(btn, reason, enabledTitle) {
+  if (!btn) return;
+  btn.disabled = false;
+  if (reason) {
+    btn.setAttribute('aria-disabled', 'true');
+    btn.dataset.gatedReason = reason;
+    btn.title = reason;
+  } else {
+    btn.removeAttribute('aria-disabled');
+    delete btn.dataset.gatedReason;
+    if (enabledTitle !== undefined) btn.title = enabledTitle;
+  }
+}
+
 // Of the candidate locations (e.g. spa/nc vs spa/sc), the one whose marker
 // is closest to where the pointer was released — dropping a fleet on the
 // upper half of Spain lands it on the north coast, no prompt needed.
@@ -502,11 +526,15 @@ function refreshAll() {
   // way to explore instead
   $('btn-undo').hidden = ro;
   $('btn-redo').hidden = ro;
-  $('btn-undo').disabled = !game.history.length;
-  $('btn-redo').disabled = !(game.redoStack && game.redoStack.length);
+  setGated($('btn-undo'), game.history.length ? null : 'Nothing to undo — no phase has been resolved yet',
+    'Undo the most recent phase — the board goes back and your orders return to the box');
+  setGated($('btn-redo'), (game.redoStack && game.redoStack.length) ? null : 'Nothing to redo — undo a phase first',
+    'Redo the last undone phase');
   $('btn-publish').hidden = ro || !!game.published;
   $('btn-update-published').hidden = !(game.published && isOwnerView());
-  $('btn-update-published').disabled = !boardDirty();
+  setGated($('btn-update-published'),
+    boardDirty() ? null : 'Nothing to publish — the shared link already shows this position',
+    'Push your position to the published link, so every player sees it');
   $('panel-deadline').hidden = !(game.published && isOwnerView());
   if (game.published && isOwnerView()) {
     const input = $('deadline-input');
@@ -514,7 +542,6 @@ function refreshAll() {
   }
   $('btn-set-players').hidden = !(game.published && isOwnerView());
   $('btn-submissions').hidden = !(game.published && isOwnerView());
-  $('autopublish-row').hidden = !(game.published && isOwnerView());
   $('btn-revert-published').hidden = !isOnline();
   $('btn-open-source').hidden = !game.branchedFrom;
   renderModeChip();
@@ -2255,23 +2282,23 @@ function renderOnlineUI() {
   $('online-row').hidden = !hasPlayers;
   renderCatchUpButton();
   const loadMovesBtn = $('btn-load-moves');
+  // The game master's one on-ramp into the resolve → publish flow is
+  // ⏰ Deadline → ⬇ Load orders. This button only ever appeared for them AFTER
+  // that (the Orders panel is gated on gmOrdersLoaded), so it could only show
+  // them what they had already loaded — and in manual mode nothing is published
+  // yet, so it could only ever say "no published moves for this phase". Two
+  // buttons for one act, disagreeing about it. It keeps both its other
+  // meanings: a player reloading their own submission, a spectator loading the
+  // table's revealed moves.
+  loadMovesBtn.hidden = isOwnerView();
   if (assignedPower()) {
     loadMovesBtn.title = 'Replace the box with your currently published orders, discarding local changes';
-    // disabled state (greyed out once the box already matches) is kept in
+    // gated state (greyed out once the box already matches) is kept in
     // step with every keystroke by renderSubmitStatus(), not here
   } else {
-    loadMovesBtn.disabled = false;
-    loadMovesBtn.title = "Fill the order box with every power's submitted moves for the current phase";
+    setGated(loadMovesBtn, null, "Fill the order box with every power's submitted moves for the current phase");
   }
-  if (game.published && isOwnerView()) {
-    const loadBtn = $('deadline-load-btn');
-    loadBtn.disabled = ordersOpen() || gmOrdersLoaded;
-    loadBtn.title = gmOrdersLoaded
-      ? 'Already loaded — resolve or publish below'
-      : ordersOpen()
-        ? 'Available once the deadline passes (or clear it to load and skip forward now)'
-        : "Loads submitted orders once the deadline passes — or, with no deadline set, opens an empty box so you can skip the game forward";
-  }
+  renderDeadlinePanel();
   renderSubmitStatus();
   updateDeadlineCountdown();
   if (hasPlayers) renderDeadlineInfo();
@@ -2312,7 +2339,15 @@ function renderSubmitStatus() {
   // "Load published moves" resets the box back to what's on record for me —
   // there is nothing to reset once the box already matches it.
   const matchesRecord = s && normalizeOrders(powerBlockText(p)) === normalizeOrders(s.orders);
-  loadBtn.disabled = !s || matchesRecord;
+  setGated(
+    loadBtn,
+    !s
+      ? 'Nothing on record for you this phase yet — there is nothing to reload'
+      : matchesRecord
+        ? 'The box already matches what you submitted — nothing to reload'
+        : null,
+    'Replace the box with your currently published orders, discarding local changes',
+  );
   el.classList.remove('drift');
   btn.classList.remove('primary');
   // Label reflects whether *anything* has been submitted for this phase yet,
@@ -2321,27 +2356,30 @@ function renderSubmitStatus() {
   el.classList.toggle('done', status === 'published' || status === 'revealed' || status === 'submitted');
   const allowed = isSubmitAllowed(p);
   if (status === 'published') {
-    btn.disabled = true;
     el.textContent = '✓ Published — your moves are locked in for this phase';
+    setGated(btn, 'Your moves are published and locked in for this phase — nothing left to submit');
     return;
   }
   if (status === 'revealed') {
-    btn.disabled = true;
     el.textContent = '✓ Revealed — the deadline passed and everyone can see your moves';
+    setGated(btn, 'The deadline has passed and your moves are revealed — they can no longer be changed');
     return;
   }
   if (status === 'late') {
-    btn.disabled = !allowed;
     el.textContent = allowed
       ? '⚠ Edited after the deadline — your game master has allowed you to resubmit'
       : '⚠ Edited after the deadline — this submission is void';
+    setGated(btn, allowed ? null : 'You edited this submission after the deadline, so it is void — ask your game master to re-open your window');
     return;
   }
   if (!allowed) {
-    btn.disabled = true;
+    const why = deadlinePassed()
+      ? 'The deadline has passed — submissions are closed until your game master confirms a new one'
+      : 'No deadline is set yet — submissions open once your game master confirms one';
     el.textContent = deadlinePassed()
       ? 'Deadline passed — submissions are closed'
       : "No deadline set yet — ask your game master, then you can submit";
+    setGated(btn, why);
     return;
   }
   if (s) {
@@ -2350,14 +2388,14 @@ function renderSubmitStatus() {
     // the submission have parted company. Otherwise "✓ Submitted" quietly
     // refers to orders that are no longer the ones on screen.
     if (!matchesRecord) {
-      btn.disabled = false;
+      setGated(btn, null, 'Submit your orders to the game');
       el.classList.remove('done');
       el.classList.add('drift');
       el.textContent = '✎ The box no longer matches what you submitted — 🔁 Re-submit to update it';
       btn.classList.add('primary');
       return;
     }
-    btn.disabled = true;
+    setGated(btn, 'Already submitted, and the box still matches — change an order to re-submit');
     const when = s.submittedAt ? ' · ' + new Date(s.submittedAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '';
     // Say which it was. Falling back to cleartext when the gist has no key
     // keeps the game playable, but a player should never have to guess whether
@@ -2366,9 +2404,9 @@ function renderSubmitStatus() {
       ? `🔒 Submitted${when}`
       : `✓ Submitted${when} · unencrypted (this game has no key)`;
   } else {
-    btn.disabled = false;
     el.textContent = 'Not submitted for this phase yet';
     el.classList.remove('done');
+    setGated(btn, null, 'Submit your orders to the game');
     btn.classList.add('primary');
   }
 }
@@ -2402,6 +2440,61 @@ function deadlineUrgency() {
   return d.getTime() - Date.now() > 0 ? 'warn' : 'danger';
 }
 
+// The ⏰ Deadline panel is the game master's entire publish flow, and the two
+// modes want different controls in it. In auto mode autoPublishIfDue() resolves
+// and publishes the phase on its own; leaving ⬇ Load orders on screen beside it
+// offered a second, competing way to advance the same board from the same
+// browser — the exact shape of the collision DECISIONS.md records under "A
+// deadline belongs to a phase, not to a clock". So only one of the two paths is
+// ever shown, and the panel says in words which one is live.
+//
+// Auto mode gets ⬇ Load orders back in the one case where auto-publish has
+// stood down and cannot pick the phase up: nobody submitted (autoPublishIdleFor).
+// Then the game master is the only way forward, and the button is the way.
+function renderDeadlinePanel() {
+  const panel = $('panel-deadline');
+  if (panel.hidden) return;
+  const auto = publishMode() === 'auto';
+  const stoodDown = auto && autoPublishIdleFor === S.phaseLabel(game);
+
+  $('deadline-mode-note').textContent = auto
+    ? '⚡ Auto-Publish is on: this browser resolves and publishes the phase the moment the deadline passes. Nothing publishes while the tab is closed.'
+    : '⏸ Auto-Publish is off: nothing publishes on its own. Once the deadline passes, ⬇ Load orders, resolve, then 📣 Publish results.';
+
+  const status = $('deadline-auto-status');
+  status.hidden = !auto;
+  status.classList.toggle('past', stoodDown);
+  if (auto) {
+    status.textContent = stoodDown
+      ? `⚠ Nobody submitted for ${S.phaseLabel(game)} — auto-publish stood down. Load the orders yourself below, or confirm a new deadline to re-open submissions.`
+      : autoPublishing
+        ? '⚙ Publishing…'
+        : !game.deadline
+          ? '⏳ No deadline set — nothing publishes until you confirm one.'
+          : deadlinePassed()
+            ? '⏳ Deadline passed — publishing on the next check, within a minute.'
+            : '⏳ Waiting for the deadline — it publishes itself when the clock runs out.';
+  }
+
+  $('deadline-manual-row').hidden = auto && !stoodDown;
+  const loadBtn = $('deadline-load-btn');
+  loadBtn.textContent = stoodDown ? '⬇ Load orders (auto-publish stood down)' : '⬇ Load orders';
+  const d = deadlineDate();
+  setGated(
+    loadBtn,
+    gmOrdersLoaded
+      ? 'Orders are already loaded — resolve them in the Orders panel below.'
+      : ordersOpen()
+        ? `Submissions are open until ${fmtWhen(d.getTime())}. Wait for the deadline, or ✖ Clear it to load now and skip the phase forward.`
+        : null,
+    "Loads submitted orders once the deadline passes — or, with no deadline set, opens an empty box so you can skip the game forward",
+  );
+  setGated($('deadline-clear'),
+    game.deadline ? null : 'No deadline is set — there is nothing to clear',
+    'Remove the deadline — submissions stay closed until you confirm a new one');
+  renderDeadlineButtons();
+}
+
 function renderDeadlineInfo() {
   const el = $('deadline-info');
   const d = deadlineDate();
@@ -2422,12 +2515,18 @@ function renderDeadlineInfo() {
     // orders it's the GM's too) online-row — the game master's own copy stays
     // hidden behind gmGated until they ⬇ Load orders, so the isOwnerView()
     // case here only ever shows to the GM in the brief window after loading.
+    // A game master sitting in 🧑 Player view sees this line and not the
+    // ⏰ Deadline panel (which is gated on isOwnerView()), so it is the only
+    // place their own suspended auto-publish can be said out loud — see
+    // autoPublishIfDue()'s known limitation.
     el.textContent =
-      publishMode() === 'auto'
-        ? `⏰ Deadline passed (${when}) — all submissions are revealed. ⬇ Load them, then Resolve to preview the result`
-        : isOwnerView()
-          ? `⏰ Deadline passed (${when}) — ⬇ Load orders in the ⏰ Deadline panel, resolve, then publish`
-          : `⏰ Deadline passed (${when}) — the game master is resolving the results`;
+      isPlayingAsPlayer() && publishMode() === 'auto'
+        ? `⏰ Deadline passed (${when}) — ⚡ auto-publish is paused while you're in 🧑 Player view. Switch to 👑 Game Master (⚙ Settings → 🎭 Play as) to publish.`
+        : publishMode() === 'auto'
+          ? `⏰ Deadline passed (${when}) — all submissions are revealed. ⬇ Load them, then Resolve to preview the result`
+          : isOwnerView()
+            ? `⏰ Deadline passed (${when}) — ⬇ Load orders in the ⏰ Deadline panel, resolve, then publish`
+            : `⏰ Deadline passed (${when}) — the game master is resolving the results`;
     el.classList.add('past');
   }
 }
@@ -2480,6 +2579,10 @@ function updateDeadlineCountdown() {
     chip.classList.add('danger');
     panel.classList.add('deadline-danger');
   }
+  // A step expires the moment "previous deadline + 24 h" slips into the past,
+  // which is a per-second fact like the countdown itself — same urgency
+  // question, same tick, and attribute-only work on three buttons.
+  if (!panel.hidden) renderDeadlineButtons();
 }
 
 // datetime-local wants local wall-clock time, not ISO/UTC
@@ -2490,16 +2593,30 @@ function isoToLocalInput(iso) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+// The one place a deadline is taken away — ✖ Clear and both publish paths.
+// The instant it goes, its time is kept as game.lastDeadline: publishing a
+// phase clears the deadline, so without this "+1 week" would have nothing left
+// to chain from at exactly the press that matters, and would silently fall
+// back to now + 1 week. The rhythm outlives the deadline that set it.
+function clearDeadline(g) {
+  if (g.deadline) g.lastDeadline = g.deadline;
+  g.deadline = null;
+  g.deadlineFor = null;
+}
+
 async function setDeadline(date) {
-  game.deadline = date ? date.toISOString() : null;
-  // Stamp the phase this deadline is for, so it can never outlive it — see
-  // deadlineIsForCurrentPhase().
-  game.deadlineFor = date ? { year: game.year, season: game.season, step: game.step } : null;
+  if (!date) clearDeadline(game);
+  else {
+    game.deadline = date.toISOString();
+    // Stamp the phase this deadline is for, so it can never outlive it — see
+    // deadlineIsForCurrentPhase().
+    game.deadlineFor = { year: game.year, season: game.season, step: game.step };
+  }
   S.saveGame(game);
   renderDeadlineInfo();
   try {
     await updatePublished(game, game.publishedState);
-    toast(date ? `Deadline confirmed: ${date.toLocaleString()}` : 'Deadline cleared — submissions stay open', 'info');
+    toast(date ? `Deadline confirmed: ${date.toLocaleString()}` : 'Deadline cleared — submissions stay closed until you confirm a new one', 'info');
   } catch (e) {
     toast('Could not save the deadline: ' + e.message);
     if (isAuthError(e)) askToken();
@@ -2526,12 +2643,58 @@ async function setPublishMode(mode) {
   }
 }
 
-// Quick-set: previous deadline + `hours` — the weekly rhythm — falling back
-// to now + `hours` when no deadline exists (or the old one is long gone).
-function bumpDeadline(hours) {
-  const prev = deadlineDate();
-  const base = prev && prev.getTime() > Date.now() - 7 * 86400000 ? prev.getTime() : Date.now();
-  setDeadline(new Date(base + hours * 3600000));
+// The quick-set steps count from the deadline this one FOLLOWS — the live one,
+// or the last one that was cleared (clearDeadline) — never from the moment of
+// the click. Press +1 week on Sunday afternoon and a midnight-Saturday deadline
+// still lands on the following midnight Saturday. Only a game that has never
+// had a deadline at all starts from the clock.
+function deadlineChainBase() {
+  const d = deadlineDate();
+  if (d) return d.getTime();
+  const last = game && game.lastDeadline && new Date(game.lastDeadline);
+  return last && !isNaN(last) ? last.getTime() : null;
+}
+
+const BUMP_STEPS = [
+  ['deadline-plus-week', 7 * 24, '+1 week'],
+  ['deadline-plus-2day', 48, '+48 h'],
+  ['deadline-plus-day', 24, '+24 h'],
+];
+
+const fmtWhen = (ms) =>
+  new Date(ms).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+// Why a step is unavailable, or null when it isn't. A step is unavailable when
+// chaining it off the previous deadline lands in the past — pressing +24 h two
+// days late must not quietly confirm a deadline that has already expired.
+function bumpUnavailableReason(hours, label) {
+  const base = deadlineChainBase();
+  if (base === null) return null; // no previous deadline: counts from now, always valid
+  const next = base + hours * 3600000;
+  if (next > trustedNow()) return null;
+  return `${label} from the previous deadline (${fmtWhen(base)}) is ${fmtWhen(next)} — already past. ` +
+    'Use a longer step, or pick a date and time below.';
+}
+
+function bumpDeadline(hours, label) {
+  const reason = bumpUnavailableReason(hours, label);
+  if (reason) return toast(reason);
+  const base = deadlineChainBase();
+  setDeadline(new Date((base === null ? trustedNow() : base) + hours * 3600000));
+}
+
+// Greys out the steps whose window has closed and, for the rest, names the
+// exact date the press would set — "+1 week" is far more useful when you can
+// see it means Saturday. Driven from updateDeadlineCountdown()'s 1s tick, so a
+// step disables itself the moment it expires; attribute-only work on three
+// buttons.
+function renderDeadlineButtons() {
+  const base = deadlineChainBase();
+  for (const [id, hours, label] of BUMP_STEPS) {
+    const reason = bumpUnavailableReason(hours, label);
+    const when = fmtWhen((base === null ? trustedNow() : base) + hours * 3600000);
+    setGated($(id), reason, `Sets the deadline to ${when} — ${label} from the previous one`);
+  }
 }
 
 // ---- player assignments ----------------------------------------------------
@@ -2785,6 +2948,7 @@ async function refreshOnlineStatus() {
       // GM's possibly-unpublished in-progress position.
       g.deadline = fresh.deadline || null;
       g.deadlineFor = fresh.deadlineFor || null; // travels with it, always
+      g.lastDeadline = fresh.lastDeadline || g.lastDeadline || null; // the bump buttons' chain base
       g.publishMode = fresh.publishMode || null;
       // the GM owns the rules — pick up any change so every player's board,
       // standings reminder, and local previews match the GM's resolution
@@ -2987,7 +3151,7 @@ async function doLoadPublishedMoves() {
 // hatch that lets the GM skip the game forward on an empty box and type
 // orders in by hand. Loading never publishes anything by itself.
 async function gmLoadOrders() {
-  if (ordersOpen()) return toast('Wait for the deadline before loading orders');
+  if (ordersOpen()) return toast('Submissions are still open — wait for the deadline, or ✖ Clear it to load now and skip the phase forward');
   try {
     if (!online.comments) await refreshOnlineStatus();
     // Every active power gets a header — submitted powers get their orders,
@@ -3073,8 +3237,7 @@ async function gmPublishPreview() {
     const entry = S.resolvePhase(game, pb.pendingOrders, pb.pendingText);
     S.saveGame(game);
     await gmWriteLoadedMovesFiles(pb.pendingText, entry);
-    game.deadline = null;
-    game.deadlineFor = null;
+    clearDeadline(game);
     await updatePublished(game);
     game.publishedState = S.boardSnapshot(game);
     S.saveGame(game);
@@ -3167,8 +3330,7 @@ async function autoPublishIfDue() {
     const entry = S.resolvePhase(game, parsed.orders, text);
     S.saveGame(game);
     await gmWriteLoadedMovesFiles(text, entry);
-    game.deadline = null;
-    game.deadlineFor = null;
+    clearDeadline(game);
     await updatePublished(game);
     game.publishedState = S.boardSnapshot(game);
     S.saveGame(game);
@@ -3427,12 +3589,22 @@ async function init() {
   // and the board pane's inset has to follow it
   new ResizeObserver(updateSheetInset).observe($('sidebar'));
   addEventListener('resize', updateSheetInset);
+  // A gated button (setGated) is deliberately still clickable so it can explain
+  // itself. Capture phase, so the button's own onclick never runs.
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest && e.target.closest('[aria-disabled="true"]');
+    if (!b) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (b.dataset.gatedReason) toast(b.dataset.gatedReason);
+  }, true);
+
   $('settings-btn').onclick = (e) => {
     e.stopPropagation();
     $('settings-menu').classList.toggle('open');
   };
-  // picking an action closes the menu; the autopublish toggle row is a
-  // <label>, not a <button>, so flipping it leaves the menu open
+  // picking an action closes the menu; the 🎭 Play as row is a <select>, not a
+  // <button>, so changing it leaves the menu open
   for (const b of $('settings-menu').querySelectorAll('button')) {
     b.addEventListener('click', () => $('settings-menu').classList.remove('open'));
   }
@@ -3484,9 +3656,7 @@ async function init() {
     if (e.target === $('submissions-modal')) closeSubmissionsModal();
   });
   $('autopublish-toggle').onchange = (e) => setPublishMode(e.target.checked ? 'auto' : 'manual');
-  $('deadline-plus-week').onclick = () => bumpDeadline(7 * 24);
-  $('deadline-plus-2day').onclick = () => bumpDeadline(48);
-  $('deadline-plus-day').onclick = () => bumpDeadline(24);
+  for (const [id, hours, label] of BUMP_STEPS) $(id).onclick = () => bumpDeadline(hours, label);
   $('deadline-clear').onclick = () => setDeadline(null);
   $('deadline-set').onclick = () => {
     const v = $('deadline-input').value;

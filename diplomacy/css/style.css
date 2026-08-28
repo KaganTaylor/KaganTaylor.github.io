@@ -19,6 +19,12 @@ button:hover { background: #394050; }
 button.primary { background: #2f6b46; border-color: #3f8f5e; }
 button.primary:hover { background: #398155; }
 button:disabled { opacity: 0.45; cursor: default; }
+/* A gated button (setGated in app.js) looks disabled but stays clickable, so a
+   capture-phase listener can toast why it is greyed out — a native `disabled`
+   button fires no click at all, and a title tooltip is unreachable on touch. */
+button[aria-disabled="true"] { opacity: 0.45; cursor: help; }
+button[aria-disabled="true"]:hover { background: #262b34; }
+button.primary[aria-disabled="true"]:hover { background: #2f6b46; }
 input[type="text"], input[type="number"], select, textarea {
   font: inherit;
   background: #14161b;
@@ -331,6 +337,16 @@ dialog.modal h2 { margin: 0 0 14px; font-size: 1.1rem; }
   padding: 6px 12px; cursor: pointer; border-radius: 6px;
 }
 .settings-toggle-row:hover { background: #2c313a; }
+/* the same row inside the ⏰ Deadline sidebar panel: no drop-down to hover,
+   and it reads as the panel's first line rather than a menu item */
+#panel-deadline .settings-toggle-row {
+  padding: 6px 8px; margin: 4px 0 8px;
+  background: #21252d; border: 1px solid #333a45;
+}
+#panel-deadline .settings-toggle-row:hover { background: #262b34; }
+#deadline-mode-note { margin: 0 0 8px; }
+#deadline-auto-status { margin: 8px 0 0; }
+#deadline-auto-status.past { color: #e0a4a4; }
 
 /* small toggle switch, used for ⚡ Auto-Publish */
 .switch { position: relative; display: inline-block; width: 36px; height: 20px; flex: none; }

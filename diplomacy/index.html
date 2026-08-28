@@ -87,10 +87,6 @@
         <button id="btn-export" title="Download this game as a JSON file">📤 Export</button>
         <button id="btn-set-players" hidden title="Assign each power to the GitHub username that will submit its moves">👥 Set players</button>
         <button id="btn-submissions" hidden title="See who's submitted and what's published for this phase — an edge-case check, not part of the normal flow">🔍 Submissions</button>
-        <label id="autopublish-row" class="settings-toggle-row" hidden title="When the deadline passes: on reveals every submission to everyone immediately, off waits for you to review and publish results">
-          <span>⚡ Auto-Publish</span>
-          <span class="switch"><input type="checkbox" id="autopublish-toggle"><span class="slider"></span></span>
-        </label>
         <div id="play-as-row" class="settings-toggle-row" hidden title="Switch between running the game as its master and playing your own assigned power">
           <span>Play as</span>
           <select id="play-as-select">
@@ -109,21 +105,33 @@
       <!-- deadline (game master, published games only) -->
       <details id="panel-deadline" class="panel" open hidden>
         <summary><h2>⏰ Deadline</h2></summary>
+        <!-- The switch lives here, not in ⚙ Settings, because everything it
+             governs is in this panel: what happens when the clock below runs
+             out, and whether ⬇ Load orders is part of the flow at all. -->
+        <label id="autopublish-row" class="settings-toggle-row" title="When the deadline passes: on reveals every submission to everyone immediately, off waits for you to review and publish results">
+          <span>⚡ Auto-Publish</span>
+          <span class="switch"><input type="checkbox" id="autopublish-toggle"><span class="slider"></span></span>
+        </label>
+        <p class="hint" id="deadline-mode-note"></p>
         <p class="hint">Submissions close when the deadline passes. Confirm a new one each phase —
-          a week for movement, a day or two for retreats and builds. Confirming a new deadline
-          re-opens submissions.</p>
+          a week for movement, a day or two for retreats and builds. Each step counts from the
+          <em>previous</em> deadline, so a weekly rhythm holds however late you press it.</p>
         <div class="btnrow">
-          <button id="deadline-plus-week" title="Previous deadline + 1 week (from now if none is set)">+1 week</button>
-          <button id="deadline-plus-2day" title="Previous deadline + 48 hours (from now if none is set)">+48 h</button>
-          <button id="deadline-plus-day" title="Previous deadline + 24 hours (from now if none is set)">+24 h</button>
-          <button id="deadline-clear" title="Remove the deadline — submissions stay open until you confirm a new one">✖ Clear</button>
+          <button id="deadline-plus-week">+1 week</button>
+          <button id="deadline-plus-2day">+48 h</button>
+          <button id="deadline-plus-day">+24 h</button>
+          <button id="deadline-clear" title="Remove the deadline — submissions stay closed until you confirm a new one">✖ Clear</button>
         </div>
         <div class="sandbox-row">
           <input id="deadline-input" type="datetime-local" title="Pick a custom deadline (your local time)">
           <button id="deadline-set" title="Set the deadline to the picked date and time">Set</button>
         </div>
-        <div class="btnrow">
-          <button id="deadline-load-btn" class="primary" title="Loads submitted orders once the deadline passes — or, with no deadline set, opens an empty box so you can skip the game forward">⬇ Load orders</button>
+        <!-- auto mode publishes itself; the manual row is what the game master
+             drives by hand. Only one of the two is ever on screen — see
+             renderDeadlinePanel(). -->
+        <div id="deadline-auto-status" class="hint" hidden></div>
+        <div class="btnrow" id="deadline-manual-row">
+          <button id="deadline-load-btn" class="primary">⬇ Load orders</button>
         </div>
       </details>
 
@@ -285,10 +293,10 @@
   <div id="submissions-modal" class="modal-overlay" hidden>
     <div class="modal-card">
       <h2>🔍 Submissions</h2>
-      <p class="hint">Who's submitted for this phase and what's published — use ⚙ Settings to assign players
-        or toggle Auto-Publish. Publishing happens by loading orders into the main order box and
-        resolving (⏰ Deadline → ⬇ Load orders); the one thing left here is 🔒/🔓, to let a
-        power resubmit even after the deadline.</p>
+      <p class="hint">Who's submitted for this phase and what's published — use ⚙ Settings to assign players,
+        and ⏰ Deadline to set the deadline or toggle ⚡ Auto-Publish. Publishing happens by loading orders
+        into the main order box and resolving (⏰ Deadline → ⬇ Load orders); the one thing left here is
+        🔒/🔓, to let a power resubmit even after the deadline.</p>
       <div id="submissions-rows"></div>
       <div class="btnrow">
         <button id="submissions-modal-close">Close</button>
