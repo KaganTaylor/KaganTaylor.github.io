@@ -15,6 +15,11 @@ import {
   adjudicateAdjustments,
 } from './adjudicator.js';
 import { PROVINCES, POWERS } from './map-data.js';
+import * as R from './roles.js';
+import {
+  cap, provName, fmtLoc, fmtOrder, fmtCountdown, fmtCountdownDHMS, fmtWhen,
+  isoToLocalInput, COAST_NAMES, POWER_FLAGS,
+} from './format.js';
 import {
   getToken, setToken, publishGame, updatePublished, fetchPublished,
   getAuthenticatedLogin, extractGistId,
@@ -25,19 +30,6 @@ import {
 } from './publish.js';
 
 const $ = (id) => document.getElementById(id);
-
-// coast-suffix labels for the hover tooltip on split-coast provinces
-// (Spain, St Petersburg, Bulgaria)
-const COAST_NAMES = { nc: 'North coast', sc: 'South coast', ec: 'East coast' };
-
-// One real-world flag per power, standing in for its country everywhere a
-// player's identity is shown (Play as picker, topbar mode chip, home-screen
-// game list). Austria and Turkey have no country of that exact name/borders
-// today, so these use the closest modern flag rather than a historical one.
-const POWER_FLAGS = {
-  england: '🇬🇧', france: '🇫🇷', germany: '🇩🇪', italy: '🇮🇹',
-  austria: '🇦🇹', russia: '🇷🇺', turkey: '🇹🇷',
-};
 
 let board;
 let game = null;
@@ -142,37 +134,6 @@ let catchUpTarget = null;
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
-const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
-
-function provName(p) {
-  return PROVINCES[prov(p)] ? PROVINCES[prov(p)].name : p;
-}
-
-function fmtLoc(l) {
-  const c = l.includes('/') ? `(${l.split('/')[1]})` : '';
-  return provName(l) + c;
-}
-
-function fmtOrder(o) {
-  const t = o.unitType ? o.unitType + ' ' : '';
-  const u = `${t}${fmtLoc(o.loc || '')}`;
-  switch (o.kind) {
-    case 'move': return `${u} → ${fmtLoc(o.dest)}${o.isConvoyMove ? ' ⚓' : ''}`;
-    case 'retreat': return `${u} retreats → ${fmtLoc(o.dest)}`;
-    case 'hold': return `${u} holds`;
-    case 'disband': return `${u} disbands`;
-    case 'support':
-      return o.target.dest
-        ? `${u} S ${fmtLoc(o.target.loc)} → ${fmtLoc(o.target.dest)}`
-        : `${u} S ${fmtLoc(o.target.loc)} (hold)`;
-    case 'convoy': return `${u} C ${fmtLoc(o.target.loc)} → ${fmtLoc(o.dest)}`;
-    case 'build': return `build ${o.unitType} ${fmtLoc(o.loc)}`;
-    case 'remove': return `remove ${fmtLoc(o.loc)}`;
-    case 'waive': return `waive build`;
-  }
-  return '?';
-}
-
 function phaseKind() {
   return game.step === 'movement' ? 'movement' : game.step === 'retreat' ? 'retreat' : 'adjustment';
 }
@@ -360,91 +321,20 @@ function uniqueName(base) {
 // ---------------------------------------------------------------------------
 // game screen
 // ---------------------------------------------------------------------------
-// THERE ARE EXACTLY TWO KINDS OF GAME, and most of the rules below follow:
-//
-//   ☁ online  — a published gist. One authoritative position, one writer (the
-//               game master). Nobody else's board actions can move it, and the
-//               GM's only move it once they publish.
-//   🧪 sandbox — everything else: private to this browser, freely editable,
-//               freely resolvable, disposable. Branches, "practice games" and
-//               the old empty-board sandbox are all just this — there is no
-//               third kind, because the game is only ever really played
-//               online and everything local is thinking-out-loud.
-//
-// gameMode() names the four faces of that: 'sandbox', 'gm', 'player' (an
-// assigned power in an online game) and 'spectator'. It is written to
-// #game-screen[data-mode], which drives every piece of state colouring in the
-// stylesheet, so the two models cannot drift apart.
-function isOnline() {
-  return !!(game && game.published);
-}
-
-function isSandbox() {
-  return !!game && !isOnline();
-}
-
-function gameMode() {
-  if (!game) return '';
-  if (!isOnline()) return 'sandbox';
-  if (isOwnerView()) return 'gm';
-  return assignedPower() ? 'player' : 'spectator';
-}
-
-// True when the game master has switched (🎭 Play as) into playing their own
-// assigned power rather than running the game. Requires a genuine self-
-// assignment in game.players — see refreshOnlineStatus(), which resolves
-// game.assignedPower for the owner exactly like it does for anyone else.
-function isPlayingAsPlayer() {
-  return !!(game && game.isOwner && game.assignedPower && game.playAs === 'player');
-}
-
-// A published game can only be advanced by the browser that published it
-// (holds the token that created its gist). Everyone else gets a live,
-// previewable, branchable, but never mutable view of the position. A GM
-// playing their own assigned power is read-only for the same reason: it's a
-// faithful, real player experience — including the fact that resolving is
-// only ever a preview and orders only reach the game via 📤 Submit.
-function isReadOnly() {
-  return !!(game && game.published && (!game.isOwner || isPlayingAsPlayer()));
-}
-
-// True only for the real game master, and only while running the game rather
-// than playing their own power — the gate on every GM-only control (Publish
-// changes, Deadline panel, Submissions, Set players, Auto-Publish). Kept
-// separate from the raw game.isOwner fact (still used as-is for identity/
-// permission purposes, e.g. loadPublishedGame) so Play-as-Player can hide the
-// GM's own admin controls without touching who actually owns the game.
-function isOwnerView() {
-  return !!(game && game.isOwner && !isPlayingAsPlayer());
-}
-
-// True once the game master's local position (resolves, undos, redos, board
-// edits) has moved on from what's actually live at the shared link — the
-// gate on the "☁ Publish changes" button. Drafting in the order box never
-// counts: that text isn't part of the game object until Resolve runs, so a
-// GM can sketch out their own plan without it looking like a change to
-// publish. See state.js boardSnapshot().
-function boardDirty() {
-  if (!game || !game.published || !isOwnerView()) return false;
-  if (!game.publishedState) return true;
-  return JSON.stringify(S.boardSnapshot(game)) !== JSON.stringify(game.publishedState);
-}
-
-// Viewers of a published game pick the country they play; order entry
-// (typing and dragging) then works for that power only, and "📋 Copy
-// orders" hands them their order block to email to the game master. A GM
-// playing as their own power is locked to it the same way a real player
-// would be. Empty string = spectating / no country chosen.
-function myCountry() {
-  return (isReadOnly() && game.myCountry) || '';
-}
-
-// The power the GM assigned to this browser's GitHub account (game.players
-// maps power → login). An assigned player is locked to that power for the
-// whole game — on every device, since the token resolves to the same login.
-function assignedPower() {
-  return (isReadOnly() && game.assignedPower) || '';
-}
+// Which of the two kinds of game am I in, and what may I do to it? The whole
+// permission model is nine pure questions about the game object, and it lives
+// in js/roles.js so it can be tested without a browser — the doc comments that
+// used to sit here went with it. These wrappers bind the module-level `game`,
+// so every call site below reads exactly as it always has.
+const isOnline = () => R.isOnline(game);
+const isSandbox = () => R.isSandbox(game);
+const gameMode = () => R.gameMode(game);
+const isPlayingAsPlayer = () => R.isPlayingAsPlayer(game);
+const isReadOnly = () => R.isReadOnly(game);
+const isOwnerView = () => R.isOwnerView(game);
+const boardDirty = () => R.boardDirty(game);
+const myCountry = () => R.myCountry(game);
+const assignedPower = () => R.assignedPower(game);
 
 // Does a submission/published entry belong to the phase on the table now?
 function matchesPhase(s) {
@@ -2421,16 +2311,6 @@ function deadlineDate() {
   return isNaN(d) ? null : d;
 }
 
-function fmtCountdown(ms) {
-  const mins = Math.max(0, Math.round(ms / 60000));
-  const d = Math.floor(mins / 1440);
-  const h = Math.floor((mins % 1440) / 60);
-  const m = mins % 60;
-  if (d > 0) return `${d}d ${h}h`;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
-}
-
 // 'none' (no deadline set), 'warn' (counting down) or 'danger' (passed) — the
 // single source of truth behind every red/yellow deadline indicator: the
 // topbar countdown chip, this panel, and the sidebar #panel-deadline box.
@@ -2531,19 +2411,6 @@ function renderDeadlineInfo() {
   }
 }
 
-// Zero-padded DD:HH:MM:SS — always four segments, unlike the looser
-// fmtCountdown() above, so the topbar chip has a fixed width and reads at a
-// glance regardless of how much time is left.
-function fmtCountdownDHMS(ms) {
-  const totalSec = Math.max(0, Math.floor(ms / 1000));
-  const pad = (n) => String(n).padStart(2, '0');
-  const d = Math.floor(totalSec / 86400);
-  const h = Math.floor((totalSec % 86400) / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  const s = totalSec % 60;
-  return `${pad(d)}:${pad(h)}:${pad(m)}:${pad(s)}`;
-}
-
 // Ticks the topbar countdown chip — visible to every viewer (GM and players
 // alike) of a published game with players assigned, so it's always clear
 // whether orders are open, closing soon, or closed. Cheap text/class update
@@ -2583,14 +2450,6 @@ function updateDeadlineCountdown() {
   // which is a per-second fact like the countdown itself — same urgency
   // question, same tick, and attribute-only work on three buttons.
   if (!panel.hidden) renderDeadlineButtons();
-}
-
-// datetime-local wants local wall-clock time, not ISO/UTC
-function isoToLocalInput(iso) {
-  const d = new Date(iso);
-  if (isNaN(d)) return '';
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 // The one place a deadline is taken away — ✖ Clear and both publish paths.
@@ -2660,9 +2519,6 @@ const BUMP_STEPS = [
   ['deadline-plus-2day', 48, '+48 h'],
   ['deadline-plus-day', 24, '+24 h'],
 ];
-
-const fmtWhen = (ms) =>
-  new Date(ms).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
 // Why a step is unavailable, or null when it isn't. A step is unavailable when
 // chaining it off the previous deadline lands in the past — pressing +24 h two
