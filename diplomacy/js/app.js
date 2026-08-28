@@ -3026,7 +3026,13 @@ async function gmLoadOrders() {
 // 'gm'`. Always overwrites any existing entry for this phase: whatever was
 // in the box when Publish was clicked is the record, including any manual
 // edit the GM made — there is no separate "force" path anymore.
-async function gmWriteLoadedMovesFiles(text) {
+//
+// `phase` is the phase the orders BELONG to (the entry returned by
+// S.resolvePhase carries it), never game.year/season/step — by the time this
+// runs the game has already been advanced to the next phase, and stamping the
+// record with that would make every power look already-published for a phase
+// nobody has ordered in yet, locking them all out of submitting.
+async function gmWriteLoadedMovesFiles(text, phase) {
   const byPower = splitOrdersByPower(text);
   if (!byPower.size) return;
   const moves = await readMovesFiles(await fetchGist(game.gistId));
@@ -3035,7 +3041,7 @@ async function gmWriteLoadedMovesFiles(text) {
     const ordersText = lines.slice(1).join('\n').trim();
     if (!ordersText) continue;
     updates[p] = upsertMovesEntry(moves[p], p, {
-      year: game.year, season: game.season, step: game.step, orders: ordersText,
+      year: phase.year, season: phase.season, step: phase.step, orders: ordersText,
       by: online.login || 'game master', submittedAt: null,
       publishedAt: new Date().toISOString(), publishedBy: 'gm',
     });
@@ -3066,7 +3072,7 @@ async function gmPublishPreview() {
   try {
     const entry = S.resolvePhase(game, pb.pendingOrders, pb.pendingText);
     S.saveGame(game);
-    await gmWriteLoadedMovesFiles(pb.pendingText);
+    await gmWriteLoadedMovesFiles(pb.pendingText, entry);
     game.deadline = null;
     game.deadlineFor = null;
     await updatePublished(game);
@@ -3160,7 +3166,7 @@ async function autoPublishIfDue() {
     const parsed = parseOrders(text, phaseKind());
     const entry = S.resolvePhase(game, parsed.orders, text);
     S.saveGame(game);
-    await gmWriteLoadedMovesFiles(text);
+    await gmWriteLoadedMovesFiles(text, entry);
     game.deadline = null;
     game.deadlineFor = null;
     await updatePublished(game);
