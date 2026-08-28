@@ -1,6 +1,6 @@
 import { Board, POWER_COLORS, ARROW_COLORS } from './render.js';
 import * as S from './state.js';
-import { parseOrders, parseOrderLine, normalizePower } from './parser.js';
+import { parseOrders } from './parser.js';
 import {
   prov,
   armyAdjacent,
@@ -16,6 +16,7 @@ import {
 } from './adjudicator.js';
 import { PROVINCES, POWERS } from './map-data.js';
 import * as R from './roles.js';
+import * as T from './orders-text.js';
 import {
   cap, provName, fmtLoc, fmtOrder, fmtCountdown, fmtCountdownDHMS, fmtWhen,
   isoToLocalInput, COAST_NAMES, POWER_FLAGS,
@@ -537,51 +538,7 @@ function renderCountrySelect() {
   sel.value = game.myCountry || '';
 }
 
-// Split a multi-power orders text into per-power blocks (header line plus
-// the lines under it), same header-tracking rule locateOrderLine uses.
-function splitOrdersByPower(text) {
-  const byPower = new Map();
-  let current = null;
-  for (const line of text.split('\n')) {
-    const stripped = line.split('#')[0].trim();
-    if (stripped && stripped.split(/\s+/).length === 1) {
-      const p = normalizePower(stripped.replace(/:$/, ''));
-      if (p) {
-        current = p;
-        if (!byPower.has(p)) byPower.set(p, []);
-        byPower.get(p).push(line);
-        continue;
-      }
-    }
-    if (current) byPower.get(current).push(line);
-  }
-  return byPower;
-}
-
-// Every power's default (empty) order block for the current phase — used
-// both for a fresh phase and to fill in powers a preserved buffer has no
-// block for yet (a country nobody has drawn orders for yet).
-function defaultOrdersText() {
-  const lines = [];
-  if (game.step === 'movement') {
-    for (const p of POWERS) {
-      if (game.units.some((u) => u.power === p)) lines.push(p.toUpperCase(), '');
-    }
-  } else if (game.step === 'retreat') {
-    for (const d of game.pending.dislodged) {
-      lines.push(d.unit.power.toUpperCase());
-      lines.push(`${d.unit.type} ${prov(d.from)} disband   # options: ${d.retreatOptions.join(', ') || 'none'}`);
-      lines.push('');
-    }
-  } else {
-    const counts = S.adjustmentCounts(game);
-    for (const [p, c] of Object.entries(counts)) {
-      if (c > 0) lines.push(p.toUpperCase(), `# ${c} build${c > 1 ? 's' : ''}`, '');
-      else if (c < 0) lines.push(p.toUpperCase(), `# disband ${-c}`, '');
-    }
-  }
-  return lines.join('\n');
-}
+const defaultOrdersText = () => T.defaultOrdersText(game);
 
 // Rebuild the visible textarea + hidden buffer for the current myCountry()
 // filter. With preserve=true, orders already drawn for every power (visible
@@ -623,31 +580,13 @@ function prefillOrders(preserve = false) {
     info.textContent = infoLines.join('\n') || 'No builds or disbands required.';
   }
 
-  const defaultByPower = splitOrdersByPower(defaultOrdersText());
-  let sourceByPower;
-  if (preserve) {
-    const existing = ta.value + (hiddenOrdersText ? '\n' + hiddenOrdersText : '');
-    sourceByPower = splitOrdersByPower(existing);
-  } else {
-    sourceByPower = new Map();
-  }
-  const merged = [];
-  for (const p of POWERS) {
-    if (sourceByPower.has(p)) merged.push(sourceByPower.get(p).join('\n'));
-    else if (defaultByPower.has(p)) merged.push(defaultByPower.get(p).join('\n'));
-  }
-  const byPower = splitOrdersByPower(merged.join('\n'));
-
-  const visible = [];
-  const hidden = [];
-  for (const p of POWERS) {
-    if (!byPower.has(p)) continue;
-    const block = byPower.get(p).join('\n');
-    if (!myC || p === myC) visible.push(block);
-    else hidden.push(block);
-  }
-  ta.value = visible.join('\n');
-  hiddenOrdersText = hidden.join('\n');
+  const merged = T.mergeBlocks(
+    preserve ? T.splitOrdersByPower(fullOrdersText()) : new Map(),
+    T.splitOrdersByPower(defaultOrdersText())
+  );
+  const { visible, hidden } = T.splitForFilter(merged, myC);
+  ta.value = visible;
+  hiddenOrdersText = hidden;
 }
 
 // Everything currently drafted, across the visible textarea and the hidden
@@ -658,36 +597,22 @@ function fullOrdersText() {
 
 // One power's order lines (header dropped), or '' if it has no block.
 function powerBlockText(power) {
-  const block = splitOrdersByPower(fullOrdersText()).get(power);
-  return block ? block.slice(1).join('\n').trim() : '';
+  return T.blockBody(T.splitOrdersByPower(fullOrdersText()), power);
 }
 
 // Replaces the whole order text (visible + hidden) with `fullText`, split
 // into the textarea / hidden buffer for the current myCountry() filter.
 function applyOrdersText(fullText) {
-  const byPower = splitOrdersByPower(fullText);
-  const myC = myCountry();
-  const visible = [];
-  const hidden = [];
-  for (const p of POWERS) {
-    if (!byPower.has(p)) continue;
-    const block = byPower.get(p).join('\n');
-    if (!myC || p === myC) visible.push(block);
-    else hidden.push(block);
-  }
-  $('orders-text').value = visible.join('\n');
-  hiddenOrdersText = hidden.join('\n');
+  const { visible, hidden } = T.splitForFilter(fullText, myCountry());
+  $('orders-text').value = visible;
+  hiddenOrdersText = hidden;
   onOrdersChanged();
 }
 
 // Swaps in a new block for one power, leaving every other power's draft as it
 // is (used to restore a player's submitted orders from the gist).
 function replacePowerBlock(power, ordersText) {
-  const byPower = splitOrdersByPower(fullOrdersText());
-  byPower.set(power, [power.toUpperCase(), ...ordersText.split('\n'), '']);
-  const blocks = [];
-  for (const p of POWERS) if (byPower.has(p)) blocks.push(byPower.get(p).join('\n'));
-  applyOrdersText(blocks.join('\n'));
+  applyOrdersText(T.replaceBlock(fullOrdersText(), power, ordersText));
 }
 
 function onOrdersChanged() {
@@ -801,79 +726,22 @@ function escapeHtml(s) {
 // ---------------------------------------------------------------------------
 // order text syncing (drag/click interactions write into the textarea)
 // ---------------------------------------------------------------------------
-function unitToken(u) {
-  return `${u.type} ${u.type === 'F' ? u.loc : prov(u.loc)}`;
-}
-
-function orderTextFor(u, spec) {
-  switch (spec.kind) {
-    case 'hold': return `${unitToken(u)} H`;
-    case 'move': {
-      const route = spec.route && spec.route.length ? spec.route.join(' - ') + ' - ' : '';
-      return `${unitToken(u)} - ${route}${spec.dest}${spec.via ? ' via convoy' : ''}`;
-    }
-    case 'retreat': return `${unitToken(u)} - ${spec.dest}`;
-    case 'disband': return `${unitToken(u)} disband`;
-    case 'support':
-      return `${unitToken(u)} S ${spec.targetType} ${spec.targetLoc}` +
-        (spec.targetDest ? ` - ${spec.targetDest}` : '');
-    case 'convoy': return `${unitToken(u)} C A ${spec.targetLoc} - ${spec.dest}`;
-  }
-}
-
-// Scan the textarea for the line holding `power`'s order for the unit in
-// `unitProv`. Returns {lines, foundIdx, headerIdx, lastOfSection}.
-function locateOrderLine(power, unitProv, sourceText) {
-  const lines = sourceText.split('\n');
-  let current = null;
-  let headerIdx = -1, lastOfSection = -1, foundIdx = -1;
-  for (let i = 0; i < lines.length; i++) {
-    const stripped = lines[i].split('#')[0].trim();
-    if (!stripped) continue;
-    if (stripped.split(/\s+/).length === 1) {
-      const p = normalizePower(stripped.replace(/:$/, ''));
-      if (p) {
-        current = p;
-        if (p === power) {
-          headerIdx = i;
-          lastOfSection = i;
-        }
-        continue;
-      }
-    }
-    const res = parseOrderLine(lines[i], phaseKind(), current);
-    if (res && res.order) {
-      if (res.order.power === power) {
-        lastOfSection = i;
-        if (res.order.loc && prov(res.order.loc) === unitProv) foundIdx = i;
-      }
-    }
-  }
-  return { lines, foundIdx, headerIdx, lastOfSection };
-}
-
 // newText === null removes the unit's order line. Orders for a power other
 // than the one the viewer is playing as go into the hidden buffer instead of
-// the visible textarea — see hiddenOrdersText above.
+// the visible textarea — see hiddenOrdersText above. The text surgery itself
+// lives in js/orders-text.js; this only picks the buffer and writes back.
 function syncOrderLine(power, unitProv, newText) {
   const myC = myCountry();
   const foreign = myC && power !== myC;
   const source = foreign ? hiddenOrdersText : $('orders-text').value;
-  const { lines, foundIdx, headerIdx, lastOfSection } = locateOrderLine(power, unitProv, source);
-  if (foundIdx >= 0) {
-    if (newText === null) lines.splice(foundIdx, 1);
-    else lines[foundIdx] = newText;
-  } else if (newText !== null) {
-    if (headerIdx >= 0) lines.splice(lastOfSection + 1, 0, newText);
-    else lines.push('', power.toUpperCase(), newText);
-  }
-  if (foreign) hiddenOrdersText = lines.join('\n');
-  else $('orders-text').value = lines.join('\n');
+  const out = T.setOrderLine(source, power, unitProv, newText, phaseKind());
+  if (foreign) hiddenOrdersText = out;
+  else $('orders-text').value = out;
   onOrdersChanged();
 }
 
 function setOrder(u, spec) {
-  syncOrderLine(u.power, prov(u.loc), orderTextFor(u, spec));
+  syncOrderLine(u.power, prov(u.loc), T.orderTextFor(u, spec));
 }
 
 function selectOrderLine(unitProv) {
@@ -881,13 +749,11 @@ function selectOrderLine(unitProv) {
   if (!u) return;
   const myC = myCountry();
   if (myC && u.power !== myC) return; // foreign order lives in the hidden buffer — nothing to select
-  const { lines, foundIdx } = locateOrderLine(u.power, unitProv, $('orders-text').value);
-  if (foundIdx < 0) return;
   const ta = $('orders-text');
-  let start = 0;
-  for (let i = 0; i < foundIdx; i++) start += lines[i].length + 1;
+  const { lines, foundIdx } = T.locateOrderLine(u.power, unitProv, ta.value, phaseKind());
+  if (foundIdx < 0) return;
   ta.focus();
-  ta.setSelectionRange(start, start + lines[foundIdx].length);
+  ta.setSelectionRange(...T.lineRange(lines, foundIdx));
 }
 
 // ---------------------------------------------------------------------------
@@ -923,7 +789,7 @@ function attachBoardHandlers() {
       if (editMode) return editClick(base, ev);
       if (game.step === 'retreat') {
         const d = dislodgedAt(base);
-        if (d) syncOrderLine(d.unit.power, base, orderTextFor(d.unit, { kind: 'disband' }));
+        if (d) syncOrderLine(d.unit.power, base, T.orderTextFor(d.unit, { kind: 'disband' }));
         return;
       }
       if (game.step === 'adjustment') return adjustmentClick(base, ev);
@@ -1151,7 +1017,7 @@ function retreatDrop(from, to, ev) {
   if (!d) return;
   const opts = d.retreatOptions.filter((l) => prov(l) === to);
   if (!opts.length) return toast(`Cannot retreat to ${provName(to)}`);
-  syncOrderLine(d.unit.power, from, orderTextFor(d.unit, { kind: 'retreat', dest: nearestLoc(ev, opts) }));
+  syncOrderLine(d.unit.power, from, T.orderTextFor(d.unit, { kind: 'retreat', dest: nearestLoc(ev, opts) }));
 }
 
 // How many of a power's builds (+ waives) and removals are already written in
@@ -2198,16 +2064,6 @@ function renderOnlineUI() {
   if (game.published && isOwnerView() && !$('submissions-modal').hidden) renderSubmissionsModal();
 }
 
-// Order text reduced to what the game actually cares about, so "have I changed
-// my orders since I submitted them?" ignores comments, spacing and case.
-function normalizeOrders(text) {
-  return (text || '')
-    .split('\n')
-    .map((l) => l.split('#')[0].trim().toLowerCase().replace(/\s+/g, ' '))
-    .filter(Boolean)
-    .join('\n');
-}
-
 // My own submission comment for the current phase, or null — the "currently
 // published" record a player's box is compared against and can reload from.
 function mySubmission() {
@@ -2228,7 +2084,7 @@ function renderSubmitStatus() {
   const s = mySubmission();
   // "Load published moves" resets the box back to what's on record for me —
   // there is nothing to reset once the box already matches it.
-  const matchesRecord = s && normalizeOrders(powerBlockText(p)) === normalizeOrders(s.orders);
+  const matchesRecord = s && T.normalizeOrders(powerBlockText(p)) === T.normalizeOrders(s.orders);
   setGated(
     loadBtn,
     !s
@@ -3013,7 +2869,7 @@ async function gmLoadOrders() {
     // Every active power gets a header — submitted powers get their orders,
     // everyone else gets the blank per-phase template — so the box always
     // shows the full roster to fill in by hand, submissions or not.
-    const defaultByPower = splitOrdersByPower(defaultOrdersText());
+    const defaultByPower = T.splitOrdersByPower(defaultOrdersText());
     const blocks = [];
     let submitted = 0;
     for (const p of activePowers()) {
@@ -3053,7 +2909,7 @@ async function gmLoadOrders() {
 // record with that would make every power look already-published for a phase
 // nobody has ordered in yet, locking them all out of submitting.
 async function gmWriteLoadedMovesFiles(text, phase) {
-  const byPower = splitOrdersByPower(text);
+  const byPower = T.splitOrdersByPower(text);
   if (!byPower.size) return;
   const moves = await readMovesFiles(await fetchGist(game.gistId));
   const updates = {};
