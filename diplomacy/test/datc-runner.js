@@ -221,8 +221,11 @@ export function runCase(c) {
   }
 }
 
-export async function runAll() {
-  const text = await (await fetch('../tools/datc_v2.4_06.txt')).text();
+// `text` is the contents of tools/datc_v2.4_06.txt. The browser page omits it
+// and the file is fetched relative to test/; Node passes it in from disk, which
+// is what lets the same 167 cases run under `node --test` as well as in a tab.
+export async function runAll(text) {
+  if (text === undefined) text = await (await fetch('../tools/datc_v2.4_06.txt')).text();
   const cases = parseDatcFile(text);
   const bySection = {};
   const failures = [];

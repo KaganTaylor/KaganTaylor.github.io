@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "type": "module",
+  "name": "diplomacy-simulator",
+  "description": "Marks js/ as ES modules for Node so `node --test` can run the pure-logic suites. There are deliberately no dependencies, no lockfile and no build step — the browser loads the same files directly.",
+  "scripts": {
+    "test": "node --test"
+  }
+}
