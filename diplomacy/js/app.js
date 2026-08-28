@@ -1351,14 +1351,8 @@ function localAutoResolveAvailable() {
 // Phase() can defer to the gist once the GM's version lands. No gist writes.
 function resolveRevealedLocally() {
   if (!localAutoResolveAvailable()) return;
-  const phase = { year: game.year, season: game.season, step: game.step };
-  const blocks = [];
-  for (const p of activePowers()) {
-    const found = phaseSubmission(p);
-    const s = found && submissionOnTime(found) ? found.submission : null;
-    if (s && s.orders.trim()) blocks.push(p.toUpperCase() + '\n' + s.orders.trim() + '\n');
-  }
-  const text = blocks.join('\n');
+  const phase = O.currentPhase(game);
+  const { text } = O.gatherPhaseBlocks(game, online, 'ontime');
   const parsed = parseOrders(text, phaseKind());
   const entry = S.resolvePhase(game, parsed.orders, text);
   game.provisionalPhase = phase;
@@ -1768,12 +1762,7 @@ async function saveGameSettings() {
   // push to the published gist so every player sees the same rules; the
   // board override keeps the GM's in-progress position out of it
   if (game.published && game.isOwner) {
-    try {
-      await updatePublished(game, game.publishedState);
-    } catch (e) {
-      toast('Saved locally, but could not publish the change: ' + e.message);
-      if (isAuthError(e)) askToken();
-    }
+    await pushSettings(null, 'Saved locally, but could not publish the change');
   }
 }
 
@@ -2202,17 +2191,16 @@ async function setDeadline(date) {
     game.deadline = date.toISOString();
     // Stamp the phase this deadline is for, so it can never outlive it — see
     // deadlineIsForCurrentPhase().
-    game.deadlineFor = { year: game.year, season: game.season, step: game.step };
+    game.deadlineFor = O.currentPhase(game);
   }
   S.saveGame(game);
   renderDeadlineInfo();
-  try {
-    await updatePublished(game, game.publishedState);
-    toast(date ? `Deadline confirmed: ${date.toLocaleString()}` : 'Deadline cleared — submissions stay closed until you confirm a new one', 'info');
-  } catch (e) {
-    toast('Could not save the deadline: ' + e.message);
-    if (isAuthError(e)) askToken();
-  }
+  await pushSettings(
+    date
+      ? `Deadline confirmed: ${date.toLocaleString()}`
+      : 'Deadline cleared — submissions stay closed until you confirm a new one',
+    'Could not save the deadline'
+  );
 }
 
 // GM: how the deadline resolves — auto-resolve on its own, or load and
@@ -2221,18 +2209,12 @@ async function setPublishMode(mode) {
   game.publishMode = mode;
   S.saveGame(game);
   renderOnlineUI();
-  try {
-    await updatePublished(game, game.publishedState);
-    toast(
-      mode === 'auto'
-        ? 'Auto publish: the phase resolves and publishes itself the moment the deadline passes'
-        : 'Manual publish: after the deadline, ⬇ Load orders and resolve/publish it yourself',
-      'info'
-    );
-  } catch (e) {
-    toast('Could not save the setting: ' + e.message);
-    if (isAuthError(e)) askToken();
-  }
+  await pushSettings(
+    mode === 'auto'
+      ? 'Auto publish: the phase resolves and publishes itself the moment the deadline passes'
+      : 'Manual publish: after the deadline, ⬇ Load orders and resolve/publish it yourself',
+    'Could not save the setting'
+  );
 }
 
 const BUMP_STEPS = [
@@ -2300,18 +2282,17 @@ function renderSubmissionsModal() {
 // now only — see lateResubmitAllowed().
 async function setLateResubmit(power, allow) {
   game.lateResubmit = { ...(game.lateResubmit || {}) };
-  if (allow) game.lateResubmit[power] = { year: game.year, season: game.season, step: game.step };
+  if (allow) game.lateResubmit[power] = O.currentPhase(game);
   else delete game.lateResubmit[power];
   S.saveGame(game);
   renderSubmissionsModal();
-  try {
-    await updatePublished(game, game.publishedState);
-    toast(allow ? `${cap(power)} may resubmit past the deadline for this phase` : `Late resubmission revoked for ${cap(power)}`, 'info');
-    await refreshOnlineStatus();
-  } catch (e) {
-    toast('Could not save the authorization: ' + e.message);
-    if (isAuthError(e)) askToken();
-  }
+  const ok = await pushSettings(
+    allow
+      ? `${cap(power)} may resubmit past the deadline for this phase`
+      : `Late resubmission revoked for ${cap(power)}`,
+    'Could not save the authorization'
+  );
+  if (ok) await refreshOnlineStatus();
 }
 
 // Submissions modal (⚙ Settings → 🔍 Submissions, or ⏰ Deadline → 🔍 Review
@@ -2669,14 +2650,10 @@ async function doLoadPublishedMoves() {
       toast('Reloaded your published orders', 'info');
       return;
     }
-    const blocks = [];
-    for (const p of POWERS) {
-      const entry = revealedEntry(p);
-      if (entry && entry.orders.trim()) blocks.push(p.toUpperCase() + '\n' + entry.orders.trim() + '\n');
-    }
-    if (!blocks.length) return toast('No published moves for this phase yet');
-    applyOrdersText(blocks.join('\n'));
-    toast(`Loaded moves for ${blocks.length} power${blocks.length === 1 ? '' : 's'}`, 'info');
+    const { text, submitted } = O.gatherPhaseBlocks(game, online, 'revealed');
+    if (!submitted) return toast('No published moves for this phase yet');
+    applyOrdersText(text);
+    toast(`Loaded moves for ${submitted} power${submitted === 1 ? '' : 's'}`, 'info');
   } finally {
     renderSubmitStatus();
     if (!assignedPower()) btn.disabled = false;
@@ -2696,20 +2673,9 @@ async function gmLoadOrders() {
     // Every active power gets a header — submitted powers get their orders,
     // everyone else gets the blank per-phase template — so the box always
     // shows the full roster to fill in by hand, submissions or not.
-    const defaultByPower = T.splitOrdersByPower(defaultOrdersText());
-    const blocks = [];
-    let submitted = 0;
-    for (const p of activePowers()) {
-      const found = phaseSubmission(p);
-      const s = found && found.submission;
-      if (s && s.orders.trim()) {
-        blocks.push(p.toUpperCase() + '\n' + s.orders.trim() + '\n');
-        submitted++;
-      } else if (defaultByPower.has(p)) {
-        blocks.push(defaultByPower.get(p).join('\n'));
-      }
-    }
-    applyOrdersText(blocks.join('\n'));
+    const blanks = T.splitOrdersByPower(defaultOrdersText());
+    const { text, submitted } = O.gatherPhaseBlocks(game, online, 'gm', blanks);
+    applyOrdersText(text);
     gmOrdersLoaded = true;
     refreshAll();
     toast(
@@ -2752,6 +2718,51 @@ async function gmWriteLoadedMovesFiles(text, phase) {
   if (Object.keys(updates).length) await writeMovesFiles(game.gistId, updates);
 }
 
+// A GM setting — the deadline, the publish mode, player assignments, a late
+// grace, the house rules — pushed to the gist and reported. Five callers used
+// to spell this out, each with its own wording for the same failure.
+//
+// It passes game.publishedState as the board override, which is the point:
+// these writes go into the same game.json as the position, and without it
+// confirming a deadline mid-resolve would silently leak the GM's unpublished
+// board as a side effect, defeating the dirty check. See DECISIONS.md,
+// "Publishing the board is a separate, explicit act from resolving it".
+//
+// Returns true when the push landed, so a caller can close its modal or
+// refresh only on success.
+async function pushSettings(okMsg, failMsg) {
+  try {
+    await updatePublished(game, game.publishedState);
+    if (okMsg) toast(okMsg, 'info');
+    return true;
+  } catch (e) {
+    toast(failMsg + ': ' + e.message);
+    if (isAuthError(e)) askToken();
+    return false;
+  }
+}
+
+// The authoritative publish, shared by the game master's 📣 Publish results and
+// by auto-publish. Resolving for real and pushing are one act with a fixed
+// order, and the two callers used to spell it out separately — which is how
+// they came to differ by accident.
+//
+// The deadline is cleared as part of it, deliberately: a stale "already passed"
+// timestamp carried into the next phase is exactly what auto-published an
+// all-hold Fall 1901 nobody had ordered in. The GM confirms a fresh one each
+// phase. Returns the history entry, whose phase stamp is the one the orders
+// belong to — never game.year/season/step, which has already advanced by then.
+async function publishResolvedPhase(orders, text) {
+  const entry = S.resolvePhase(game, orders, text);
+  S.saveGame(game);
+  await gmWriteLoadedMovesFiles(text, entry);
+  clearDeadline(game);
+  await updatePublished(game);
+  game.publishedState = S.boardSnapshot(game);
+  S.saveGame(game);
+  return entry;
+}
+
 // GM: commits the previewed resolution for real and pushes it to the table —
 // the "📣 Publish results" button on a gmPublish preview (see previewResolve/
 // startPlayback). Plays the same move animation a normal Continue does, then
@@ -2773,13 +2784,7 @@ async function gmPublishPreview() {
   await board.animateFinal(pb.entry);
   if (playback !== pb) return;
   try {
-    const entry = S.resolvePhase(game, pb.pendingOrders, pb.pendingText);
-    S.saveGame(game);
-    await gmWriteLoadedMovesFiles(pb.pendingText, entry);
-    clearDeadline(game);
-    await updatePublished(game);
-    game.publishedState = S.boardSnapshot(game);
-    S.saveGame(game);
+    const entry = await publishResolvedPhase(pb.pendingOrders, pb.pendingText);
     gmOrdersLoaded = false;
     playback = null;
     refreshAll();
@@ -2840,12 +2845,7 @@ async function autoPublishIfDue() {
     // to a resolution — the GM may have moved the deadline from another device
     // in the moments since the gate above.
     if (publishMode() !== 'auto' || !deadlineIsForCurrentPhase() || !deadlinePassed()) return;
-    const blocks = [];
-    for (const p of activePowers()) {
-      const found = phaseSubmission(p);
-      const s = found && submissionOnTime(found) ? found.submission : null;
-      if (s && s.orders.trim()) blocks.push(p.toUpperCase() + '\n' + s.orders.trim() + '\n');
-    }
+    const { text, submitted } = O.gatherPhaseBlocks(game, online, 'ontime');
     // Not one power submitted anything readable and on time. Resolving that is
     // a whole-board all-hold nobody asked for — never a result worth committing
     // unattended, and the shape every "the deadline outlived its phase" bug
@@ -2853,7 +2853,7 @@ async function autoPublishIfDue() {
     // not orders: a power that deliberately submits nothing but holds has a
     // non-empty block and counts, which is the (rare, legal) all-hold phase
     // players actually chose.
-    if (!blocks.length) {
+    if (!submitted) {
       const label = S.phaseLabel(game);
       if (autoPublishIdleFor !== label) {
         autoPublishIdleFor = label;
@@ -2864,15 +2864,8 @@ async function autoPublishIfDue() {
       }
       return;
     }
-    const text = blocks.join('\n');
     const parsed = parseOrders(text, phaseKind());
-    const entry = S.resolvePhase(game, parsed.orders, text);
-    S.saveGame(game);
-    await gmWriteLoadedMovesFiles(text, entry);
-    clearDeadline(game);
-    await updatePublished(game);
-    game.publishedState = S.boardSnapshot(game);
-    S.saveGame(game);
+    const entry = await publishResolvedPhase(parsed.orders, text);
     autoPublishIdleFor = null;
     refreshAll();
     toast(`Auto-published ${entry.label} — confirm the next deadline`, 'info');
@@ -2891,14 +2884,9 @@ async function savePlayers() {
   }
   game.players = players;
   S.saveGame(game);
-  try {
-    await updatePublished(game, game.publishedState);
-    toast('Player assignments saved to the published game', 'info');
+  if (await pushSettings('Player assignments saved to the published game', 'Save failed')) {
     closePlayersModal();
     await refreshOnlineStatus();
-  } catch (e) {
-    toast('Save failed: ' + e.message);
-    if (isAuthError(e)) askToken();
   }
 }
 
