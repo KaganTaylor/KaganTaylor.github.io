@@ -39,6 +39,8 @@ test('a move parses from every notation people actually type', () => {
     'A par - bur',
     'A Paris - Burgundy',
     'A Par to Bur',
+    'A Paris moves to Burgundy',
+    'A Par moves to Bur',
     'A Par -> Bur',
     'Army Paris - Burgundy',
   ]) {
@@ -80,6 +82,10 @@ test('support of a move and support of a hold', () => {
 
   // the supported unit's type is optional too
   assert.deepEqual(one('A Mar S Par - Bur').target, { loc: 'par', dest: 'bur' });
+
+  // natural-language connectors, as parser.js's own header advertises
+  assert.deepEqual(one('F ENG supports A Bre to Pic').target, { loc: 'bre', dest: 'pic' });
+  assert.deepEqual(one('A Mar supports A Par moves to Bur').target, { loc: 'par', dest: 'bur' });
 });
 
 test('convoy needs a destination', () => {

@@ -119,7 +119,10 @@ export function parseOrderLine(rawLine, phase, defaultPower) {
     // explicit convoy route (used by the strict-convoy house rule).
     const hops = [];
     while (MOVE_WORDS.has(tokens[i])) {
-      i++;
+      // consecutive connectors are one connector: "moves to Bur", "- Bur".
+      // Two location-less move words in a row are otherwise always an error,
+      // so nothing legal changes meaning here.
+      while (MOVE_WORDS.has(tokens[i])) i++;
       const hopM = matchLocation(tokens, i);
       if (!hopM) return err('cannot parse destination');
       hops.push(hopM[0]);
@@ -143,7 +146,7 @@ export function parseOrderLine(rawLine, phase, defaultPower) {
     i = afterT;
     let tDest = null;
     if (i < tokens.length && MOVE_WORDS.has(tokens[i])) {
-      i++;
+      while (i < tokens.length && MOVE_WORDS.has(tokens[i])) i++;
       const dM = matchLocation(tokens, i);
       if (!dM) return err('cannot parse supported destination');
       tDest = dM[0];
