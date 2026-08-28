@@ -274,7 +274,7 @@ function homeRow(g) {
   load.className = 'load';
   const bits = [
     `<span class="gicon">${g.published ? '☁' : '🧪'}</span>`,
-    `<span class="gname">${escapeHtml(g.name)}</span>`,
+    `<span class="gname">${escapeText(g.name)}</span>`,
     `<span class="meta">${S.phaseLabel(g)}</span>`,
   ];
   if (kind === 'gm') bits.push('<span class="badge role-gm">👑 Game master</span>');
@@ -286,8 +286,8 @@ function homeRow(g) {
     bits.push(`<span class="badge deadline${left > 0 ? '' : ' past'}">⏰ ${left > 0 ? 'in ' + fmtCountdown(left) : 'passed'}</span>`);
   }
   if (g.branchedFrom) {
-    bits.push(`<span class="meta from">🌿 from ${escapeHtml(g.branchedFrom.name)}` +
-      `${g.branchedFrom.label ? ' · ' + escapeHtml(g.branchedFrom.label) : ''}</span>`);
+    bits.push(`<span class="meta from">🌿 from ${escapeText(g.branchedFrom.name)}` +
+      `${g.branchedFrom.label ? ' · ' + escapeText(g.branchedFrom.label) : ''}</span>`);
   }
   load.innerHTML = bits.join(' ');
   // someone else's published game may have moved on since we last saw it —
@@ -557,13 +557,10 @@ function prefillOrders(preserve = false) {
   } else {
     $('orders-title').textContent = title('Builds');
     const counts = S.adjustmentCounts(game);
-    const occupied = new Set(game.units.map((u) => prov(u.loc)));
     const infoLines = [];
     for (const [p, c] of Object.entries(counts)) {
       if (c > 0) {
-        const free = (S.HOME_CENTERS[p] || []).filter(
-          (h) => game.scOwners[h] === p && !occupied.has(h)
-        );
+        const free = freeHomeCenters(p);
         infoLines.push(`${cap(p)}: ${c} build${c > 1 ? 's' : ''} — click a free home center (${free.join(', ') || 'none free'})`);
       } else if (c < 0) {
         infoLines.push(`${cap(p)}: must disband ${-c} — click units to remove`);
@@ -619,11 +616,11 @@ function onOrdersChanged() {
   const parts = [];
   if (own.errors.length) {
     parts.push(`<span class="err">` +
-      own.errors.map((e) => '✕ ' + escapeHtml(e)).join('\n') + '</span>');
+      own.errors.map((e) => '✕ ' + escapeText(e)).join('\n') + '</span>');
   }
   if (warnings.length) {
     parts.push(`<span class="warn">` +
-      warnings.map((w) => '⚠ ' + escapeHtml(w)).join('\n') + '</span>');
+      warnings.map((w) => '⚠ ' + escapeText(w)).join('\n') + '</span>');
   }
   if (!parts.length) {
     parts.push(`<span class="ok">${own.orders.length} order${own.orders.length === 1 ? '' : 's'} ✓ (everyone else holds)</span>`);
@@ -637,18 +634,23 @@ function onOrdersChanged() {
   return { orders: own.orders, errors: own.errors };
 }
 
+// The home centres a power may actually build in: owned by them, and empty.
+function freeHomeCenters(power) {
+  const occupied = new Set(game.units.map((u) => prov(u.loc)));
+  return (S.HOME_CENTERS[power] || []).filter(
+    (h) => game.scOwners[h] === power && !occupied.has(h)
+  );
+}
+
 // Live build/disband tally for the winter phase — "France: 1/2 builds" — kept
 // in step with the order box so it updates as orders are clicked or typed.
 function updateAdjustmentInfo() {
   const counts = S.adjustmentCounts(game);
-  const occupied = new Set(game.units.map((u) => prov(u.loc)));
   const lines = [];
   for (const [p, c] of Object.entries(counts)) {
     const used = adjustmentUsed(p);
     if (c > 0) {
-      const free = (S.HOME_CENTERS[p] || []).filter(
-        (h) => game.scOwners[h] === p && !occupied.has(h)
-      );
+      const free = freeHomeCenters(p);
       lines.push(`${cap(p)}: ${used.builds}/${c} build${c > 1 ? 's' : ''} — click a free home center (${free.join(', ') || 'none free'})`);
     } else if (c < 0) {
       lines.push(`${cap(p)}: ${used.removes}/${-c} disband${-c > 1 ? 's' : ''} — click units to remove`);
@@ -711,7 +713,10 @@ function drawLive(excludeProv = null) {
   }
 }
 
-function escapeHtml(s) {
+// Escapes for TEXT content only — & and < are enough there, and every call
+// site interpolates into an element body. It is NOT safe for an attribute
+// value (no quote escaping); use textContent or setAttribute for those.
+function escapeText(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
 }
 
@@ -1257,7 +1262,7 @@ async function resolveAndSkip() {
   if (boardDirty()) toast('Resolved locally — ☁ Publish changes to show the players', 'info');
 }
 
-function redoPhase() {
+function doRedoPhase() {
   const entry = S.redoPhase(game);
   if (!entry) return toast('Nothing to redo');
   playback = null;
@@ -1911,6 +1916,10 @@ const deadlineChainBase = () => O.deadlineChainBase(game);
 const bumpUnavailableReason = (hours, label) =>
   O.bumpUnavailableReason(game, online, hours, label, fmtWhen);
 
+const STATUS_ICON = {
+  published: '✓', revealed: '✓', late: '⚠', submitted: '📨', none: '—', unknown: '…',
+};
+
 const STATUS_BADGE = {
   published: ['✓ published', 'st-published'],
   revealed: ['✓ revealed', 'st-published'],
@@ -2264,10 +2273,11 @@ function renderSubmissionsModal() {
     const login = document.createElement('span');
     login.className = 'login';
     login.textContent = (game.players || {})[p] ? '@' + (game.players || {})[p] : '—';
+    const st = powerOnlineStatus(p);
     const status = document.createElement('span');
-    status.className = 'pstatus ' + STATUS_BADGE[powerOnlineStatus(p)][1];
-    status.textContent = { published: '✓', revealed: '✓', late: '⚠', submitted: '📨', none: '—', unknown: '…' }[powerOnlineStatus(p)];
-    status.title = STATUS_BADGE[powerOnlineStatus(p)][0];
+    status.className = 'pstatus ' + STATUS_BADGE[st][1];
+    status.textContent = STATUS_ICON[st];
+    status.title = STATUS_BADGE[st][0];
     const mk = (txt, title, fn) => {
       const b = document.createElement('button');
       b.textContent = txt;
@@ -3250,7 +3260,7 @@ async function init() {
 
   $('btn-replay').onclick = replaySelected;
   $('btn-undo').onclick = undoPhase;
-  $('btn-redo').onclick = redoPhase;
+  $('btn-redo').onclick = doRedoPhase;
   $('btn-branch').onclick = branchCurrent;
 
   $('btn-game-settings').onclick = openGameSettings;
@@ -3349,10 +3359,10 @@ function autotest() {
   if (stage === 'mid') {
     stepPlayback(1); stepPlayback(1); stepPlayback(1); stepPlayback(1); stepPlayback(1);
   } else if (stage === 'outcome') {
-    stepPlayback(999, { noAnim: true });
+    stepPlayback(999);
     stepPlayback(-1);
   } else if (stage === 'final') {
-    stepPlayback(999, { noAnim: true });
+    stepPlayback(999);
   }
   done();
   function done() {
