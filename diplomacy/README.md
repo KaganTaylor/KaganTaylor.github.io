@@ -142,6 +142,14 @@ Optional, per-game, off by default; a change applies to future resolutions only.
 
 ## Testing
 
+```
+cd diplomacy && node --test
+```
+
+Runs everything that doesn't need a browser: the full DATC suite (**167/167**), both house-rule suites, and unit suites over the order parser, the order-text buffer, the permission model, the deadline/submission rules, the gist-comment format and the sealing. No dependencies and no install step — `package.json` exists only to tell Node that `js/` holds the same ES modules the browser loads directly.
+
+The browser pages run the same code and are still there:
+
 - `test/datc.html` — the full DATC suite. Serve the folder and open it; the page title reports the score (`DATC 167/167`) and lists any failures by case.
 - `test/strict.html` — the house-rule cases (strict support-hold and strict convoy), each run both ways to pin the difference from standard rules.
 - `tools/datc_v2.4_06.txt` — the machine-readable test cases the runner parses.
