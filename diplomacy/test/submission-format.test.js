@@ -3,10 +3,9 @@
 // see DECISIONS.md, "A mailbox is created empty, and only ever edited" and
 // "Never read a stale comment list".
 //
-// These functions are pure and already exported, so they can be tested before
-// anything is refactored. They are the ones tools/publish-moves.js currently
-// re-implements by hand; once it imports them instead, this suite covers the
-// unattended Action too.
+// One module, two readers: the browser app and the unattended Action in
+// tools/publish-moves.js, which imports these rather than carrying its own
+// copy. So this suite covers both.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -21,7 +20,8 @@ import {
   upsertMovesEntry,
   extractGistId,
   movesFileName,
-} from '../js/publish.js';
+  samePhase,
+} from '../js/submission-format.js';
 
 const SUB = {
   power: 'france',
@@ -219,4 +219,14 @@ test('extractGistId accepts a bare id or a full gist URL', () => {
   assert.equal(extractGistId('deadbeef'), null, 'too short to be a gist id');
   assert.equal(extractGistId(''), null);
   assert.equal(extractGistId(null), null);
+});
+
+test('samePhase is the rule both the app and the Action match a phase with', () => {
+  const phase = { year: 1901, season: 'spring', step: 'movement' };
+  assert.equal(samePhase(phase, { ...phase, orders: 'A Par - Bur' }), true);
+  assert.equal(samePhase(phase, { ...phase, year: 1902 }), false);
+  assert.equal(samePhase(phase, { ...phase, season: 'fall' }), false);
+  assert.equal(samePhase(phase, { ...phase, step: 'retreat' }), false);
+  assert.equal(samePhase(phase, null), false);
+  assert.equal(samePhase(phase, undefined), false);
 });

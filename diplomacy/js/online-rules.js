@@ -15,7 +15,7 @@
 // a hand-built phase without a browser, a gist or a clock.
 
 import { POWERS } from './map-data.js';
-import { findSubmission } from './publish.js';
+import { findSubmission } from './submission-format.js';
 import { orderBlock } from './orders-text.js';
 
 // ---------------------------------------------------------------------------

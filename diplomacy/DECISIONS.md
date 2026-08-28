@@ -207,7 +207,7 @@ The mailbox is created **when the player opens the game**, not when they first s
 
 Two consequences worth holding onto:
 
-- **`created_at` no longer approximates a submission time** — it is when the mailbox was made, possibly days earlier. `updated_at` still means exactly "last submitted", which is what the deadline rule below actually reads. Neither `findSubmission()` (`js/publish.js`) nor its twin in `tools/publish-moves.js` backstops `updated_at` with `created_at` any more: an absent edit stamp must read as *unknown*, resolved in the player's favour deliberately by `submissionOnTime()`, not silently by a stale date.
+- **`created_at` no longer approximates a submission time** — it is when the mailbox was made, possibly days earlier. `updated_at` still means exactly "last submitted", which is what the deadline rule below actually reads. `findSubmission()` (`js/submission-format.js`, imported by both the app and the Action) does not backstop `updated_at` with `created_at`: an absent edit stamp must read as *unknown*, resolved in the player's favour deliberately by `submissionOnTime()`, not silently by a stale date.
 - **A mailbox must never parse as a submission.** `MAILBOX_BODY` starts with `ORDERS_MARKER` so `findMyMailbox()` recognises it, but omits `power`/`year`/`season`/`step` so `parseSubmission()` rejects it — an empty mailbox reads as "— waiting", never as a submission of no orders. `findMyMailbox()` also prefers a real submission over a bare placeholder, and ignores comments without the marker, so an ordinary chat comment on the gist is never overwritten.
 
 #### How GitHub's notification mail actually works, and why an empty POST buys nothing
@@ -242,7 +242,15 @@ Two changes, because one is not enough:
 
 The same staleness had a second, visible symptom: the refresh that follows a submit read a cached copy of the just-edited comment, saw the old body, and left the UI insisting the orders had not been resubmitted. So `app.js` also holds the comment GitHub returns from its own write (`justWrote`) and folds it into `online.comments` until a poll comes back carrying it. Our own writes are the one thing we know for certain, and the display must never contradict them — which covers GitHub's replicas lagging a write as well as the cache.
 
-Finally, **where duplicates already exist, the most recently edited comment wins** — `findSubmission()` and `findMyMailbox()` both rank that way, and must keep agreeing, or a resubmit would edit one comment while the UI read another. Games played before the fix carry duplicates, and preferring the older one is wrong twice: it shows superseded orders, and it would let a player submit on time, edit a duplicate after the deadline, and be judged by whichever stamp suited them. `tools/publish-moves.js` mirrors the rule.
+Finally, **where duplicates already exist, the most recently edited comment wins** — `findSubmission()` and `findMyMailbox()` both rank that way, and must keep agreeing, or a resubmit would edit one comment while the UI read another. Games played before the fix carry duplicates, and preferring the older one is wrong twice: it shows superseded orders, and it would let a player submit on time, edit a duplicate after the deadline, and be judged by whichever stamp suited them.
+
+### One wire format, two readers
+
+The comment format — the marker, the payload, `findSubmission`/`findMyMailbox`, `upsertMovesEntry` — has always had two readers: the browser app and the unattended Action in `tools/publish-moves.js`. For a long time that meant two hand-kept copies, and this document asking them to stay in step. That is not a mechanism, and the rules are exactly subtle enough to drift: a marker matched as a whole line rather than a prefix, a mailbox that must *not* parse as a submission, last-edited-wins, `updated_at` never backstopped.
+
+So the format lives in **`js/submission-format.js`**, which imports nothing but itself — no `fetch`, no token, no `localStorage` — and both readers import it. `js/publish.js` re-exports every name so its own importers were unaffected; `tools/publish-moves.js` lost ~120 lines and now shares `js/seal.js` for unsealing too. `diplomacy/package.json` (`"type": "module"`, no dependencies) is what lets Node read the app's modules as the ES modules the browser already loads directly.
+
+The practical gain is that `test/submission-format.test.js` now covers the Action's behaviour as well as the app's — the Action previously had no tests at all, and it is the thing that writes to a live game unattended.
 
 ### Orders are obfuscated, not secret
 
@@ -262,7 +270,7 @@ Everything else follows from putting the key in the gist:
 
 Genuine secrecy — orders hidden from other players *and* from the GM until the reveal — is a different and much larger design, written up in [`proposals/sealed-orders.md`](proposals/sealed-orders.md) and deliberately not built: it needs per-player ECDH keys, a wrapped GM key, a rotation story, and it takes the Action's ability to publish away with it.
 
-**A note for future games: `LEGACY_MARKER_V1` is temporary.** The wire marker is now the unversioned `DIPLOMACY-ORDERS`; `DIPLOMACY-ORDERS v1` is still *recognised* (never written) purely so the game that was in progress when sealing shipped kept its mailboxes and its already-submitted orders. Every such branch is tagged `// LEGACY v1 — remove once the current game ends` in `js/publish.js` and `tools/publish-moves.js` — `grep -rn "LEGACY v1"` finds them all, and deleting them once a fresh game starts is expected, not a regression.
+**A note for future games: `LEGACY_MARKER_V1` is temporary.** The wire marker is now the unversioned `DIPLOMACY-ORDERS`; `DIPLOMACY-ORDERS v1` is still *recognised* (never written) purely so the game that was in progress when sealing shipped kept its mailboxes and its already-submitted orders. Every such branch is tagged `// LEGACY v1 — remove once the current game ends` in `js/submission-format.js` — `grep -rn "LEGACY v1"` finds them all, and deleting them once a fresh game starts is expected, not a regression.
 
 **Deadlines are confirmed, not scheduled — and enforced by the reader, not a runner.** Only the GM writes the `deadline` timestamp in game.json, confirming each phase's deadline in the app (+1 week is the default rhythm; +24/48 h fit retreats and builds). Nothing runs *at* the deadline: GitHub Actions has no "run once at time X" primitive, and the hourly-polling cron that first papered over that was dropped as waste. Instead the deadline is a property any client can check against public data — GitHub stamps every comment with an author login (identity) and an `updated_at` (edit time), so every viewer independently agrees on which submissions beat the deadline. A comment edited after the deadline is void: no late entries, and no window where a runner has seen the moves but a player can still change them.
 
