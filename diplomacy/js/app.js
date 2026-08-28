@@ -17,6 +17,7 @@ import {
 import { PROVINCES, POWERS } from './map-data.js';
 import * as R from './roles.js';
 import * as T from './orders-text.js';
+import * as O from './online-rules.js';
 import {
   cap, provName, fmtLoc, fmtOrder, fmtCountdown, fmtCountdownDHMS, fmtWhen,
   isoToLocalInput, COAST_NAMES, POWER_FLAGS,
@@ -281,7 +282,7 @@ function homeRow(g) {
   if (kind === 'spectator') bits.push('<span class="badge role-spectator">👁 Watching</span>');
   const d = g.deadline && new Date(g.deadline);
   if (d && !isNaN(d)) {
-    const left = d - Date.now();
+    const left = d - trustedNow();
     bits.push(`<span class="badge deadline${left > 0 ? '' : ' past'}">⏰ ${left > 0 ? 'in ' + fmtCountdown(left) : 'passed'}</span>`);
   }
   if (g.branchedFrom) {
@@ -336,11 +337,6 @@ const isOwnerView = () => R.isOwnerView(game);
 const boardDirty = () => R.boardDirty(game);
 const myCountry = () => R.myCountry(game);
 const assignedPower = () => R.assignedPower(game);
-
-// Does a submission/published entry belong to the phase on the table now?
-function matchesPhase(s) {
-  return s && s.year === game.year && s.season === game.season && s.step === game.step;
-}
 
 function openGame(g) {
   game = g;
@@ -530,11 +526,7 @@ function renderCountrySelect() {
   sel.replaceChildren();
   if (assignedPower()) return;
   sel.appendChild(new Option('👁 View all countries', ''));
-  for (const p of POWERS) {
-    if (game.units.some((u) => u.power === p) || Object.values(game.scOwners).includes(p)) {
-      sel.appendChild(new Option(`Play as ${cap(p)}`, p));
-    }
-  }
+  for (const p of activePowers()) sel.appendChild(new Option(`Play as ${cap(p)}`, p));
   sel.value = game.myCountry || '';
 }
 
@@ -1894,129 +1886,30 @@ async function importFile(file) {
 // game either reveals them to everyone directly — auto publish — or waits
 // for the GM to review and publish per-power moves-<power>.json files)
 // ---------------------------------------------------------------------------
-function activePowers() {
-  return POWERS.filter(
-    (p) => game.units.some((u) => u.power === p) || Object.values(game.scOwners).includes(p)
-  );
-}
-
-// How the deadline is handled — the GM picks this in ⚙ Settings.
-// 'manual' (default): after the deadline only the GM sees submissions, until
-// they review and 📣 Publish results (or re-open with a new deadline).
-// 'auto': the moment the deadline passes, every viewer reveals all
-// submissions straight from the comments — no publish step needed.
-function publishMode() {
-  return game && game.publishMode === 'auto' ? 'auto' : 'manual';
-}
-
-// Trusted wall clock: the local device time corrected by the offset to
-// GitHub's server `Date` header (captured on every gist read). A player can
-// spoof Date.now() to peek at auto-mode orders early; they cannot spoof
-// GitHub's server clock. Falls back to the raw local clock until the first
-// server date is seen (offline/first paint) — the safe direction, since a
-// player with no network simply can't reveal yet.
-function trustedNow() {
-  return Date.now() + (online.serverOffset || 0);
-}
-
-function deadlinePassed() {
-  const d = deadlineDate();
-  return !!d && d.getTime() <= trustedNow();
-}
-
-// A deadline is confirmed for one specific phase (game.deadlineFor, stamped by
-// setDeadline) — "orders for Spring 1901 are due at 11pm", never a bare
-// timestamp floating free of what it was due for. Once the board moves on, the
-// old timestamp is stale and must not gate anything again.
-//
-// This exists because it didn't, once. A game master playing their own power
-// (🎭 Play as) used the player-side ▶ Resolve new orders! button, which
-// advances the board optimistically and — correctly, for a player — neither
-// clears the deadline nor writes anything. autoPublishIfDue() then woke up,
-// saw only "deadline in the past", and published the NEXT phase, for which
-// nobody had submitted anything, as an all-hold. Asking "in the past?" without
-// also asking "for this phase?" lets one expired deadline consume every phase
-// it is carried into.
-//
-// Deliberately lenient about a missing stamp: games published before this
-// existed carry a deadline and no deadlineFor, and must keep resolving. The
-// guards in autoPublishIfDue() cover that case from the other side.
-function deadlineIsForCurrentPhase() {
-  if (!game || !game.deadline) return false;
-  if (!game.deadlineFor) return true;
-  return matchesPhase(game.deadlineFor);
-}
-
-// Orders can only be submitted while a deadline is set and hasn't passed yet
-// — with no deadline at all there is nothing to be "on time" against.
-function ordersOpen() {
-  return !!game.deadline && !deadlinePassed();
-}
-
-// Has the game master specifically authorized `p` to (re)submit after the
-// deadline for the phase on the table right now? Keyed to the exact phase
-// so an authorization never silently carries over once the game moves on.
-function lateResubmitAllowed(p) {
-  const m = game.lateResubmit && game.lateResubmit[p];
-  return !!(m && matchesPhase(m));
-}
-
-// Whether `p` may (re)submit at all: the normal deadline window, or a GM's
-// explicit late-resubmit authorization for this exact phase.
-function isSubmitAllowed(p) {
-  return ordersOpen() || lateResubmitAllowed(p);
-}
-
-// In auto mode a comment edited after the deadline is void — judged by
-// GitHub's own updated_at stamp, never the client-claimed submittedAt.
-function submissionOnTime(found) {
-  const d = deadlineDate();
-  return !d || !found.updatedAt || new Date(found.updatedAt) <= d;
-}
-
-// Submissions reach us sealed and are decrypted in refreshOnlineStatus, so by
-// the time anything here looks at one it holds cleartext `orders`. One that
-// still doesn't (no key on this browser, or a blob that won't open) is treated
-// as no submission at all — visibly "waiting", rather than quietly resolved or
-// published as a power that ordered nothing.
-const readable = (s) => !!s && typeof s.orders === 'string';
-
-// The power's valid submission comment for the current phase, or null.
-function phaseSubmission(p) {
-  const login = (game.players || {})[p];
-  const found = login && online.comments && findSubmission(online.comments, login);
-  if (found && readable(found.submission) && matchesPhase(found.submission) && found.submission.power === p) return found;
-  return null;
-}
-
-// What everyone may see for a power this phase: its published file entry, or
-// — in auto mode once the deadline has passed — the on-time submission
-// comment itself (the files are then just a durable record).
-function revealedEntry(p) {
-  const doc = online.moves && online.moves[p];
-  const entry = doc && doc.history.find(matchesPhase);
-  if (entry) return entry;
-  if (publishMode() !== 'auto' || !deadlinePassed()) return null;
-  const found = phaseSubmission(p);
-  return found && submissionOnTime(found) ? found.submission : null;
-}
-
-// What the current phase knows about a power: 'published' (its moves file has
-// an entry for this phase), 'revealed'/'late' (auto mode, deadline passed),
-// 'submitted' (a valid comment is waiting), 'none', or 'unknown' (comments
-// not fetched yet / offline).
-function powerOnlineStatus(p) {
-  const doc = online.moves && online.moves[p];
-  if (doc && doc.history.some(matchesPhase)) return 'published';
-  if (!online.comments) return 'unknown';
-  const found = phaseSubmission(p);
-  if (found) {
-    if (publishMode() === 'auto' && deadlinePassed())
-      return submissionOnTime(found) ? 'revealed' : 'late';
-    return 'submitted';
-  }
-  return 'none';
-}
+// The rules themselves — who may submit, whose orders are on time, what may be
+// seen, which phase a deadline belongs to — live in js/online-rules.js, taking
+// `game` and the fetched `online` snapshot explicitly so they can be tested
+// against a hand-built phase. These wrappers bind those two.
+const activePowers = () => O.activePowers(game);
+const hasAssignedPlayers = () => O.hasAssignedPlayers(game);
+const publishMode = () => O.publishMode(game);
+const trustedNow = () => O.trustedNow(online);
+const deadlineDate = () => O.deadlineDate(game);
+const deadlinePassed = () => O.deadlinePassed(game, online);
+const deadlineUrgency = () => O.deadlineUrgency(game, online);
+const deadlineIsForCurrentPhase = () => O.deadlineIsForCurrentPhase(game);
+const ordersOpen = () => O.ordersOpen(game, online);
+const lateResubmitAllowed = (p) => O.lateResubmitAllowed(game, p);
+const isSubmitAllowed = (p) => O.isSubmitAllowed(game, online, p);
+const submissionOnTime = (found) => O.submissionOnTime(game, found);
+const phaseSubmission = (p) => O.phaseSubmission(game, online, p);
+const revealedEntry = (p) => O.revealedEntry(game, online, p);
+const powerOnlineStatus = (p) => O.powerOnlineStatus(game, online, p);
+const mySubmission = () => O.mySubmission(game, online, assignedPower());
+const matchesPhase = (x) => O.matchesPhase(game, x);
+const deadlineChainBase = () => O.deadlineChainBase(game);
+const bumpUnavailableReason = (hours, label) =>
+  O.bumpUnavailableReason(game, online, hours, label, fmtWhen);
 
 const STATUS_BADGE = {
   published: ['✓ published', 'st-published'],
@@ -2029,7 +1922,7 @@ const STATUS_BADGE = {
 
 function renderOnlineUI() {
   if (!game) return;
-  const hasPlayers = !!(game.published && game.players && Object.values(game.players).some(Boolean));
+  const hasPlayers = hasAssignedPlayers();
   if (document.activeElement !== $('autopublish-toggle')) {
     $('autopublish-toggle').checked = publishMode() === 'auto';
   }
@@ -2062,16 +1955,6 @@ function renderOnlineUI() {
   // it's no longer part of the always-visible sidebar, so there's no need to
   // keep it in step on every poll otherwise
   if (game.published && isOwnerView() && !$('submissions-modal').hidden) renderSubmissionsModal();
-}
-
-// My own submission comment for the current phase, or null — the "currently
-// published" record a player's box is compared against and can reload from.
-function mySubmission() {
-  const p = assignedPower();
-  if (!p) return null;
-  const found = online.comments && online.login && findSubmission(online.comments, online.login);
-  const s = found && found.submission;
-  return readable(s) && matchesPhase(s) && s.power === p ? s : null;
 }
 
 function renderSubmitStatus() {
@@ -2161,21 +2044,6 @@ function renderSubmitStatus() {
 // The GM confirms every deadline (game.deadline, an ISO timestamp in
 // game.json). When it passes, submissions close; what happens next depends
 // on publishMode() — instant reveal, or GM review first.
-function deadlineDate() {
-  if (!game || !game.deadline) return null;
-  const d = new Date(game.deadline);
-  return isNaN(d) ? null : d;
-}
-
-// 'none' (no deadline set), 'warn' (counting down) or 'danger' (passed) — the
-// single source of truth behind every red/yellow deadline indicator: the
-// topbar countdown chip, this panel, and the sidebar #panel-deadline box.
-function deadlineUrgency() {
-  const d = deadlineDate();
-  if (!d) return 'none';
-  return d.getTime() - Date.now() > 0 ? 'warn' : 'danger';
-}
-
 // The ⏰ Deadline panel is the game master's entire publish flow, and the two
 // modes want different controls in it. In auto mode autoPublishIfDue() resolves
 // and publishes the phase on its own; leaving ⬇ Load orders on screen beside it
@@ -2244,7 +2112,7 @@ function renderDeadlineInfo() {
   }
   const when = d.toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
   if (urgency === 'warn') {
-    el.textContent = `⏰ Deadline: ${when} (in ${fmtCountdown(d - Date.now())})`;
+    el.textContent = `⏰ Deadline: ${when} (in ${fmtCountdown(d - trustedNow())})`;
     el.classList.add('warn');
   } else {
     // This element sits in the (player/spectator-only, once a GM has loaded
@@ -2274,7 +2142,7 @@ function renderDeadlineInfo() {
 function updateDeadlineCountdown() {
   const chip = $('deadline-countdown');
   const panel = $('panel-deadline');
-  const hasPlayers = !!(game && game.published && game.players && Object.values(game.players).some(Boolean));
+  const hasPlayers = hasAssignedPlayers();
   panel.classList.remove('deadline-warn', 'deadline-danger');
   if (!hasPlayers) {
     chip.hidden = true;
@@ -2292,7 +2160,7 @@ function updateDeadlineCountdown() {
     chip.classList.add('neutral');
   } else if (urgency === 'warn') {
     const d = deadlineDate();
-    chip.textContent = `⏰ ${fmtCountdownDHMS(d.getTime() - Date.now())}`;
+    chip.textContent = `⏰ ${fmtCountdownDHMS(d.getTime() - trustedNow())}`;
     chip.title = `Orders open — deadline: ${d.toLocaleString()}`;
     chip.classList.add('warn');
     panel.classList.add('deadline-warn');
@@ -2358,41 +2226,16 @@ async function setPublishMode(mode) {
   }
 }
 
-// The quick-set steps count from the deadline this one FOLLOWS — the live one,
-// or the last one that was cleared (clearDeadline) — never from the moment of
-// the click. Press +1 week on Sunday afternoon and a midnight-Saturday deadline
-// still lands on the following midnight Saturday. Only a game that has never
-// had a deadline at all starts from the clock.
-function deadlineChainBase() {
-  const d = deadlineDate();
-  if (d) return d.getTime();
-  const last = game && game.lastDeadline && new Date(game.lastDeadline);
-  return last && !isNaN(last) ? last.getTime() : null;
-}
-
 const BUMP_STEPS = [
   ['deadline-plus-week', 7 * 24, '+1 week'],
   ['deadline-plus-2day', 48, '+48 h'],
   ['deadline-plus-day', 24, '+24 h'],
 ];
 
-// Why a step is unavailable, or null when it isn't. A step is unavailable when
-// chaining it off the previous deadline lands in the past — pressing +24 h two
-// days late must not quietly confirm a deadline that has already expired.
-function bumpUnavailableReason(hours, label) {
-  const base = deadlineChainBase();
-  if (base === null) return null; // no previous deadline: counts from now, always valid
-  const next = base + hours * 3600000;
-  if (next > trustedNow()) return null;
-  return `${label} from the previous deadline (${fmtWhen(base)}) is ${fmtWhen(next)} — already past. ` +
-    'Use a longer step, or pick a date and time below.';
-}
-
 function bumpDeadline(hours, label) {
   const reason = bumpUnavailableReason(hours, label);
   if (reason) return toast(reason);
-  const base = deadlineChainBase();
-  setDeadline(new Date((base === null ? trustedNow() : base) + hours * 3600000));
+  setDeadline(new Date(O.bumpTarget(game, online, hours)));
 }
 
 // Greys out the steps whose window has closed and, for the rest, names the
@@ -2401,10 +2244,9 @@ function bumpDeadline(hours, label) {
 // step disables itself the moment it expires; attribute-only work on three
 // buttons.
 function renderDeadlineButtons() {
-  const base = deadlineChainBase();
   for (const [id, hours, label] of BUMP_STEPS) {
     const reason = bumpUnavailableReason(hours, label);
-    const when = fmtWhen((base === null ? trustedNow() : base) + hours * 3600000);
+    const when = fmtWhen(O.bumpTarget(game, online, hours));
     setGated($(id), reason, `Sets the deadline to ${when} — ${label} from the previous one`);
   }
 }
@@ -2546,31 +2388,6 @@ function renderPlayersAssignRows() {
   }
 }
 
-// The published position as a viewer should see it. Deliberately NOT
-// state.js's boardSnapshot(): that includes redoStack, which is the game
-// master's private undo bookkeeping. A viewer who catches up clears their own
-// (catchUpNext) while the gist may still carry the GM's, and that difference
-// is not a divergence — comparing it would reload the board on every refresh.
-function viewerPosition(g) {
-  return JSON.stringify({
-    year: g.year,
-    season: g.season,
-    step: g.step,
-    units: g.units,
-    scOwners: g.scOwners,
-    pending: g.pending || null,
-    history: g.history || [],
-  });
-}
-
-// True when the gist is simply further along the same road: every phase we
-// have seen is still there, unchanged, with more on the end.
-function extendsOurHistory(g, fresh) {
-  const ours = g.history || [];
-  if (fresh.history.length <= ours.length) return false;
-  return JSON.stringify(fresh.history.slice(0, ours.length)) === JSON.stringify(ours);
-}
-
 // Take the gist's position in place of ours. Mutates `g` rather than replacing
 // the game object (revertToPublished() can reassign `game`; this runs inside
 // refreshOnlineStatus(), which holds its own reference and would lose it), and
@@ -2614,8 +2431,8 @@ function syncViewerToGist(g, fresh) {
   // An optimistic local resolve is *meant* to sit ahead of the gist until the
   // GM publishes; reconcileProvisionalPhase() owns that comparison.
   if (g.provisionalPhase) return;
-  if (viewerPosition(g) === viewerPosition(fresh)) return;
-  if (extendsOurHistory(g, fresh)) {
+  if (O.viewerPosition(g) === O.viewerPosition(fresh)) return;
+  if (O.extendsOurHistory(g, fresh)) {
     catchUpTarget = fresh;
     return;
   }
@@ -3141,9 +2958,8 @@ async function doUpdatePublished() {
     S.saveGame(game);
     $('btn-update-published').disabled = !boardDirty();
     updateSyncPill();
-    const d = deadlineDate();
-    const hasPlayers = game.players && Object.values(game.players).some(Boolean);
-    if (hasPlayers && (!d || d.getTime() <= Date.now())) {
+    const hasPlayers = hasAssignedPlayers();
+    if (hasPlayers && !ordersOpen()) {
       toast(`Published ${S.phaseLabel(game)} — now confirm the next deadline in ⏰ Deadline`, 'info');
     } else {
       toast(`Published — every player now sees ${S.phaseLabel(game)}`, 'info');
