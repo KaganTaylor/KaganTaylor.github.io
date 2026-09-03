@@ -87,6 +87,8 @@ Support lines inherited the problem, worse. A support-of-a-move used to end at t
 
 The frontier is derived the same way the coastlines are — sample both `#_<prov>` outlines with `getPointAtLength`, keep the sample pairs that all but touch — rather than from a hand-maintained table of border points, which would have to be redrawn for any other map. It is lazy and cached per province pair, so it costs nothing at load and nothing on a redraw.
 
+That frontier point is the midpoint of two *different* samples (one from each province, up to `BORDER_MAX_GAP` apart), so on a jagged coast the average can land outside both outlines — Stp/Nwy again: the Arctic coastline there is narrow enough that the nearest frontier point to the direct line sits in open water, not on Norway's own edge, so trimming the tip back toward the source (as the ordinary symbol-to-symbol case does) left the arrowhead in Stp, not Nwy. `_enterShape()` fixes this by spiralling outward from the border point — the true edge isn't necessarily straight ahead on a fjord coast, so a radial search beats extending the existing line — for the nearest point actually inside the destination's own outline, and a redirected arrow's tip stops there directly instead of being pulled back by `MOVE_TIP_GAP`.
+
 One related fix rides along: a support order names a *province* (`stp`), but the supported unit may be drawn on a **coast marker** (`stp/nc`), 190 map units away, so the support line used to miss the arrow entirely. `unitLoc()` resolves the province to the marker the unit is really on, via the `data-loc` attribute `_unitNode` already stamps for the drag code.
 
 ---

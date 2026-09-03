@@ -59,6 +59,15 @@ const ARROW_WIDTH = 6;        // colored shaft width
 // Small, so the head clearly enters the destination province — a larger gap
 // left tips out in the sea or pointing at a neighbour on long/oblique moves.
 const MOVE_TIP_GAP = 10;
+// A border-aimed arrowhead (see BORDER-AIMED ARROWS below) searches outward
+// from the border point on a spiral for the nearest point actually inside the
+// destination's outline, up to this many map units — a jagged coastline (the
+// Arctic strip Nwy shares with Stp, say) can put the true edge of the
+// destination well off to the side of the border point, not straight ahead.
+const BORDER_ENTRY_MAX_R = 60;
+const BORDER_ENTRY_R_STEP = 4;
+const BORDER_ENTRY_A_STEP = 15; // degrees between spokes at each radius
+const BORDER_ENTRY_MARGIN = 4;  // extra push past the first hit, for safety margin
 
 // ---------------------------------------------------------------------------
 // BORDER-AIMED ARROWS
@@ -74,6 +83,16 @@ const MOVE_TIP_GAP = 10;
 // the shared border instead (the frontier point nearest the direct line), which
 // points it at the part of the destination the unit is actually entering. The
 // arrow stays straight — it is only shortened.
+//
+// The frontier point itself is the midpoint of two DIFFERENT outline samples
+// (one from each province, up to BORDER_MAX_GAP apart) — on a jagged coast
+// that average can land outside both provinces, which used to leave the
+// trimmed tip short of the border, i.e. still outside the destination. So
+// from that border point, _enterShape spirals outward for the nearest point
+// actually inside the destination's own outline (the true edge isn't
+// necessarily straight ahead — a fjord coast can put it off to the side),
+// and a redirected arrow's tip stops there directly rather than being
+// trimmed back by MOVE_TIP_GAP.
 //
 // Ordinary moves (Par - Bur, Ber - Mun, Mar - Spa) run inside their own two
 // provinces the whole way and are drawn exactly as before.
@@ -504,6 +523,28 @@ export class Board {
     return out;
   }
 
+  // A border point is the midpoint of two DIFFERENT outline samples, so on a
+  // jagged coast it can land outside the destination's own outline — and the
+  // true edge isn't necessarily straight ahead (see BORDER-AIMED ARROWS
+  // above). Spiral outward from it for the nearest point actually inside
+  // `shape`, then push a little further along that same spoke for margin.
+  // Null if nothing inside turned up within BORDER_ENTRY_MAX_R.
+  _enterShape(pt, shape) {
+    if (this._inShape(pt, shape)) return pt;
+    for (let r = BORDER_ENTRY_R_STEP; r <= BORDER_ENTRY_MAX_R; r += BORDER_ENTRY_R_STEP) {
+      for (let a = 0; a < 360; a += BORDER_ENTRY_A_STEP) {
+        const rad = (a * Math.PI) / 180;
+        const cx = Math.cos(rad), cy = Math.sin(rad);
+        const cand = { x: pt.x + cx * r, y: pt.y + cy * r };
+        if (this._inShape(cand, shape)) {
+          const deeper = { x: pt.x + cx * (r + BORDER_ENTRY_MARGIN), y: pt.y + cy * (r + BORDER_ENTRY_MARGIN) };
+          return this._inShape(deeper, shape) ? deeper : cand;
+        }
+      }
+    }
+    return null;
+  }
+
   _distToSeg(p, a, b) {
     const dx = b.x - a.x, dy = b.y - a.y;
     const len2 = dx * dx + dy * dy;
@@ -515,13 +556,15 @@ export class Board {
   // The segment a move order is actually drawn along — the one place that
   // decides it, so the arrow, the support line that ends on it and the failure
   // slash can never disagree. See the BORDER-AIMED ARROWS block up top.
+  // `redirected` tells callers the tip already lands just inside the
+  // destination and shouldn't be pulled back further by MOVE_TIP_GAP.
   _moveSegment(fromLoc, destLoc) {
     const from = this.center(fromLoc);
-    const direct = { from, to: this.center(destLoc) };
+    const direct = { from, to: this.center(destLoc), redirected: false };
     const key = `${fromLoc}>${destLoc}`;
     if (this._segAim.has(key)) {
       const aim = this._segAim.get(key);
-      return aim ? { from, to: aim } : direct;
+      return aim ? { from, to: aim, redirected: true } : direct;
     }
     let aim = null;
     const A = this._outlineSamples(fromLoc), B = this._outlineSamples(destLoc);
@@ -536,15 +579,16 @@ export class Board {
         if (!this._inShape(pt, A) && !this._inShape(pt, B)) stray++;
       }
       if (stray / (BORDER_PROBES + 1) > BORDER_STRAY) {
-        let bestD = Infinity;
+        let bestD = Infinity, border = null;
         for (const pt of this._frontier(fromLoc, destLoc)) {
           const d = this._distToSeg(pt, from, direct.to);
-          if (d < bestD) { bestD = d; aim = pt; }
+          if (d < bestD) { bestD = d; border = pt; }
         }
+        if (border) aim = this._enterShape(border, B) || border;
       }
     }
     this._segAim.set(key, aim);
-    return aim ? { from, to: aim } : direct;
+    return aim ? { from, to: aim, redirected: true } : direct;
   }
 
   setViewBox(x, y, w, h) {
@@ -1334,7 +1378,11 @@ export class Board {
         g.appendChild(this._polyArrow(this.layers.orders1, [from, ...mids, tip], color, ARROW_WIDTH));
       } else {
         const seg = this._moveSegment(order.unit ? order.unit.loc : order.loc, dest);
-        const to = this._trim(seg.from, seg.to, MOVE_TIP_GAP);
+        // A redirected (border-aimed) tip already sits just inside the
+        // destination — trimming it back by MOVE_TIP_GAP would pull it back
+        // out past the border. Only the direct-to-symbol case needs trimming,
+        // to clear the destination's own unit icon.
+        const to = seg.redirected ? seg.to : this._trim(seg.from, seg.to, MOVE_TIP_GAP);
         g.appendChild(this._line(this.layers.orders1, seg.from.x, seg.from.y, to.x, to.y, 'varwidthorder', color, { arrow: true, width: ARROW_WIDTH }));
       }
       if (order.isConvoyMove || order.viaConvoy || order.convoyRoute) {
@@ -1462,7 +1510,7 @@ export class Board {
     const from = this.center(order.unit ? order.unit.loc : order.loc);
     if ((order.kind === 'move' || order.kind === 'retreat') && (order.destLoc || order.dest)) {
       const seg = this._moveSegment(order.unit ? order.unit.loc : order.loc, order.destLoc || order.dest);
-      const to = this._trim(seg.from, seg.to, MOVE_TIP_GAP + 6);
+      const to = seg.redirected ? seg.to : this._trim(seg.from, seg.to, MOVE_TIP_GAP + 6);
       g.appendChild(this._cross(to.x, to.y + 10, 46));
     } else if (order.kind === 'support') {
       // any failed support (cut, or gave no actual support) — a slash centred
