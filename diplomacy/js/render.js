@@ -61,6 +61,28 @@ const ARROW_WIDTH = 6;        // colored shaft width
 const MOVE_TIP_GAP = 10;
 
 // ---------------------------------------------------------------------------
+// BORDER-AIMED ARROWS
+//
+// Unit symbols sit wherever the map draws the piece, not near where two
+// provinces meet. StP's symbol is far south of the StP/Nwy frontier, which is
+// up in the arctic, so a straight arrow to Nwy's symbol in southern Norway
+// cuts clean across Finland and Sweden — and every support line computed off
+// that arrow lands on the wrong country.
+//
+// So: sample the direct symbol-to-symbol line, and if too much of it lies
+// outside BOTH provinces it is crossing somebody else. Then stop the arrow at
+// the shared border instead (the frontier point nearest the direct line), which
+// points it at the part of the destination the unit is actually entering. The
+// arrow stays straight — it is only shortened.
+//
+// Ordinary moves (Par - Bur, Ber - Mun, Mar - Spa) run inside their own two
+// provinces the whole way and are drawn exactly as before.
+const BORDER_MAX_GAP = 30;   // outlines further apart than this aren't neighbours
+const BORDER_SAMPLES = 400;  // outline sample points per province
+const BORDER_PROBES = 24;    // test points along the direct line
+const BORDER_STRAY = 0.25;   // redirect once this share of them is outside both
+
+// ---------------------------------------------------------------------------
 // COASTLINE APPEARANCE — change the coastline colour HERE
 //
 // The sea-facing edges of the split-coast provinces (Spain, St Petersburg,
@@ -110,6 +132,11 @@ export class Board {
     this.layers = {};
     this.handlers = {};
     this._hovered = null;
+    // MapLayer -> unit-coordinate offset, filled in by load()
+    this._t = { x: 0, y: 0 };
+    this._outlinePts = new Map(); // 'stp' -> {pts, rings} | null
+    this._borderPts = new Map();  // 'nwy|stp' -> shared-frontier points
+    this._segAim = new Map();     // 'stp/nc>nwy' -> border aim point | null
   }
 
   async load(container) {
@@ -194,6 +221,8 @@ export class Board {
     if (mouseTransform) coastTint.setAttribute('transform', mouseTransform);
     const tm = /translate\(\s*([-\d.]+)[ ,]+([-\d.]+)/.exec(mouseTransform || '');
     const [tx, ty] = tm ? [+tm[1], +tm[2]] : [0, 0];
+    // outline coords + (tx, ty) == unit coords; _outlineSamples() needs this too
+    this._t = { x: tx, y: ty };
     const splitBases = new Set();
     for (const loc of this.coords.keys()) {
       if (loc.includes('/')) splitBases.add(loc.split('/')[0]);
@@ -383,6 +412,139 @@ export class Board {
     const c = this.coords.get(loc) || this.coords.get(prov(loc));
     if (!c) return { x: 0, y: 0 };
     return { x: c.x + UNIT_W / 2, y: c.y + UNIT_H / 2 };
+  }
+
+  // A support order names a province ('stp'), but the supported unit may be
+  // drawn on a coast marker ('stp/nc') — 190 map units away. Anchor order
+  // geometry on the marker the unit is really on. _unitNode stamps both
+  // data-prov and data-loc for exactly this reason (see _unitAtClient).
+  unitLoc(loc) {
+    const el = this.layers.units
+      && this.layers.units.querySelector(`[data-prov="${prov(loc)}"]`);
+    return (el && el.getAttribute('data-loc')) || loc;
+  }
+
+  // The province outline (#_<prov> in MapLayer) sampled into unit-coordinate
+  // points, split into rings wherever consecutive samples jump (subpaths) —
+  // the same sampling the coastline derivation in load() uses. The SVG names a
+  // few seas its own way (gol/mid/nat/nrg/tyn), so fall back to the alias that
+  // maps onto this province.
+  _outlineSamples(loc) {
+    const p = prov(loc);
+    if (this._outlinePts.has(p)) return this._outlinePts.get(p);
+    let el = this.layers.map
+      && this.layers.map.querySelector(`#${CSS.escape('_' + p)}`);
+    if (!el && this.layers.map) {
+      for (const [k, v] of Object.entries(ALIASES)) {
+        if (v !== p || k === p || k.length !== p.length) continue;
+        el = this.layers.map.querySelector(`#${CSS.escape('_' + k)}`);
+        if (el) break;
+      }
+    }
+    const len = el && el.getTotalLength ? el.getTotalLength() : 0;
+    let shape = null;
+    if (len) {
+      const step = Math.max(3, len / BORDER_SAMPLES);
+      const pts = [];
+      const rings = [];
+      let ring = null, last = null;
+      for (let s = 0; s <= len; s += step) {
+        const q = el.getPointAtLength(Math.min(s, len));
+        const pt = { x: q.x + this._t.x, y: q.y + this._t.y };
+        if (!ring || (last && Math.hypot(pt.x - last.x, pt.y - last.y) > step * 5)) {
+          ring = [];
+          rings.push(ring);
+        }
+        ring.push(pt);
+        pts.push(pt);
+        last = pt;
+      }
+      shape = { pts, rings };
+    }
+    this._outlinePts.set(p, shape);
+    return shape;
+  }
+
+  // even-odd ray cast across every ring at once, so holes read as outside
+  _inShape(pt, shape) {
+    let inside = false;
+    for (const ring of shape.rings) {
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const a = ring[i], b = ring[j];
+        if ((a.y > pt.y) !== (b.y > pt.y)
+          && pt.x < ((b.x - a.x) * (pt.y - a.y)) / (b.y - a.y) + a.x) {
+          inside = !inside;
+        }
+      }
+    }
+    return inside;
+  }
+
+  // Every point along the shared frontier of two provinces, in unit
+  // coordinates: the midpoints of outline samples that all but touch. Empty
+  // when they aren't neighbours. Cached — the pair scan is the expensive part.
+  _frontier(a, b) {
+    const pa = prov(a), pb = prov(b);
+    if (pa === pb) return [];
+    const key = pa < pb ? `${pa}|${pb}` : `${pb}|${pa}`;
+    if (this._borderPts.has(key)) return this._borderPts.get(key);
+    const A = this._outlineSamples(pa), B = this._outlineSamples(pb);
+    const out = [];
+    if (A && B) {
+      const max2 = BORDER_MAX_GAP ** 2;
+      for (const p of A.pts) {
+        for (const q of B.pts) {
+          if ((p.x - q.x) ** 2 + (p.y - q.y) ** 2 <= max2) {
+            out.push({ x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 });
+          }
+        }
+      }
+    }
+    this._borderPts.set(key, out);
+    return out;
+  }
+
+  _distToSeg(p, a, b) {
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len2 = dx * dx + dy * dy;
+    let t = len2 ? ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t));
+  }
+
+  // The segment a move order is actually drawn along — the one place that
+  // decides it, so the arrow, the support line that ends on it and the failure
+  // slash can never disagree. See the BORDER-AIMED ARROWS block up top.
+  _moveSegment(fromLoc, destLoc) {
+    const from = this.center(fromLoc);
+    const direct = { from, to: this.center(destLoc) };
+    const key = `${fromLoc}>${destLoc}`;
+    if (this._segAim.has(key)) {
+      const aim = this._segAim.get(key);
+      return aim ? { from, to: aim } : direct;
+    }
+    let aim = null;
+    const A = this._outlineSamples(fromLoc), B = this._outlineSamples(destLoc);
+    if (A && B) {
+      let stray = 0;
+      for (let i = 0; i <= BORDER_PROBES; i++) {
+        const t = i / BORDER_PROBES;
+        const pt = {
+          x: from.x + (direct.to.x - from.x) * t,
+          y: from.y + (direct.to.y - from.y) * t,
+        };
+        if (!this._inShape(pt, A) && !this._inShape(pt, B)) stray++;
+      }
+      if (stray / (BORDER_PROBES + 1) > BORDER_STRAY) {
+        let bestD = Infinity;
+        for (const pt of this._frontier(fromLoc, destLoc)) {
+          const d = this._distToSeg(pt, from, direct.to);
+          if (d < bestD) { bestD = d; aim = pt; }
+        }
+      }
+    }
+    this._segAim.set(key, aim);
+    return aim ? { from, to: aim } : direct;
   }
 
   setViewBox(x, y, w, h) {
@@ -1171,18 +1333,22 @@ export class Board {
         const tip = this._trim(mids[mids.length - 1], this.center(dest), MOVE_TIP_GAP);
         g.appendChild(this._polyArrow(this.layers.orders1, [from, ...mids, tip], color, ARROW_WIDTH));
       } else {
-        const to = this._trim(from, this.center(dest), MOVE_TIP_GAP);
-        g.appendChild(this._line(this.layers.orders1, from.x, from.y, to.x, to.y, 'varwidthorder', color, { arrow: true, width: ARROW_WIDTH }));
+        const seg = this._moveSegment(order.unit ? order.unit.loc : order.loc, dest);
+        const to = this._trim(seg.from, seg.to, MOVE_TIP_GAP);
+        g.appendChild(this._line(this.layers.orders1, seg.from.x, seg.from.y, to.x, to.y, 'varwidthorder', color, { arrow: true, width: ARROW_WIDTH }));
       }
       if (order.isConvoyMove || order.viaConvoy || order.convoyRoute) {
         const badge = this._text(from.x + 14, from.y - 14, '⚓', 20);
         g.appendChild(badge);
       }
     } else if (kind === 'support') {
-      const target = this.center(order.target.loc);
+      const targetLoc = this.unitLoc(order.target.loc);
+      const target = this.center(targetLoc);
       if (order.target.dest) {
-        const destC = this.center(order.target.dest);
-        const mid = { x: (target.x + destC.x) / 2, y: (target.y + destC.y) / 2 };
+        // end on the midpoint of the arrow the supported move is drawn along,
+        // so the support line always touches it
+        const seg = this._moveSegment(targetLoc, order.target.dest);
+        const mid = { x: (seg.from.x + seg.to.x) / 2, y: (seg.from.y + seg.to.y) / 2 };
         g.appendChild(this._line(this.layers.orders2, from.x, from.y, mid.x, mid.y, 'supportorder', color));
       } else {
         const to = this._trim(from, target, 26);
@@ -1295,17 +1461,20 @@ export class Board {
     g.setAttribute('data-order-overlay', '1');
     const from = this.center(order.unit ? order.unit.loc : order.loc);
     if ((order.kind === 'move' || order.kind === 'retreat') && (order.destLoc || order.dest)) {
-      const to = this._trim(from, this.center(order.destLoc || order.dest), MOVE_TIP_GAP + 6);
+      const seg = this._moveSegment(order.unit ? order.unit.loc : order.loc, order.destLoc || order.dest);
+      const to = this._trim(seg.from, seg.to, MOVE_TIP_GAP + 6);
       g.appendChild(this._cross(to.x, to.y + 10, 46));
     } else if (order.kind === 'support') {
       // any failed support (cut, or gave no actual support) — a slash centred
-      // over the arrow. drawOrder() draws the arrow from the supporter to the
-      // target (support-hold) or to the midpoint of target→dest (support-move);
-      // put the slash at the midpoint of that arrow so it sits over it.
-      const t = this.center(order.target.loc);
-      const end = order.target.dest
-        ? { x: (t.x + this.center(order.target.dest).x) / 2, y: (t.y + this.center(order.target.dest).y) / 2 }
-        : t;
+      // over the line. drawOrder() draws the support line from the supporter to
+      // the target (support-hold) or to the midpoint of the supported move's
+      // arrow (support-move); recompute the same end so the slash sits on it.
+      const targetLoc = this.unitLoc(order.target.loc);
+      let end = this.center(targetLoc);
+      if (order.target.dest) {
+        const seg = this._moveSegment(targetLoc, order.target.dest);
+        end = { x: (seg.from.x + seg.to.x) / 2, y: (seg.from.y + seg.to.y) / 2 };
+      }
       const mid = { x: (from.x + end.x) / 2, y: (from.y + end.y) / 2 };
       g.appendChild(this._slash(mid.x, mid.y));
     } else {
