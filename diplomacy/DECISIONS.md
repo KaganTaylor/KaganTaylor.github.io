@@ -73,23 +73,11 @@ A coastline is a wayfinding hint, not a highlight — keep it muted enough that 
 
 ---
 
-## Order arrows aim at the border, not at the symbol
+## Support lines anchor on the unit's actual marker, not its province name
 
-A unit symbol sits wherever the map draws the piece, which is nowhere near where two provinces meet. St Petersburg's symbol is deep in the south of the province; Norway's is in southern Norway; the two only *border* up in the arctic. So `A Stp - Nwy` drawn symbol-to-symbol is a straight line clean across Finland and Sweden — and it reads as an attack on those countries.
+A support order names a *province* (`stp`), but the supported unit may be drawn on a **coast marker** (`stp/nc`), 190 map units away, so the support line used to miss the arrow entirely. `unitLoc()` in **`js/render.js`** resolves the province to the marker the unit is really on, via the `data-loc` attribute `_unitNode` already stamps for the drag code.
 
-Support lines inherited the problem, worse. A support-of-a-move used to end at the midpoint of target→dest, and midpoint(Stp, Nwy) lands on top of Finland's own symbol: `Swe S Stp - Nwy` looked like Sweden supporting Finland, and Finland's own support line collapsed to a stub.
-
-`_moveSegment(fromLoc, destLoc)` in **`js/render.js`** is now the single place that decides where a move arrow runs, and the arrow, the support line drawn onto it and the failure slash all ask it:
-
-- Probe the direct symbol-to-symbol line. If more than a quarter of the probes land outside **both** provinces, the line is crossing somebody else.
-- When it is, stop the arrow at the shared border instead — the point on the two outlines' frontier nearest the direct line. The arrow stays **straight**; it is only shortened, so it points at the part of the destination the unit actually enters.
-- Ordinary moves (`Par - Bur`, `Ber - Mun`, `Mar - Spa`) run inside their own two provinces the whole way, fall under the threshold, and are drawn exactly as they always were.
-
-The frontier is derived the same way the coastlines are — sample both `#_<prov>` outlines with `getPointAtLength`, keep the sample pairs that all but touch — rather than from a hand-maintained table of border points, which would have to be redrawn for any other map. It is lazy and cached per province pair, so it costs nothing at load and nothing on a redraw.
-
-That frontier point is the midpoint of two *different* samples (one from each province, up to `BORDER_MAX_GAP` apart), so on a jagged coast the average can land outside both outlines — Stp/Nwy again: the Arctic coastline there is narrow enough that the nearest frontier point to the direct line sits in open water, not on Norway's own edge, so trimming the tip back toward the source (as the ordinary symbol-to-symbol case does) left the arrowhead in Stp, not Nwy. `_enterShape()` fixes this by spiralling outward from the border point — the true edge isn't necessarily straight ahead on a fjord coast, so a radial search beats extending the existing line — for the nearest point actually inside the destination's own outline, and a redirected arrow's tip stops there directly instead of being pulled back by `MOVE_TIP_GAP`.
-
-One related fix rides along: a support order names a *province* (`stp`), but the supported unit may be drawn on a **coast marker** (`stp/nc`), 190 map units away, so the support line used to miss the arrow entirely. `unitLoc()` resolves the province to the marker the unit is really on, via the `data-loc` attribute `_unitNode` already stamps for the drag code.
+(An earlier attempt also tried aiming move/support arrows at the geometric border between provinces instead of at the destination's unit symbol, to avoid long arrows visually crossing a third country. Reverted: the computed border points frequently landed too close to a province's edge to look right, and fixing that needed per-pair manual placement rather than a general geometric rule. Arrows go straight to the unit symbol again, trimmed by `MOVE_TIP_GAP`.)
 
 ---
 
