@@ -79,6 +79,8 @@ A support order names a *province* (`stp`), but the supported unit may be drawn 
 
 (An earlier attempt also tried aiming move/support arrows at the geometric border between provinces instead of at the destination's unit symbol, to avoid long arrows visually crossing a third country. Reverted: the computed border points frequently landed too close to a province's edge to look right, and fixing that needed per-pair manual placement rather than a general geometric rule. Arrows go straight to the unit symbol again, trimmed by `MOVE_TIP_GAP`.)
 
+Bulgaria's two coasts (`bul/sc`, `bul/ec`) are slivers barely wider than the fleet token itself. `center()`'s usual "unit spot + half the token" offset walks clean past their outline into the strait toward Constantinople, so a move arrow into either coast fell short of Bulgaria entirely, and a support-of-that-move's midpoint (see above — it's `center(target)`/`center(dest)` averaged) skewed the same way. This *is* the per-pair manual placement the general rule above was rejected in favor of: `CENTER_OVERRIDE` in `js/render.js` gives just these two locations a fixed point, checked against their own outline in `assets/standard.svg`. It only feeds `center()` — the unit token itself is still placed from the raw coordinate, unmoved.
+
 ---
 
 ## Touch is not hover

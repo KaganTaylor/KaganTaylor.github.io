@@ -103,6 +103,18 @@ const UNIT_W = 40;
 const UNIT_H = 26; // symbol viewBox 23x15 scaled to width 40
 const ANIM_MS = 950;
 
+// Bulgaria's two coasts are slivers barely wider than the fleet token itself.
+// center()'s usual "unit spot + half the token" offset walks clean past their
+// outline into the strait, so an order arrow aimed there (or a support line's
+// midpoint, which uses the same point) undershoots and never looks like it
+// reaches Bulgaria. Override just these two with a point checked against
+// their own outline in assets/standard.svg — everything else still uses the
+// unit spot, including the token itself, which this does not move.
+const CENTER_OVERRIDE = {
+  'bul/sc': { x: 1067, y: 1111 },
+  'bul/ec': { x: 1104, y: 1062 },
+};
+
 export class Board {
   constructor() {
     this.svg = null;
@@ -380,6 +392,7 @@ export class Board {
   }
 
   center(loc) {
+    if (CENTER_OVERRIDE[loc]) return CENTER_OVERRIDE[loc];
     const c = this.coords.get(loc) || this.coords.get(prov(loc));
     if (!c) return { x: 0, y: 0 };
     return { x: c.x + UNIT_W / 2, y: c.y + UNIT_H / 2 };
