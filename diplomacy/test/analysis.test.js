@@ -65,6 +65,36 @@ test('a position that comes back keeps the tree alive', () => {
   assert.equal(A.rootMatches(t, g), true, 'a GM undo brings the tree back');
 });
 
+// A tree saved by an EARLIER node model is void even though the position it
+// was rooted at has not moved — the bug that shipped once already. Its nodes
+// have no `game`, so the panel threw on the first row and came back blank.
+test('a tree written by an older node model is void', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const legacy = {
+    ...t,
+    v: undefined,
+    activeId: 'v2',
+    nodes: {
+      p1: { id: 'p1', seq: 1, kind: 'plan', parent: null, name: 'Plan A', mine: '' },
+      v2: { id: 'v2', seq: 2, kind: 'var', parent: 'p1', name: 'Main line', theirs: '' },
+    },
+  };
+  assert.equal(A.rootMatches(legacy, g), false, 'discarded, not carried forward');
+  assert.equal(A.lineCount(legacy), 0, 'so the discard notice stays quiet');
+  // and if one ever did reach the panel, nothing it holds may reach a renderer
+  assert.deepEqual(A.childrenOf(legacy, null), []);
+  assert.equal(A.getNode(legacy, 'p1'), null);
+  assert.equal(A.getNode(legacy, 'v2'), null);
+});
+
+test('a tree of this version survives', () => {
+  const g = live();
+  const t = A.newTree(g);
+  assert.equal(t.v, A.TREE_VERSION);
+  assert.equal(A.rootMatches(t, g), true);
+});
+
 // ---------------------------------------------------------------------------
 // 2. the branch rule
 // ---------------------------------------------------------------------------

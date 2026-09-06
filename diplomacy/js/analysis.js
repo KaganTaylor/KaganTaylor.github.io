@@ -43,6 +43,20 @@ import { branchGame, gameSettings, phaseLabel } from './state.js';
 // variation did — a few KB, plus a few more for each phase resolved in it.
 export const MAX_LINES = 30;
 
+// The SHAPE of the tree, not the position it hangs off. A tree is saved inside
+// the game in localStorage, so a released change to the node model meets trees
+// written by the previous one — and rootMatches() alone will not notice,
+// because the position it was rooted at is exactly the position still on the
+// board. The nodes then reach the panel with fields the renderer requires and
+// they do not have (a plan node has no `game`), the render throws, and the
+// panel comes back empty.
+//
+// So bump this whenever a node's shape changes. An unversioned or mismatched
+// tree is void, exactly like one whose position moved, and the same single
+// check throws it away (app.js validateAnalysis) — silently, since it holds no
+// lines as this version counts them.
+export const TREE_VERSION = 2;
+
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
 // ---------------------------------------------------------------------------
@@ -110,6 +124,7 @@ export function ordersAt(g, i) {
 
 export function newTree(liveGame) {
   return {
+    v: TREE_VERSION,
     root: positionOf(liveGame),
     rootKey: positionKey(liveGame),
     rootLabel: phaseLabel(liveGame),
@@ -127,7 +142,9 @@ export function newTree(liveGame) {
 // ✏ Edit board that touches no history at all — is covered without having to
 // be enumerated.
 export function rootMatches(tree, liveGame) {
-  return !!tree && !!liveGame && tree.rootKey === positionKey(liveGame);
+  if (!tree || !liveGame) return false;
+  if (tree.v !== TREE_VERSION) return false; // written by an older node model
+  return tree.rootKey === positionKey(liveGame);
 }
 
 // Is this game object one of our line views rather than a real game? The one
@@ -137,11 +154,19 @@ export function isLine(g) {
 }
 
 export function getNode(tree, id) {
-  return (tree && id && tree.nodes[id]) || null;
+  const n = (tree && tree.nodes && id && tree.nodes[id]) || null;
+  if (!n) return null;
+  if (n.kind === 'line') return n.game ? n : null;
+  return n.kind === 'folder' ? n : null;
 }
 
+// Only nodes this version understands. The version guard above is what keeps a
+// foreign tree out in the first place; this is the belt to its braces, so a
+// single malformed node can never blank the whole panel by throwing mid-render.
 export function allNodes(tree) {
-  return tree ? Object.values(tree.nodes) : [];
+  if (!tree || !tree.nodes) return [];
+  return Object.values(tree.nodes)
+    .filter((n) => n && (n.kind === 'line' ? !!n.game : n.kind === 'folder'));
 }
 
 export function lines(tree) {
@@ -161,12 +186,15 @@ export function canBranch(tree) {
 export function childrenOf(tree, parentId = null) {
   return allNodes(tree)
     .filter((n) => (n.parent || null) === (parentId || null))
-    .sort((a, b) => (a.pos - b.pos) || (a.seq - b.seq));
+    .sort((a, b) => ((a.pos || 0) - (b.pos || 0)) || (a.seq - b.seq));
 }
 
 function nextPos(tree, parentId) {
-  const sibs = childrenOf(tree, parentId);
-  return sibs.length ? sibs[sibs.length - 1].pos + 1 : 0;
+  let max = -1;
+  for (const s of childrenOf(tree, parentId)) {
+    if (Number.isFinite(s.pos) && s.pos > max) max = s.pos;
+  }
+  return max + 1;
 }
 
 export function descendantIds(tree, id) {

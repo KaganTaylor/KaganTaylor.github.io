@@ -2182,7 +2182,7 @@ function renderAnalysisUI() {
   $('ms-live').setAttribute('aria-pressed', String(!an));
   $('ms-analysis').setAttribute('aria-pressed', String(an));
   $('ms-analysis').querySelector('.ms-label').textContent = active ? active.name : 'Analysis';
-  setGated($('ms-analysis'), an ? null : why, an
+  setGated($('ms-analysis'), an ? null : why, active
     ? `${A.lineLabel(t, active.id)} — a private line off ${liveGame.name}, rooted at ${t.rootLabel}. ` +
       'Nothing here reaches the live game, and the whole tree is cleared when the live position moves on.'
     : 'Open a private tree of lines off this position');
@@ -2195,7 +2195,16 @@ function renderAnalysisUI() {
   setGated($('btn-resolve-final'), locked, $('btn-resolve-final').title);
 
   $('panel-analysis').hidden = !an;
-  if (!an || !active) return;
+  if (!an) return;
+  // The open line is gone from under us — a node the tree no longer has, or one
+  // this version cannot read. Reopening the entry line is the recovery; simply
+  // returning here would leave the panel on screen with an empty tree and no
+  // way back, which is exactly what a stale tree used to do.
+  if (!active) {
+    const id = A.ensureEntry(t, S.gameSettings(liveGame));
+    // and if even that is not openable, leave rather than recurse
+    return id !== game.nodeId ? openNode(id) : exitAnalysis();
+  }
   $('analysis-root').textContent =
     `Rooted at ${t.rootLabel} of “${liveGame.name}”. The whole tree is cleared when the live game moves past it.`;
   // The live game moved on while we were in here. The board keeps showing what

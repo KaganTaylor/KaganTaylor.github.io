@@ -250,6 +250,12 @@ Folders hold no orders, no position and no rules. That is the point. The earlier
 
 Each branched line stores `from = {lineId, index, key, label}`. If the line above is undone, or re-resolved into a different position, `isStale()` says so on the row — *⚠ the line it came from changed*. It is a flag and never a deletion: the child is a self-contained game, and the orders in it are the user's work. Re-resolving the parent back to the same position clears the flag on its own, since the comparison is on the position key rather than on a version counter.
 
+### The tree is versioned, because rootMatches cannot see a model change
+
+A tree lives inside the game in `localStorage`, so a released change to the node model meets trees written by the previous one. `rootMatches()` does not notice: the position the old tree was rooted at is *exactly* the position still on the board, so it says "still valid" and hands plan nodes to a renderer that requires a `game` field they have never had. The render throws after it has already emptied the tree host, and the panel comes back blank with the buttons still under it.
+
+That shipped once. `TREE_VERSION` is the fix: `rootMatches()` requires it, so a foreign tree is void for the same reason and through the same single check (`validateAnalysis`) as one whose position moved — and silently, since it holds no lines as the new version counts them. `getNode()`/`allNodes()` additionally drop any node this version cannot read, so one malformed node can never take the whole panel down with it. **Bump `TREE_VERSION` whenever a node's shape changes.**
+
 ### Saying which world you are in
 
 A line is the only mode you can be in *by accident*, so it is the loudest:
