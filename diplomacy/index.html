@@ -56,6 +56,16 @@
          board all carry the same colour, so "can what I do here change the
          real game?" is answerable at a glance from anywhere on the screen. -->
     <span id="mode-chip" class="mode-chip" hidden><span class="mc-icon"></span><span class="mc-text"></span></span>
+    <!-- ☁ Live / 🌿 Analysis. A two-state segmented control rather than a
+         button, so it says which side you are on as well as offering the
+         other one — the strongest single guard on this screen against
+         mistaking a hypothetical line for the real game. -->
+    <div id="mode-switch" role="group" aria-label="Live game or analysis" hidden>
+      <button id="ms-live" class="ms-btn" aria-pressed="true"
+              title="The live game — the real position, orders and deadline">☁ <span class="ms-label">Live</span></button>
+      <button id="ms-analysis" class="ms-btn" aria-pressed="false"
+              title="Open a private tree of plans and variations off this position">🌿 <span class="ms-label">Analysis</span></button>
+    </div>
     <span id="game-name"></span>
     <span id="phase-label"></span>
     <!-- the game master's local position has moved on from the shared link -->
@@ -82,7 +92,8 @@
       <div id="settings-menu">
         <button id="btn-publish" title="Publish this game as a read-only, shareable link">📣 Publish</button>
         <button id="btn-revert-published" hidden title="Throw away local changes and reload the position from the published link">⟲ Revert to published</button>
-        <button id="btn-open-source" hidden title="Go back to the game this sandbox was branched from">↩ Open source game</button>
+        <button id="btn-open-source" hidden title="Go back to the game this sandbox was copied from">↩ Open source game</button>
+        <button id="btn-copy-sandbox" title="Copy this position into a private sandbox — a permanent game of your own, unlike an analysis line">🧪 Copy to sandbox</button>
         <button id="btn-game-settings" title="Victory thresholds and support house-rule for this game">🎲 Game settings</button>
         <button id="btn-export" title="Download this game as a JSON file">📤 Export</button>
         <button id="btn-set-players" hidden title="Assign each power to the GitHub username that will submit its moves">👥 Set players</button>
@@ -135,9 +146,33 @@
         </div>
       </details>
 
-      <!-- history / branch (kept at the top: the one panel every viewer of a
-           live game reaches for first — jumping to a past turn or forking a
-           private copy to try something) -->
+      <!-- 🌿 analysis: the tree of plans and variations hanging off the live
+           position (js/analysis.js). Only on screen while a line is open —
+           the live game has no use for it, and the ☁/🌿 switch in the topbar
+           is how you get here. -->
+      <details id="panel-analysis" class="panel" open hidden>
+        <summary><h2>🌿 Analysis</h2></summary>
+        <p class="hint" id="analysis-root"></p>
+        <p class="analysis-locked" id="analysis-locked" hidden></p>
+        <div class="sandbox-row">
+          <label for="analysis-focus" class="hint">Planning as</label>
+          <select id="analysis-focus" title="Whose orders are the shared plan level: change them once and every variation under that plan follows"></select>
+        </div>
+        <div id="analysis-tree"></div>
+        <div class="btnrow">
+          <button id="an-new-var" title="Another reply to the same plan">⑂ Variation</button>
+          <button id="an-new-plan" title="A different plan of your own at this position">📋 Plan</button>
+          <button id="an-rename" title="Rename this variation">✎</button>
+          <button id="an-delete" title="Delete this variation and everything under it">🗑</button>
+        </div>
+        <div class="btnrow">
+          <button id="an-use-orders" title="Copy your own orders from this line into the live game's order box">↥ Use these orders live</button>
+        </div>
+        <p class="hint">Every line here is thrown away when the live game moves past the position they hang off. For a position worth keeping, use ⚙ → 🧪 Copy to sandbox.</p>
+      </details>
+
+      <!-- history (kept at the top: the one panel every viewer of a live game
+           reaches for first — jumping back to a past turn) -->
       <details id="panel-history" class="panel" open>
         <summary><h2>History</h2></summary>
         <select id="history-select"></select>
@@ -145,7 +180,6 @@
           <button id="btn-replay" title="Step through this past phase again">Replay</button>
           <button id="btn-undo" title="Undo the most recent phase — the board goes back and your orders return to the box">⤺ Undo</button>
           <button id="btn-redo" title="Redo the last undone phase">⤻ Redo</button>
-          <button id="btn-branch" title="Copy the current position into a private sandbox">🌿 Branch</button>
         </div>
       </details>
 
@@ -227,7 +261,7 @@
         <div class="btnrow">
           <button id="pb-continue" class="primary">Continue ➜</button>
           <button id="pb-copy" title="Copy a text summary of this phase's results for your group chat">📋 Copy results</button>
-          <button id="pb-branch" hidden title="Keep this outcome: copy the position it ends on into a private sandbox">🌿 Continue in a sandbox</button>
+          <button id="pb-branch" hidden title="Keep this outcome: copy the position it ends on into a private sandbox">🧪 Keep as a sandbox</button>
           <button id="pb-back-current" hidden>Back to current turn</button>
         </div>
       </div>
@@ -243,6 +277,7 @@
 
   <nav id="mobile-tabbar">
     <button class="mtab" data-sheet="orders" title="Orders &amp; history">📝<span>Orders</span></button>
+    <button class="mtab" id="mtab-analysis" data-sheet="analysis" hidden title="Analysis lines">🌿<span>Lines</span></button>
     <button class="mtab" data-sheet="standings" title="Standings">📊<span>Standings</span></button>
   </nav>
 

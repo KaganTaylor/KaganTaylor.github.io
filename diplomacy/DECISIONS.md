@@ -145,19 +145,21 @@ It was a ☰ burger. The button does not open a drawer or expand a menu — it l
 
 A game is either **☁ online** — a published gist, with one authoritative position and one writer — or **🧪 a sandbox**: private to this browser, freely editable, disposable. "Local game", "practice game", "branch" and "empty-board sandbox" used to be four things; they are all the second one now.
 
-The reason is that the game is only ever really *played* online. Everything local is thinking-out-loud: setting up a position to check a tactic, branching the live game to plan three moves ahead, blitzing a few turns to see where a year goes. Those want the same permissions as each other (edit anything, resolve anything, throw it away), and the *opposite* permissions from the real game. Two kinds, drawn along the line that actually matters — *can what I do here change the real game?* — beat four kinds drawn along how the file happened to be created.
+The reason is that the game is only ever really *played* online. Everything local is thinking-out-loud: setting up a position to check a tactic, copying the live game to plan three moves ahead, blitzing a few turns to see where a year goes. Those want the same permissions as each other (edit anything, resolve anything, throw it away), and the *opposite* permissions from the real game. Two kinds, drawn along the line that actually matters — *can what I do here change the real game?* — beat four kinds drawn along how the file happened to be created.
 
-`gameMode()` in `js/app.js` names the four faces of those two kinds: `sandbox`, `gm`, `player` (an assigned power) and `spectator`. It is written to `#game-screen[data-mode]`, so the stylesheet reads the same answer the interaction code does and the two cannot drift apart. It is derived from `isOwnerView()`, not raw `isOwner`, so a game master who has switched `🎭 Play as → 🧑 Player` sees the `player` colours too — see below.
+A **🌿 analysis line is not a third kind**. It is a *view* of an online game — one node of the tree hanging off its current position — that happens to wear a game object so the rest of the app can work on it unchanged. It is never in the saved-games map, so the two kinds above still describe everything that is. See *A line is a view, not a game*, below.
+
+`gameMode()` in `js/roles.js` names the five faces of that: `sandbox`, `gm`, `player` (an assigned power), `spectator` and `analysis`. It is written to `#game-screen[data-mode]`, so the stylesheet reads the same answer the interaction code does and the two cannot drift apart. It is derived from `isOwnerView()`, not raw `isOwner`, so a game master who has switched `🎭 Play as → 🧑 Player` sees the `player` colours too — see below.
 
 ### The state is visible before it is enforced
 
 A rule you can only discover by tripping over it is a bad rule. So the mode is on screen in three places at once, in one colour — amber for sandbox, blue for online:
 
-- a **chip** beside the game's name (`🧪 Sandbox`, `☁ Live · 👑 Game master`, `☁ Live · 🎖 France`, `☁ Live · 👁 Watching`),
+- a **chip** beside the game's name (`🧪 Sandbox`, `☁ Live · 👑 Game master`, `☁ Live · 🎖 France`, `☁ Live · 👁 Watching`, `🌿 Analysis · Munich gambit ▸ Russia holds`),
 - a **stripe** along the top edge of the topbar,
 - a **ring** around the board itself.
 
-The home screen carries the same split: online games and sandboxes are separate labelled groups, each row tinted to match, each with its icon, the role you hold, the deadline countdown, and — for a branch — the game it came from.
+The home screen carries the same split: online games and sandboxes are separate labelled groups, each row tinted to match, each with its icon, the role you hold, the deadline countdown, and — for a copy — the game it came from. Analysis lines are deliberately absent from it; see below.
 
 On a phone the chip keeps its colour and icon and drops its words, and `#phase-label` is hidden outright. The topbar is a row of `flex: none` items and had no give left once the chip and the ● pill joined it; the phase label is the one thing in it that is already on screen twice, since `Board.setPhaseText()` prints the same string into the corner of the map. That protects the rule from the mobile-layout section: ⚙ Settings must never be what gets pushed off the edge.
 
@@ -177,7 +179,88 @@ The old behaviour resolved the viewer's own copy, and only after an auto-publish
 
 A preview keeps `Continue ➜` (relabelled *▶ Play the moves*) so the animation still plays, but it stops on the resulting position instead of advancing a phase — there is no next phase to advance into.
 
-That leaves branching as the single escape hatch from every read-only situation, so it is reachable from everywhere: ⚙ Settings, the History panel, and the preview itself. A branch records where it came from (`branchedFrom`), shows it, and offers **↩ Open source game** to get back.
+That leaves **🌿 Analysis** as the escape hatch from every read-only situation (below), with **🧪 Copy to sandbox** — reachable from ⚙ Settings and from the preview itself — as the permanent version of the same idea. A sandbox copy records where it came from (`branchedFrom`), shows it, and offers **↩ Open source game** to get back.
+
+---
+
+## 🌿 Analysis: a tree of lines, not a pile of branches
+
+The old **🌿 Branch** made a full peer game: its own name in the saved-games map, its own home-screen row, its own delete button. Which is exactly why it went stale. A snapshot with an independent identity cannot be kept attached to anything, so every time the live game moved you had to delete your branch and re-branch from the new position — maintaining, by hand, a parallel copy of a game that already knew how to update itself.
+
+The fix is not to sync branches. It is to stop making them games.
+
+### A line is a view, not a game
+
+An analysis line is the **👁 Preview** (`shadowGame()`/`previewResolve()`) made persistent and nestable. The whole tree lives on `liveGame.analysis` (`js/analysis.js`), so it is saved and loaded with the game it belongs to, has no identity of its own, and never appears on the home screen. There is nothing to keep in step by hand because there is no second copy.
+
+The implementation is **two pointers** in `js/app.js`. `liveGame` is the real game; `game` is what is on screen — normally `liveGame`, but while a line is open it points at that line's own game object instead. A line *is* an ordinary game object (`state.js branchGame` over the variation's stored position), so every drag, coast picker, retreat, build, board edit, resolve and playback in the file works on one without knowing analysis exists.
+
+The alternative was to keep `game` as the live game and thread a `view()` through the render path. That is more principled and was rejected anyway: it means editing ~45 call sites, the riskiest of which are the drag handlers that mutate `game.units`, and missing one shows live state inside a line — the precise confusion this feature has to prevent. The pointer swap inverts the cost onto the online/publish/deadline code, which is one contiguous block, already takes `game` as an explicit argument throughout (`O.*(game, online, …)`), and whose failure mode if a site were missed is a blank deadline chip rather than a corrupted board.
+
+Two choke points make it safe: `saveCurrent()` (a line saves *through* `liveGame`, so no line can reach the saved-games map) and `refreshOnlineStatus()` (always targets `liveGame`, so the poll keeps running while you are in a line — which is what lets a publish arriving mid-analysis void the tree straight away).
+
+### The tree is rooted at one position and dies with it
+
+> **A tree is rooted at exactly one position. If the live game is no longer at that position, the whole tree is void.**
+
+`validateAnalysis()` enforces it from **one place**: the top of `refreshAll()`. Every state change in the app ends in a `refreshAll()`, so that single check covers a GM publish, a catch-up, an undo, a revert and an ✏ Edit board that touches no history at all — none of which have to know analysis exists. Enumerating those paths individually is how you miss the sixth one.
+
+It compares the **position** (`positionKey`), not the history, and sorts the arrays first — the adjudicator rebuilds `units` every phase and the editor splices it, so identical boards routinely differ in array order, and comparing raw JSON would discard a tree for nothing.
+
+That is also why a pending catch-up **locks** analysis rather than deleting it. While `catchUpTarget` is set, 🌿 is gated with the reason spoken out loud (*"2 new phases to resolve first"* — see *A greyed-out button must be able to say why*); the tree is only discarded once the position has actually changed. A game master who undoes a phase and re-resolves it identically lands back on the same board, and there is nothing wrong with the lines hanging off it. Deleting on sight would have burned that work for no reason.
+
+Lines are therefore **deliberately temporary**, and the app says so in the panel. **🧪 Copy to sandbox** is the other half of the pair: a real, permanent, freely editable game for a position worth keeping past the next publish. Temporary-and-attached and permanent-and-detached are different jobs; one control cannot be both, which is what the old 🌿 Branch was trying to be.
+
+### Why plans and variations are two levels
+
+This is the one place the chess analogy breaks, and getting it wrong would make the tree useless.
+
+In chess, moves alternate, so a tree of single moves nests my-move/their-move on its own. **In Diplomacy all seven powers write orders for the same phase simultaneously**, so "my plan" and "their reply to it" cannot be parent and child — they are one order set. You cannot branch on a single move at all.
+
+So a phase splits in two instead:
+
+```
+🌿 Spring 1901 — Movement   (the live position)
+├─ 📋 Munich gambit                  ← my orders
+│   ├─ 🔀 Russia holds        →  Fall 1901
+│   │      └─ 📋 Press on
+│   │             ├─ 🔀 Austria bounces me
+│   │             └─ 🔀 Austria folds
+│   └─ 🔀 Russia to Galicia    →  Fall 1901
+└─ 📋 North first                    ← a different plan of mine
+    └─ 🔀 quiet England
+```
+
+A **plan** holds the focus power's orders and is a folder with no position of its own; a **variation** holds what everyone else does and is the only kind that resolves. Edit the plan and every variation under it moves with it — one plan, many replies, which is exactly "try my move, then explore all of theirs". `activeId` always names a variation: a plan is not a full order set, so it is never a board.
+
+The split maps onto machinery that already existed — `orders-text.js splitForFilter()` is precisely *my orders* / *everyone else's* — so the order box stays one textarea and the two levels are separated only when the box is stored back into the node.
+
+Two consequences worth recording:
+
+- **With no focus power the plan level is empty**, variations are full order sets, and the tree renders flat. The two-level model degenerates cleanly into the one-level model rather than needing a second code path.
+- **Changing the focus power splits plans rather than merging them.** Sibling variations normally disagree about the new focus power's orders, since until then those orders were variation-local. A plan is shared by definition, so they cannot all sit under one: the first set keeps the plan and each distinct other set gets a plan of its own. Nothing is discarded, and the result is right — *those two replies were really two different German plans all along*.
+
+### An edit means an edit, not a re-render
+
+`setNodeOrders()` compares what the orders **say** (`orderContent`: per power, normalized, empty blocks dropped), never the raw text. The order box is refilled from a blank per-phase template on every render, so a variation reopened and left untouched comes back carrying a bare `ITALY` heading it did not have before. `normalizeOrders()` alone keeps that line — it has content — so comparing on it read every single re-render as an edit and wiped the resolved outcome underneath. Both halves of that (the empty-block drop, and the fact that a plan edit invalidates its siblings while a variation edit does not) are pinned by `test/analysis.test.js`.
+
+### Saying which world you are in
+
+A line is the only mode you can be in *by accident*, so it is the loudest:
+
+- the `☁ Live | 🌿 Analysis` **switch** in the topbar is a two-state segmented control, not a button — the lit half is where you are, so the switch is the indicator as well as the way out;
+- `data-mode="analysis"` turns the topbar stripe, the chip and the board ring **violet**, and the ring is thicker than the other modes';
+- the chip names the open line (`🌿 Analysis · Munich gambit ▸ Russia holds`);
+- `Board.setPhaseText()` prints `🌿 ANALYSIS —` onto the map itself, which is the only one of these that survives a full-screen phone with every panel closed;
+- every control that could reach the real game — 📤 Submit, ☁ Publish changes, the ● pill, ⏰ Deadline, 👥 Set players, ⤺ Undo — is **gone**, not disabled. A line is a different place.
+
+And one bridge back, because without it people retype orders by hand and that is where the mistakes are: **↥ Use these orders live** copies the focus power's orders from the line into the live *draft* box and switches to ☁ Live. Only your own orders, and never into a submission.
+
+### `stripForPublish` is a drop list, and that is now a tested fact
+
+`game.json` is world-readable, and `stripForPublish()` in `js/publish.js` publishes `...rest` after destructuring the private fields away — so a new field on the game object is published unless someone thinks about it. An `analysis` tree published that way would hand every player at the table their opponent's plans, with nothing on screen looking wrong.
+
+`test/publish-strip.test.js` therefore asserts the payload's **exact key set**, so any new game field fails the suite until it has been classified as shared or private. That guard is worth more than the feature that prompted it.
 
 ### The ● pill: saying out loud what boardDirty() already knew
 

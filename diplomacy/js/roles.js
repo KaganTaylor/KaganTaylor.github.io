@@ -6,20 +6,26 @@
 //               game master). Nobody else's board actions can move it, and the
 //               GM's only move it once they publish.
 //   🧪 sandbox — everything else: private to this browser, freely editable,
-//               freely resolvable, disposable. Branches, "practice games" and
-//               the old empty-board sandbox are all just this — there is no
-//               third kind, because the game is only ever really played
-//               online and everything local is thinking-out-loud.
+//               freely resolvable, disposable. "Practice games", 🧪 Copy to
+//               sandbox and the old empty-board sandbox are all just this —
+//               there is no third kind, because the game is only ever really
+//               played online and everything local is thinking-out-loud.
 //
-// gameMode() names the four faces of that: 'sandbox', 'gm', 'player' (an
-// assigned power in an online game) and 'spectator'. It is written to
-// #game-screen[data-mode], which drives every piece of state colouring in the
-// stylesheet, so the two models cannot drift apart.
+// A 🌿 ANALYSIS LINE IS NOT A THIRD KIND. It is a *view* of an online game —
+// one node of the tree hanging off its current position (js/analysis.js) —
+// wearing an ordinary game object so that every drag, resolve and board edit
+// in app.js works on it unchanged. It is never saved as a game of its own, so
+// the two kinds above still describe everything in the saved-games map.
+//
+// gameMode() names the five faces of that: 'sandbox', 'gm', 'player' (an
+// assigned power in an online game), 'spectator' and 'analysis'. It is written
+// to #game-screen[data-mode], which drives every piece of state colouring in
+// the stylesheet, so the two models cannot drift apart.
 //
 // Every function here is a pure question about a game object — no DOM, no
 // network, no module state — so the whole permission matrix is testable
 // without a browser. See DECISIONS.md, "There are two kinds of game, and only
-// two" and "🎭 Play as".
+// two", "A line is a view, not a game" and "🎭 Play as".
 
 import { boardSnapshot } from './state.js';
 
@@ -27,12 +33,22 @@ export function isOnline(game) {
   return !!(game && game.published);
 }
 
+// A line view (js/analysis.js lineGame) rather than a real game. Checked
+// before isSandbox() everywhere, because a line looks exactly like a sandbox
+// from the outside — unpublished, freely editable — and must not be granted a
+// sandbox's one irreversible power: 📣 Publish would turn a hypothetical into
+// the live game.
+export function isAnalysisLine(game) {
+  return !!(game && game.analysisOf);
+}
+
 export function isSandbox(game) {
-  return !!game && !isOnline(game);
+  return !!game && !isOnline(game) && !isAnalysisLine(game);
 }
 
 export function gameMode(game) {
   if (!game) return '';
+  if (isAnalysisLine(game)) return 'analysis';
   if (!isOnline(game)) return 'sandbox';
   if (isOwnerView(game)) return 'gm';
   return assignedPower(game) ? 'player' : 'spectator';

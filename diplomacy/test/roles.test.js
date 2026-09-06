@@ -11,7 +11,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  isOnline, isSandbox, gameMode, isPlayingAsPlayer,
+  isOnline, isSandbox, isAnalysisLine, gameMode, isPlayingAsPlayer,
   isReadOnly, isOwnerView, boardDirty, myCountry, assignedPower,
 } from '../js/roles.js';
 import { newGame, boardSnapshot } from '../js/state.js';
@@ -39,10 +39,36 @@ test('a game is online or a sandbox, and nothing else', () => {
   assert.equal(isOnline(online()), true);
   assert.equal(isSandbox(online()), false);
 
-  // a branch is just a sandbox, however it was made
-  const branch = { ...sandbox(), branchedFrom: { name: 'the real game', gistId: 'abc123' } };
-  assert.equal(isSandbox(branch), true);
-  assert.equal(gameMode(branch), 'sandbox');
+  // a copy is just a sandbox, however it was made
+  const copy = { ...sandbox(), branchedFrom: { name: 'the real game', gistId: 'abc123' } };
+  assert.equal(isSandbox(copy), true);
+  assert.equal(gameMode(copy), 'sandbox');
+});
+
+// An analysis line wears a game object so that every drag, resolve and board
+// edit in app.js works on it unchanged — which means it looks exactly like a
+// sandbox from the outside. It must not be granted a sandbox's one
+// irreversible power: 📣 Publish, which would turn a hypothetical into the
+// live game everyone else is playing.
+test('an analysis line is a view, not a third kind of game', () => {
+  const line = { ...sandbox(), analysisOf: { name: 'the real game', gistId: 'abc123' }, nodeId: 'v2' };
+  assert.equal(isAnalysisLine(line), true);
+  assert.equal(isSandbox(line), false, 'or ⚙ → 📣 Publish would offer to publish a hypothetical');
+  assert.equal(isOnline(line), false);
+  assert.equal(gameMode(line), 'analysis');
+  assert.equal(isAnalysisLine(sandbox()), false);
+  assert.equal(isAnalysisLine(online()), false);
+});
+
+test('a line is freely writable, whatever the game around it allows', () => {
+  // The point of analysis is that it is the escape hatch from every read-only
+  // situation: a spectator's line resolves, edits and undoes like a sandbox,
+  // because nothing in it can reach the published position.
+  const line = { ...sandbox(), analysisOf: { name: 'the real game', gistId: 'abc123' } };
+  assert.equal(isReadOnly(line), false);
+  assert.equal(boardDirty(line), false, 'a line is never a change waiting to be published');
+  assert.equal(myCountry(line), '', 'a line shows every power at once');
+  assert.equal(assignedPower(line), '');
 });
 
 test('no game at all is not a mode', () => {
@@ -60,7 +86,7 @@ test('no game at all is not a mode', () => {
 // the four faces
 // ---------------------------------------------------------------------------
 
-test('gameMode names all four faces', () => {
+test('gameMode names all five faces', () => {
   assert.equal(gameMode(sandbox()), 'sandbox');
   assert.equal(gameMode(gm()), 'gm');
   assert.equal(gameMode(online()), 'spectator', 'no assignment = watching');
@@ -69,6 +95,17 @@ test('gameMode names all four faces', () => {
     'player',
     'an assigned power is a player'
   );
+  assert.equal(gameMode({ ...sandbox(), analysisOf: { name: 'x' } }), 'analysis');
+});
+
+// #game-screen[data-mode] is the one thing the stylesheet reads, so a mode the
+// CSS has no colour for is a screen that silently looks like another mode.
+test('every face has a name the stylesheet can key off', () => {
+  const modes = ['sandbox', 'gm', 'player', 'spectator', 'analysis'];
+  for (const g of [sandbox(), gm(), online({ assignedPower: 'france' }), online(),
+    { ...sandbox(), analysisOf: { name: 'x' } }]) {
+    assert.ok(modes.includes(gameMode(g)), `${gameMode(g)} is not a known mode`);
+  }
 });
 
 test('a sandbox is writable; a published game you do not own is not', () => {

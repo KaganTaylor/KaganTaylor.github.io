@@ -136,11 +136,15 @@ a { color: #7fb4ff; }
    blue = ☁ online (shared, and only the game master moves it). The mode is
    written to #game-screen[data-mode] by refreshAll(), so the stylesheet and
    the interaction rules cannot disagree about which state we are in. */
+/* Violet is the third answer: 🌿 analysis — a private line off the live game,
+   where nothing you do reaches it. It is deliberately the loudest of the
+   three, because it is the only one you can be in by accident. */
 #topbar { border-top: 3px solid transparent; }
 #game-screen[data-mode="sandbox"] #topbar { border-top-color: #a97a3f; }
 #game-screen[data-mode="gm"] #topbar { border-top-color: #4f7ec0; }
 #game-screen[data-mode="player"] #topbar { border-top-color: #4f7ec0; }
 #game-screen[data-mode="spectator"] #topbar { border-top-color: #5b6472; }
+#game-screen[data-mode="analysis"] #topbar { border-top-color: #9b6fd6; }
 
 .mode-chip {
   flex: none; display: inline-flex; align-items: center; gap: 5px;
@@ -151,6 +155,19 @@ a { color: #7fb4ff; }
 #game-screen[data-mode="gm"] .mode-chip { background: #24314a; color: #a8c8f5; border-color: #4f7ec0; }
 #game-screen[data-mode="player"] .mode-chip { background: #1f2b40; color: #8fb4ea; border-color: #3f5c8f; }
 #game-screen[data-mode="spectator"] .mode-chip { background: #262b33; color: #9aa4b2; border-color: #4a5361; }
+#game-screen[data-mode="analysis"] .mode-chip { background: #2c2340; color: #cbb0f5; border-color: #7d5cb8; }
+
+/* ☁ Live | 🌿 Analysis. Both halves always visible: the lit one is where you
+   are, the other is one tap away, so the switch is the indicator too. */
+#mode-switch { flex: none; display: inline-flex; border-radius: 9px; overflow: hidden; border: 1px solid #454c58; }
+#mode-switch .ms-btn {
+  border: none; border-radius: 0; padding: 3px 9px; font-size: 0.8em;
+  min-height: 0; background: #262b33; color: #98a2b0;
+}
+#mode-switch .ms-btn + .ms-btn { border-left: 1px solid #454c58; }
+#mode-switch .ms-btn:hover { background: #2f353f; }
+#ms-live.on { background: #24314a; color: #a8c8f5; }
+#ms-analysis.on { background: #2c2340; color: #cbb0f5; }
 
 /* The ● pill: the game master's position has moved on from the shared link.
    boardDirty() already knew; without this it only ever greyed out a button
@@ -172,6 +189,7 @@ a { color: #7fb4ff; }
 #game-screen[data-mode="gm"] #board-pane { box-shadow: inset 0 0 0 2px rgba(79, 126, 192, .40); }
 #game-screen[data-mode="player"] #board-pane { box-shadow: inset 0 0 0 2px rgba(79, 126, 192, .26); }
 #game-screen[data-mode="spectator"] #board-pane { box-shadow: inset 0 0 0 2px rgba(91, 100, 114, .30); }
+#game-screen[data-mode="analysis"] #board-pane { box-shadow: inset 0 0 0 3px rgba(155, 111, 214, .55); }
 #board { margin: auto; width: 100%; height: 100%; }
 #board svg { width: 100%; height: 100%; display: block; }
 
@@ -215,6 +233,30 @@ details.panel:not([open]) summary { margin-bottom: 0; }
 }
 .branch-note { margin: 0 0 8px; color: #c9a46b; font-size: 0.85em; }
 #panel-playback.preview #playback-title { color: #8fb4ea; }
+#game-screen[data-mode="analysis"] .draft-note {
+  background: #241d33; border-left-color: #9b6fd6; color: #cbb0f5;
+}
+
+/* ---------- 🌿 analysis tree ---------- */
+/* Plans are folders holding one power's orders; the variations under them are
+   what the other six do, and the only rows that name a position. Indentation
+   is the whole structure — see js/analysis.js. */
+#analysis-tree { margin: 8px 0; display: flex; flex-direction: column; gap: 2px; }
+.an-row {
+  display: flex; align-items: baseline; gap: 6px; width: 100%;
+  text-align: left; background: none; border: 1px solid transparent;
+  border-radius: 6px; padding: 4px 6px; color: #c8cfda; font-size: 0.9em;
+}
+.an-row:hover { background: #2c313a; }
+.an-row.an-plan { color: #cbb0f5; }
+.an-row.active { background: #2c2340; border-color: #7d5cb8; color: #eadfff; }
+.an-row .an-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.an-row .an-meta { flex: none; color: #7f8896; font-size: 0.85em; }
+.an-row .an-meta.warn { color: #ffc46b; }
+.analysis-locked {
+  margin: 0 0 8px; padding: 6px 9px; border-radius: 6px; font-size: 0.85em;
+  background: #3a2f18; border-left: 3px solid #8a6a2f; color: #ffc46b;
+}
 
 /* ---------- online play (submissions + player assignments) ---------- */
 #submit-status { margin: 6px 0; }
@@ -405,8 +447,11 @@ dialog.modal h2 { margin: 0 0 14px; font-size: 1.1rem; }
   /* The state indicators keep their colour but drop their words — the icon
      and the ● dot carry it, and the game's name is worth more room than the
      label. The topbar stripe and the board ring are unaffected. */
-  .mode-chip .mc-text, .sync-pill .sp-text { display: none; }
+  .mode-chip .mc-text, .sync-pill .sp-text, #mode-switch .ms-label { display: none; }
   .mode-chip, .sync-pill { padding: 2px 6px; font-size: 0.75em; min-height: 0; }
+  /* The ☁/🌿 switch keeps both halves on a phone — it is the way back out of
+     a line, so it is the one thing in this bar that may not lose a state. */
+  #mode-switch .ms-btn { padding: 4px 8px; font-size: 0.9em; min-height: 0; }
   /* The game's name is the only thing here that can afford to lose room, so
      it is the only thing allowed to: everything else in the bar is flex: none
      and would otherwise push ⚙ Settings off the right-hand edge between them. */
@@ -463,9 +508,13 @@ dialog.modal h2 { margin: 0 0 14px; font-size: 1.1rem; }
   #sidebar.sheet-open { transform: translateY(0); }
 
   /* Which panels belong to which mobile tab. Standings shows its own small
-     panel so the sheet stays short and the board behind it is still usable. */
-  #sidebar[data-sheet="orders"] > #panel-standings { display: none; }
+     panel so the sheet stays short and the board behind it is still usable;
+     the 🌿 tree gets the same treatment, since picking a line and writing its
+     orders are two separate jobs and each wants the map visible. */
+  #sidebar[data-sheet="orders"] > #panel-standings,
+  #sidebar[data-sheet="orders"] > #panel-analysis { display: none; }
   #sidebar[data-sheet="standings"] > .panel:not(#panel-standings) { display: none; }
+  #sidebar[data-sheet="analysis"] > .panel:not(#panel-analysis) { display: none; }
 
   #orders-text { min-height: 140px; }
 
@@ -483,6 +532,8 @@ dialog.modal h2 { margin: 0 0 14px; font-size: 1.1rem; }
   #mobile-tabbar .mtab span { font-size: 0.95em; }
   #mobile-tabbar .mtab.active { color: #6fce7f; }
   #mobile-tabbar .mtab:hover { background: #2c313a; }
+  /* .mtab sets display:flex, which outranks the [hidden] attribute on its own */
+  #mobile-tabbar .mtab[hidden] { display: none; }
 
   #toast { bottom: calc(var(--tabbar-h) + 12px); }
 

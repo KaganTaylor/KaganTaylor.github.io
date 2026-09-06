@@ -18,6 +18,7 @@ import { PROVINCES, POWERS } from './map-data.js';
 import * as R from './roles.js';
 import * as T from './orders-text.js';
 import * as O from './online-rules.js';
+import * as A from './analysis.js';
 import {
   cap, provName, fmtLoc, fmtOrder, fmtCountdown, fmtCountdownDHMS, fmtWhen,
   isoToLocalInput, COAST_NAMES, POWER_FLAGS,
@@ -34,8 +35,33 @@ import {
 const $ = (id) => document.getElementById(id);
 
 let board;
+// THE TWO POINTERS. `liveGame` is the real game — the published gist or the
+// sandbox — and is the only thing that is ever saved under its own name, the
+// only thing the online/publish/deadline code ever touches, and the thing the
+// 60s poll reconciles against the gist. `game` is what is ON SCREEN: normally
+// liveGame itself, but while a 🌿 analysis line is open it points at that
+// line's own game object instead (js/analysis.js lineGame).
+//
+// That indirection is the whole implementation of analysis. A line IS a game
+// object, so every drag, coast picker, retreat, build, board edit, resolve and
+// playback below works on one without knowing it exists; only the code that
+// must reach the real game — publishing, submitting, deadlines — says
+// `liveGame`, and it is all in one contiguous block near the bottom of this
+// file. See DECISIONS.md, "A line is a view, not a game".
+let liveGame = null;
 let game = null;
 let playback = null; // {entry, step, orders, readonly, animating}
+// The live game's order box, parked while a line is open so a player's
+// unsubmitted draft survives a trip into analysis and back. Nothing else
+// persists the box (a reload has always started from the blank template), so
+// this is a session-lifetime stash, not a new piece of saved state.
+let liveDraft = null;
+// A tree that validateAnalysis() has just thrown away, waiting to be said out
+// loud once the render it interrupted has finished.
+let discardedLines = 0;
+// Debounces the localStorage write behind order-box edits inside a line: the
+// node is updated in memory on every keystroke, the save follows a beat later.
+let lineSaveTimer = null;
 let editMode = false;
 let editTool = 'A';
 let lastParsed = { orders: [], errors: [], byProv: new Map() };
@@ -136,8 +162,18 @@ let catchUpTarget = null;
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+const phaseKindOf = (g) =>
+  g.step === 'movement' ? 'movement' : g.step === 'retreat' ? 'retreat' : 'adjustment';
+
+// The phase the ORDER BOX is being parsed for — the line's, when one is open.
 function phaseKind() {
-  return game.step === 'movement' ? 'movement' : game.step === 'retreat' ? 'retreat' : 'adjustment';
+  return phaseKindOf(game);
+}
+
+// The phase the live game is on, whatever is on screen. Everything that parses
+// submitted orders is talking about the real game, never about a line.
+function livePhaseKind() {
+  return phaseKindOf(liveGame);
 }
 
 function unitAt(p) {
@@ -286,7 +322,7 @@ function homeRow(g) {
     bits.push(`<span class="badge deadline${left > 0 ? '' : ' past'}">⏰ ${left > 0 ? 'in ' + fmtCountdown(left) : 'passed'}</span>`);
   }
   if (g.branchedFrom) {
-    bits.push(`<span class="meta from">🌿 from ${escapeText(g.branchedFrom.name)}` +
+    bits.push(`<span class="meta from">🧪 from ${escapeText(g.branchedFrom.name)}` +
       `${g.branchedFrom.label ? ' · ' + escapeText(g.branchedFrom.label) : ''}</span>`);
   }
   load.innerHTML = bits.join(' ');
@@ -328,27 +364,46 @@ function uniqueName(base) {
 // in js/roles.js so it can be tested without a browser — the doc comments that
 // used to sit here went with it. These wrappers bind the module-level `game`,
 // so every call site below reads exactly as it always has.
-const isOnline = () => R.isOnline(game);
-const isSandbox = () => R.isSandbox(game);
+// These all ask about MY ROLE IN THE REAL GAME, so they read `liveGame` and
+// keep their answer while a line is open — an analysis line does not make a
+// spectator into a game master, and stepping into one must not make the
+// deadline, the submission status or the ● pill forget who I am. The one that
+// is deliberately about the VIEW is gameMode(), which is what colours the
+// screen: it reads `game`, so it says 'analysis' the moment a line is open.
+const isOnline = () => R.isOnline(liveGame);
+const isSandbox = () => R.isSandbox(liveGame);
 const gameMode = () => R.gameMode(game);
-const isPlayingAsPlayer = () => R.isPlayingAsPlayer(game);
-const isReadOnly = () => R.isReadOnly(game);
-const isOwnerView = () => R.isOwnerView(game);
-const boardDirty = () => R.boardDirty(game);
-const myCountry = () => R.myCountry(game);
-const assignedPower = () => R.assignedPower(game);
+const isPlayingAsPlayer = () => R.isPlayingAsPlayer(liveGame);
+const isReadOnly = () => R.isReadOnly(liveGame);
+const isOwnerView = () => R.isOwnerView(liveGame);
+const boardDirty = () => R.boardDirty(liveGame);
+const assignedPower = () => R.assignedPower(liveGame);
+
+// Am I looking at an analysis line rather than the game itself?
+const inAnalysis = () => A.isLine(game);
+// The open game's analysis tree, or null. Always the LIVE game's — a line
+// never carries one; it is one.
+const tree = () => (liveGame && liveGame.analysis) || null;
+
+// Which power's orders the visible textarea shows, everything else going to
+// the hidden buffer. A line shows every power at once: exploring what the
+// other six might do is the entire point, and the plan/variation split that
+// keeps my own orders separate is applied when the box is stored back into the
+// tree (analysis.js setNodeOrders), not by hiding half of it here.
+const myCountry = () => (inAnalysis() ? '' : R.myCountry(liveGame));
 
 function openGame(g) {
+  liveGame = g;
   game = g;
   g.settings = S.gameSettings(g); // fill defaults for games saved before settings existed
   playback = null;
   gmOrdersLoaded = false;
+  liveDraft = null;
   catchUpTarget = null; // re-established below/by refreshOnlineStatus() for THIS game, not whatever was last open
   online = { comments: null, moves: null, login: null, restored: false, serverOffset: 0, sealKey: null };
   justWrote = null; // belongs to whichever game we just left
   S.saveGame(game);
   showScreen('game-screen');
-  $('game-name').textContent = game.name;
   mobileSheet = null;
   setEditMode(isSandbox() && game.units.length === 0);
   // A real player's order box is a second thing to check, not the reason
@@ -360,9 +415,20 @@ function openGame(g) {
 }
 
 function refreshAll() {
+  // ONE CHOKE POINT for the analysis lifetime rule. Every state change in the
+  // app comes back through refreshAll(), so checking here covers the paths
+  // that move the live position — a GM publish, a catch-up, an undo, an
+  // ✏ Edit board — without any of them having to know analysis exists.
+  validateAnalysis();
+  const an = inAnalysis();
   $('game-screen').dataset.mode = gameMode();
+  // The topbar always names the REAL game, whichever line is open; which line
+  // that is belongs to the mode chip, not to the game's identity.
+  $('game-name').textContent = liveGame ? liveGame.name : '';
   $('phase-label').textContent = S.phaseLabel(game);
-  board.setPhaseText(S.phaseLabel(game));
+  // Said on the map itself, so it survives a full-screen phone with every
+  // panel closed — the one place mode confusion would otherwise be invisible.
+  board.setPhaseText((an ? '🌿 ANALYSIS — ' : '') + S.phaseLabel(game));
   board.setInfluence(game.scOwners);
   board.setUnits(game.units, game.step === 'retreat' ? game.pending.dislodged : []);
   board.clearOrders();
@@ -370,15 +436,20 @@ function refreshAll() {
   updatePlaybackFloat();
   // The GM's order box stays out of the way until they deliberately ⬇ Load
   // orders (⏰ Deadline panel) — see gmLoadOrders()/gmOrdersLoaded. Everyone
-  // else (sandboxes, players, spectators) sees it as before.
-  const gmGated = isOwnerView() && game.published && !gmOrdersLoaded;
+  // else (sandboxes, players, spectators) sees it as before. A line has its
+  // own orders and is never gated on the live game's publish flow.
+  const gmGated = !an && isOwnerView() && liveGame.published && !gmOrdersLoaded;
   $('panel-orders').hidden = gmGated;
-  const ro = isReadOnly();
+  // Nothing done inside a line can reach the real game, so a line is never
+  // read-only however read-only the game around it is — that is the whole
+  // point of it, and the reason branching was the escape hatch from every
+  // read-only situation in the first place.
+  const ro = !an && isReadOnly();
   // An assigned player is always drafting their own power, so there is
   // nothing to pick — the selector is only for a spectator choosing which
   // country to sketch orders for.
   const isPlayer = gameMode() === 'player';
-  $('country-row').hidden = !ro || isPlayer;
+  $('country-row').hidden = an || !ro || isPlayer;
   if (ro) renderCountrySelect();
   $('orders-text').readOnly = false;
 
@@ -388,13 +459,15 @@ function refreshAll() {
   // when the playback closes (previewResolve). An assigned player submits
   // orders instead (📤 Submit orders) — previewing their own game is not a
   // real action, so Resolve/Resolve to final are hidden outright for them.
-  $('btn-resolve').hidden = isPlayer;
-  $('btn-resolve-final').hidden = isPlayer;
-  if (!isPlayer) {
-    $('btn-resolve').textContent = ro ? '👁 Preview result' : 'Resolve';
-    $('btn-resolve').title = ro
-      ? 'Adjudicate the orders in the box on a throwaway copy — the published position is not touched'
-      : 'Resolve this phase and step through the results';
+  $('btn-resolve').hidden = isPlayer && !an;
+  $('btn-resolve-final').hidden = isPlayer && !an;
+  if (!isPlayer || an) {
+    $('btn-resolve').textContent = an ? 'Resolve this line' : ro ? '👁 Preview result' : 'Resolve';
+    $('btn-resolve').title = an
+      ? 'Play these orders out and continue the line from the position they produce'
+      : ro
+        ? 'Adjudicate the orders in the box on a throwaway copy — the published position is not touched'
+        : 'Resolve this phase and step through the results';
     $('btn-resolve-final').textContent = ro ? '⏭ Preview to final' : '⏭ Resolve to final';
     $('btn-resolve').classList.toggle('primary', !ro);
   }
@@ -409,39 +482,60 @@ function refreshAll() {
   $('edit-board-section').hidden = ro;
   // a viewer's local copy is never allowed to move, so there is nothing to
   // undo there — and never anything to publish either — so the buttons
-  // disappear entirely rather than sitting there disabled; 🌿 Branch is the
-  // way to explore instead
-  $('btn-undo').hidden = ro;
-  $('btn-redo').hidden = ro;
+  // disappear entirely rather than sitting there disabled; 🌿 Analysis is the
+  // way to explore instead. Inside a line the tree IS the history: stepping
+  // back is picking the variation above, so undo/redo would be a second,
+  // disagreeing way to say the same thing.
+  $('btn-undo').hidden = ro || an;
+  $('btn-redo').hidden = ro || an;
   setGated($('btn-undo'), game.history.length ? null : 'Nothing to undo — no phase has been resolved yet',
     'Undo the most recent phase — the board goes back and your orders return to the box');
   setGated($('btn-redo'), (game.redoStack && game.redoStack.length) ? null : 'Nothing to redo — undo a phase first',
     'Redo the last undone phase');
-  $('btn-publish').hidden = ro || !!game.published;
-  $('btn-update-published').hidden = !(game.published && isOwnerView());
+  // Every control that can reach the real game is gone while a line is open.
+  // Nothing here is merely disabled: a line is a different place, and the
+  // controls that belong to the live game belong to the live game.
+  $('btn-publish').hidden = an || ro || !!liveGame.published;
+  $('btn-update-published').hidden = an || !(liveGame.published && isOwnerView());
   setGated($('btn-update-published'),
     boardDirty() ? null : 'Nothing to publish — the shared link already shows this position',
     'Push your position to the published link, so every player sees it');
-  $('panel-deadline').hidden = !(game.published && isOwnerView());
-  if (game.published && isOwnerView()) {
+  $('panel-deadline').hidden = an || !(liveGame.published && isOwnerView());
+  if (!an && liveGame.published && isOwnerView()) {
     const input = $('deadline-input');
-    if (document.activeElement !== input) input.value = game.deadline ? isoToLocalInput(game.deadline) : '';
+    if (document.activeElement !== input) input.value = liveGame.deadline ? isoToLocalInput(liveGame.deadline) : '';
   }
-  $('btn-set-players').hidden = !(game.published && isOwnerView());
-  $('btn-submissions').hidden = !(game.published && isOwnerView());
-  $('btn-revert-published').hidden = !isOnline();
-  $('btn-open-source').hidden = !game.branchedFrom;
+  $('btn-set-players').hidden = an || !(liveGame.published && isOwnerView());
+  $('btn-submissions').hidden = an || !(liveGame.published && isOwnerView());
+  $('btn-revert-published').hidden = an || !isOnline();
+  $('btn-open-source').hidden = an || !liveGame.branchedFrom;
+  $('btn-copy-sandbox').hidden = an;
   renderModeChip();
   renderBranchNote();
   renderDraftNote();
   renderPlayAsControls();
-  renderOnlineUI();
+  if (an) hideOnlineUI();
+  else renderOnlineUI();
   setOrderMode(null);
   prefillOrders();
+  // Coming back out of a line: the live game's draft orders were parked when
+  // we went in (enterAnalysis), and prefillOrders() has just reset the box to
+  // the blank template, so put them back. Also covers the forced exit above,
+  // where validateAnalysis() threw the tree away mid-render.
+  if (liveDraft !== null && !an) {
+    applyOrdersText(liveDraft);
+    liveDraft = null;
+  }
   renderHistorySelect();
   renderStandings();
+  renderAnalysisUI();
   onOrdersChanged();
   updateSyncPill();
+  if (discardedLines) {
+    const n = discardedLines;
+    discardedLines = 0;
+    toast(`The live game moved on — ${n} analysis line${n === 1 ? '' : 's'} cleared. 🌿 Analysis starts again from the new position.`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -449,7 +543,7 @@ function refreshAll() {
 // ---------------------------------------------------------------------------
 const MODE_CHIP = {
   sandbox: ['🧪', 'Sandbox',
-    'Private to this browser. Edit the board, resolve turns and branch freely — nothing here is published.'],
+    'Private to this browser. Edit the board, resolve turns and copy it freely — nothing here is published.'],
   gm: ['☁', 'Live · 👑 Game master',
     'You run this published game. What you resolve here becomes the official position the moment you ☁ Publish changes.'],
   spectator: ['☁', 'Live · 👁 Watching',
@@ -460,7 +554,13 @@ function renderModeChip() {
   const el = $('mode-chip');
   const mode = gameMode();
   let icon, text, title;
-  if (mode === 'player') {
+  if (mode === 'analysis') {
+    // Naming the open line is the point: "🌿 Analysis" alone would say which
+    // mode this is but not which of six hypotheticals is on the board.
+    const label = A.lineLabel(tree(), game.nodeId);
+    [icon, text, title] = ['🌿', `Analysis · ${label}`,
+      `A private line off ${liveGame.name}, rooted at ${tree().rootLabel}. Nothing here reaches the live game, and the whole tree is cleared when the live position moves on.`];
+  } else if (mode === 'player') {
     const power = assignedPower();
     [icon, text, title] = ['☁', `Live · ${POWER_FLAGS[power] || ''} ${cap(power)}`,
       `You are playing ${cap(power)} in a published game. Orders here are a private draft until you 📤 Submit them; the board itself is the game master's to move.`];
@@ -480,10 +580,10 @@ function renderModeChip() {
 // the phase the players are still looking at, and clickable to fix it.
 function updateSyncPill() {
   const pill = $('btn-sync');
-  const dirty = boardDirty();
+  const dirty = boardDirty() && !inAnalysis();
   pill.hidden = !dirty;
   if (dirty) {
-    const live = game.publishedState ? S.phaseLabel(game.publishedState) : null;
+    const live = liveGame.publishedState ? S.phaseLabel(liveGame.publishedState) : null;
     pill.querySelector('.sp-text').textContent = live
       ? `Unpublished — players still see ${live}`
       : 'Unpublished changes';
@@ -493,10 +593,10 @@ function updateSyncPill() {
 
 function renderBranchNote() {
   const el = $('branch-note');
-  const b = game.branchedFrom;
+  const b = !inAnalysis() && liveGame.branchedFrom;
   el.hidden = !b;
   if (!b) return;
-  el.textContent = `🌿 Branched from “${b.name}”${b.label ? ' at ' + b.label : ''}` +
+  el.textContent = `🧪 Copied from “${b.name}”${b.label ? ' at ' + b.label : ''}` +
     (b.gistId ? ' — ↩ Open source game in ⚙ Settings to go back to the live game.' : '.');
 }
 
@@ -506,6 +606,23 @@ function renderBranchNote() {
 function renderDraftNote() {
   const el = $('draft-note');
   const mode = gameMode();
+  // Inside a line the box is doing something no other mode asks of it: the
+  // focus power's orders belong to the PLAN and are shared with every sibling
+  // variation, everyone else's belong to this variation alone. Editing your
+  // own orders here deliberately changes all the replies you have explored
+  // under this plan, and that has to be said or it reads as a bug.
+  if (mode === 'analysis') {
+    const t = tree();
+    const active = A.getNode(t, game.nodeId);
+    const plan = active && A.getNode(t, active.parent);
+    if (!plan) return;
+    const sibs = A.variationsOf(t, plan.id).length;
+    el.hidden = false;
+    el.textContent = t.focus
+      ? `🌿 ${cap(t.focus)}'s orders belong to the plan “${plan.name}” — editing them updates all ${sibs} variation${sibs === 1 ? '' : 's'} under it. Everyone else's belong to this variation alone.`
+      : '🌿 These orders belong to this variation alone. Pick a country to plan for in 🌿 Analysis to keep your own orders shared across its variations.';
+    return;
+  }
   if (mode === 'sandbox' || mode === 'player') {
     el.hidden = true;
     return;
@@ -527,7 +644,7 @@ function renderCountrySelect() {
   if (assignedPower()) return;
   sel.appendChild(new Option('👁 View all countries', ''));
   for (const p of activePowers()) sel.appendChild(new Option(`Play as ${cap(p)}`, p));
-  sel.value = game.myCountry || '';
+  sel.value = liveGame.myCountry || '';
 }
 
 const defaultOrdersText = () => T.defaultOrdersText(game);
@@ -569,8 +686,12 @@ function prefillOrders(preserve = false) {
     info.textContent = infoLines.join('\n') || 'No builds or disbands required.';
   }
 
+  // A line's box starts from the orders stored on its node rather than from a
+  // blank template — reopening a variation must show the moves that make it
+  // that variation. Powers the node has no block for still get the template.
+  const stored = inAnalysis() ? A.nodeOrdersText(tree(), game.nodeId) : '';
   const merged = T.mergeBlocks(
-    preserve ? T.splitOrdersByPower(fullOrdersText()) : new Map(),
+    T.splitOrdersByPower(preserve ? fullOrdersText() : stored),
     T.splitOrdersByPower(defaultOrdersText())
   );
   const { visible, hidden } = T.splitForFilter(merged, myC);
@@ -629,7 +750,12 @@ function onOrdersChanged() {
   if (game && game.step === 'adjustment' && !playback) updateAdjustmentInfo();
   // "submitted" vs "submitted, then edited" has to track the box keystroke by
   // keystroke, or it is reporting the state from the last network refresh
-  if (game && assignedPower()) renderSubmitStatus();
+  if (game && !inAnalysis() && assignedPower()) renderSubmitStatus();
+  // The order box IS the line, exactly as it is the game everywhere else, so
+  // every keystroke and every drag writes straight through into the node. The
+  // localStorage write behind it is debounced (scheduleLineSave); the node
+  // itself is updated immediately, so nothing can be lost by navigating away.
+  if (game && inAnalysis() && !playback) persistLineOrders();
   drawLive();
   return { orders: own.orders, errors: own.errors };
 }
@@ -1081,11 +1207,11 @@ function setEditMode(on) {
 // never something to fall into by accident, so it asks first and points at
 // the sandbox as the alternative.
 function toggleEditMode() {
-  if (!editMode && game.published && isOwnerView() && !confirm(
+  if (!editMode && !inAnalysis() && liveGame.published && isOwnerView() && !confirm(
     'Edit the official board?\n\n' +
     'You are about to change the published game\'s position by hand. ' +
     'Players see nothing until you ☁ Publish changes.\n\n' +
-    'To try ideas out instead, cancel and use 🌿 Branch.'
+    'To try ideas out instead, cancel and use 🌿 Analysis.'
   )) return;
   setEditMode(!editMode);
   if (editMode && playback) endPlayback();
@@ -1122,13 +1248,14 @@ function selectMobileSheet(kind) {
 }
 
 function editApply() {
-  S.saveGame(game);
+  saveCurrent();
   board.setInfluence(game.scOwners);
   board.setUnits(game.units, game.step === 'retreat' && game.pending ? game.pending.dislodged : []);
   renderStandings();
   onOrdersChanged();
-  if (game.published && isOwnerView()) $('btn-update-published').disabled = !boardDirty();
+  if (!inAnalysis() && liveGame.published && isOwnerView()) $('btn-update-published').disabled = !boardDirty();
   updateSyncPill();
+  if (inAnalysis()) renderAnalysisTree(); // the edit may have invalidated an outcome below
 }
 
 function editClick(p, ev) {
@@ -1183,7 +1310,12 @@ function editDrop(from, to, ev) {
 // ---------------------------------------------------------------------------
 // resolve + playback
 // ---------------------------------------------------------------------------
+// The three resolve entry points all guard on analysis first rather than being
+// routed at the buttons, because which of them a button calls depends on the
+// viewer's role in the LIVE game (a spectator's Resolve is previewResolve),
+// and a line must resolve as a line whichever role opened it.
 function resolveCurrent() {
+  if (inAnalysis()) return resolveLine(false);
   const { orders, errors } = onOrdersChanged();
   if (errors.length) return toast('Fix the order problems first');
   const text = $('orders-text').value;
@@ -1229,6 +1361,7 @@ function shadowGame() {
 // gmPublishPreview() can commit the identical resolution for real once the
 // GM is happy with it, instead of re-deriving from a possibly-since-edited box.
 function previewResolve(toFinal, gmPublish = false) {
+  if (inAnalysis()) return resolveLine(toFinal);
   const { orders, errors } = onOrdersChanged();
   if (errors.length) return toast('Fix the order problems first');
   const shadow = shadowGame();
@@ -1243,6 +1376,7 @@ function previewResolve(toFinal, gmPublish = false) {
 // lands on the next phase's order screen. Lets sandbox users blitz through
 // several turns without clicking through each one's step-through.
 async function resolveAndSkip() {
+  if (inAnalysis()) return resolveLine(true);
   const { orders, errors } = onOrdersChanged();
   if (errors.length) return toast('Fix the order problems first');
   const text = $('orders-text').value;
@@ -1313,18 +1447,18 @@ function partialVerdicts(entry, revealedOrders) {
 // in turn instead of being dropped on a board they never saw resolve.
 function catchUpNext() {
   if (!catchUpTarget || playback) return;
-  const raw = catchUpTarget.history[game.history.length];
+  const raw = catchUpTarget.history[liveGame.history.length];
   if (!raw) { catchUpTarget = null; refreshAll(); return; }
   const entry = structuredClone(raw);
-  game.units = structuredClone(entry.unitsAfter);
-  game.scOwners = structuredClone(entry.scOwnersAfter);
-  game.pending = structuredClone(entry.pendingAfter) || null;
-  game.season = entry.seasonAfter;
-  game.year = entry.yearAfter;
-  game.step = entry.stepAfter;
-  game.history.push(entry);
-  game.redoStack = [];
-  S.saveGame(game);
+  liveGame.units = structuredClone(entry.unitsAfter);
+  liveGame.scOwners = structuredClone(entry.scOwnersAfter);
+  liveGame.pending = structuredClone(entry.pendingAfter) || null;
+  liveGame.season = entry.seasonAfter;
+  liveGame.year = entry.yearAfter;
+  liveGame.step = entry.stepAfter;
+  liveGame.history.push(entry);
+  liveGame.redoStack = [];
+  S.saveGame(liveGame);
   startPlayback(entry, false);
   playback.catchUp = true;
 }
@@ -1336,12 +1470,12 @@ function catchUpNext() {
 // gist-driven catchUpTarget path instead) and we haven't already provisionally
 // resolved this phase.
 function localAutoResolveAvailable() {
-  if (!game || !game.published || playback || catchUpTarget) return false;
+  if (!liveGame || !liveGame.published || playback || catchUpTarget) return false;
   // owner drives the real resolution (manual publish / autoPublishIfDue) — this
   // optimistic local advance is for read-only players/spectators only.
   if (!isReadOnly()) return false;
   if (publishMode() !== 'auto' || !deadlinePassed()) return false;
-  if (game.provisionalPhase && matchesPhase(game.provisionalPhase)) return false;
+  if (liveGame.provisionalPhase && matchesPhase(liveGame.provisionalPhase)) return false;
   return activePowers().some((p) => revealedEntry(p));
 }
 
@@ -1351,12 +1485,12 @@ function localAutoResolveAvailable() {
 // Phase() can defer to the gist once the GM's version lands. No gist writes.
 function resolveRevealedLocally() {
   if (!localAutoResolveAvailable()) return;
-  const phase = O.currentPhase(game);
-  const { text } = O.gatherPhaseBlocks(game, online, 'ontime');
-  const parsed = parseOrders(text, phaseKind());
-  const entry = S.resolvePhase(game, parsed.orders, text);
-  game.provisionalPhase = phase;
-  S.saveGame(game);
+  const phase = O.currentPhase(liveGame);
+  const { text } = O.gatherPhaseBlocks(liveGame, online, 'ontime');
+  const parsed = parseOrders(text, livePhaseKind());
+  const entry = S.resolvePhase(liveGame, parsed.orders, text);
+  liveGame.provisionalPhase = phase;
+  S.saveGame(liveGame);
   startPlayback(entry, false);
   playback.catchUp = true;
 }
@@ -1390,7 +1524,7 @@ function renderCatchUpButton() {
   const btn = $('btn-catch-up');
   if (catchUpTarget) {
     btn.hidden = false;
-    const n = catchUpTarget.history.length - game.history.length;
+    const n = catchUpTarget.history.length - liveGame.history.length;
     btn.textContent = `▶ Resolve new orders! (${n} phase${n === 1 ? '' : 's'})`;
     btn.onclick = catchUpNext;
     return;
@@ -1427,7 +1561,8 @@ function startPlayback(entry, readonly, preview = null, gmPending = null) {
   $('panel-edit').hidden = true;
   $('panel-playback').hidden = false;
   $('panel-playback').classList.toggle('preview', !!preview);
-  $('playback-title').textContent = (preview ? '👁 Preview · ' : '') + entry.label;
+  $('playback-title').textContent =
+    (preview ? '👁 Preview · ' : inAnalysis() ? '🌿 Analysis · ' : '') + entry.label;
   // A preview still gets to watch the moves play out — it just lands on the
   // final position instead of advancing the game (see continuePlayback).
   $('pb-continue').hidden = readonly && !preview;
@@ -1519,7 +1654,7 @@ function renderPlayback() {
   const { entry, step, orders } = playback;
   const isAdjustment = entry.step === 'adjustment';
   board.clearOrders();
-  board.setPhaseText(entry.label);
+  board.setPhaseText((inAnalysis() ? '🌿 ANALYSIS — ' : '') + entry.label);
 
   if (step >= finalStep()) {
     board.setInfluence(entry.scOwnersAfter);
@@ -1608,18 +1743,23 @@ function stepPlayback(delta) {
 function endPlayback() {
   const wasPreview = !!(playback && playback.preview);
   const wasCatchUp = !!(playback && playback.catchUp);
+  const lineNext = playback && playback.lineNext;
   playback = null;
+  // A line's resolution lands IN the line: the variation it just played out
+  // now has an outcome, and the board comes back on the position that outcome
+  // produced, ready for the next phase's orders (see resolveLine).
+  if (lineNext) return openNode(lineNext);
   // More phases to see before this browser matches the published game —
   // step straight into the next one instead of dropping back to the order
   // box in between (see catchUpNext()).
-  if (wasCatchUp && catchUpTarget && game.history.length < catchUpTarget.history.length) {
+  if (wasCatchUp && catchUpTarget && liveGame.history.length < catchUpTarget.history.length) {
     catchUpNext();
     return;
   }
   if (wasCatchUp) {
     catchUpTarget = null;
-    game.publishedState = S.boardSnapshot(game);
-    S.saveGame(game);
+    liveGame.publishedState = S.boardSnapshot(liveGame);
+    S.saveGame(liveGame);
   }
   refreshAll(); // re-renders the real position over whatever the playback drew
   // a resolved-but-unpublished turn is invisible to the table, so say so once,
@@ -1723,9 +1863,12 @@ const clampInt = (v, lo, hi, def) => {
   return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : def;
 };
 
+// House rules belong to the game, not to a view of it, so this reads and
+// writes liveGame even while a line is open — and lineGame() copies the result
+// onto every line, or a line would not be adjudicating the same game.
 function openGameSettings() {
-  if (!game) return;
-  const s = S.gameSettings(game);
+  if (!liveGame) return;
+  const s = S.gameSettings(liveGame);
   $('set-solo-win').value = s.soloWin;
   $('set-coalition-win').value = s.coalitionWin;
   $('set-support-rule').value = s.supportRule;
@@ -1742,26 +1885,27 @@ function openGameSettings() {
 }
 
 async function saveGameSettings() {
-  const prev = S.gameSettings(game);
-  game.settings = {
+  const prev = S.gameSettings(liveGame);
+  liveGame.settings = {
     soloWin: clampInt($('set-solo-win').value, 1, 34, 18),
     coalitionWin: clampInt($('set-coalition-win').value, 1, 34, 18),
     supportRule: $('set-support-rule').value === 'strict' ? 'strict' : 'standard',
     convoyRule: $('set-convoy-rule').value === 'strict' ? 'strict' : 'standard',
   };
-  S.saveGame(game);
+  S.saveGame(liveGame);
+  if (inAnalysis()) game.settings = { ...liveGame.settings }; // the open line adjudicates by them too
   $('game-settings-dialog').close();
   renderStandings();
   onOrdersChanged(); // re-validate: a rule change can flip which orders work
   const ruleChanged =
-    prev.supportRule !== game.settings.supportRule ||
-    prev.convoyRule !== game.settings.convoyRule;
-  if (ruleChanged && game.history.length)
+    prev.supportRule !== liveGame.settings.supportRule ||
+    prev.convoyRule !== liveGame.settings.convoyRule;
+  if (ruleChanged && liveGame.history.length)
     toast('House rule changed — it applies to future resolutions only', 'info');
   else toast('Game settings saved', 'info');
   // push to the published gist so every player sees the same rules; the
   // board override keeps the GM's in-progress position out of it
-  if (game.published && game.isOwner) {
+  if (liveGame.published && liveGame.isOwner) {
     await pushSettings(null, 'Saved locally, but could not publish the change');
   }
 }
@@ -1799,15 +1943,15 @@ function replaySelected() {
 function undoPhase() {
   // undoing a published turn walks the official position backwards — fine (it
   // is how a GM fixes a mis-entered order) but worth being deliberate about
-  if (isOwnerView() && game.published && game.history.length && !confirm(
-    `Undo ${game.history[game.history.length - 1].label} on the official game?\n\n` +
+  if (isOwnerView() && liveGame.published && liveGame.history.length && !confirm(
+    `Undo ${liveGame.history[liveGame.history.length - 1].label} on the official game?\n\n` +
     'The board goes back a phase and your orders return to the box. ' +
     'Players keep seeing the published position until you ☁ Publish changes again.'
   )) return;
-  const entry = S.undoLastPhase(game);
+  const entry = S.undoLastPhase(liveGame);
   if (!entry) return toast('Nothing to undo');
   playback = null;
-  S.saveGame(game);
+  S.saveGame(liveGame);
   refreshAll();
   if (entry.ordersText) {
     $('orders-text').value = entry.ordersText;
@@ -1817,17 +1961,383 @@ function undoPhase() {
 }
 
 // ---------------------------------------------------------------------------
-// branching — the one escape hatch from every read-only situation
+// 🌿 analysis — a tree of lines hanging off the live position
 // ---------------------------------------------------------------------------
-// `src` is any position: the live game, or the throwaway one a preview
-// resolved into ("keep this outcome"). What comes back is always a plain
-// sandbox, with a note saying where it came from so it can be found again.
-function branchFrom(src, atLabel) {
-  const name = prompt('Name for the sandbox:', uniqueName(`${game.name} sandbox`));
+// The model and every operation on the tree are in js/analysis.js; what is
+// here is the switching, the persistence and the panel. Three rules hold the
+// whole thing together:
+//
+//   1. A line is never a saved game (saveCurrent below), so the home screen
+//      never grows a copy to keep in step by hand — the complaint that made
+//      the old snapshot-branch useless.
+//   2. The tree is rooted at one position and dies with it (validateAnalysis).
+//   3. Everything that could reach the real game is gone while a line is open
+//      (refreshAll), and what mode you are in is said in four places at once.
+
+// Persist whatever is on screen. A line goes back into its node on the live
+// game; anything else is an ordinary saved game. Replaces the bare
+// S.saveGame(game) at every call site that a line can reach.
+function saveCurrent() {
+  if (inAnalysis()) {
+    // ✏ Edit board inside a line moves that variation's starting position
+    A.setNodeBefore(tree(), game.nodeId, game);
+    flushLineSave();
+    return;
+  }
+  S.saveGame(game);
+}
+
+function saveLive() {
+  if (liveGame) S.saveGame(liveGame);
+}
+
+// Order-box edits update the node immediately and the store a beat later:
+// saveGame() rewrites every saved game as one JSON blob, which is not a
+// per-keystroke operation. Nothing is at risk in the gap — the node is already
+// updated, and every navigation flushes.
+function scheduleLineSave() {
+  clearTimeout(lineSaveTimer);
+  lineSaveTimer = setTimeout(() => {
+    lineSaveTimer = null;
+    saveLive();
+  }, 1200);
+}
+
+function flushLineSave() {
+  clearTimeout(lineSaveTimer);
+  lineSaveTimer = null;
+  saveLive();
+}
+
+function persistLineOrders() {
+  const t = tree();
+  if (!t || !inAnalysis()) return;
+  if (A.setNodeOrders(t, game.nodeId, fullOrdersText(), t.focus)) renderAnalysisTree();
+  scheduleLineSave();
+}
+
+// THE LIFETIME RULE, enforced. Called at the top of refreshAll() and nowhere
+// else: every path that can move the live position ends in a refreshAll(), so
+// this one check covers a GM publish, a catch-up, an undo, a revert and an
+// ✏ Edit board without any of them naming analysis.
+//
+// It compares the POSITION, not the history — so a GM who undoes a phase and
+// re-resolves it identically comes back to the same board and the tree
+// survives, which is why the catch-up path locks the button (see
+// analysisUnavailableReason) instead of deleting on sight.
+function validateAnalysis() {
+  const t = tree();
+  if (!t || A.rootMatches(t, liveGame)) return;
+  discardedLines = A.variationCount(t);
+  liveGame.analysis = null;
+  if (inAnalysis()) {
+    game = liveGame;
+    if (editMode) setEditMode(false); // never carry a line's edit mode onto the real board
+  }
+  S.saveGame(liveGame);
+}
+
+// Why 🌿 Analysis is not available right now, or null. Said out loud by the
+// gated button rather than left to be discovered (DECISIONS.md, "A greyed-out
+// button must be able to say why").
+function analysisUnavailableReason() {
+  if (!liveGame) return 'No game is open';
+  if (!R.isOnline(liveGame)) {
+    return 'Analysis belongs to a live game — a sandbox is already yours to edit, resolve and undo freely';
+  }
+  if (catchUpTarget) {
+    const n = catchUpTarget.history.length - liveGame.history.length;
+    return `${n} new phase${n === 1 ? '' : 's'} to resolve first — ▶ Resolve new orders!, and analysis reopens from the new position`;
+  }
+  if (localAutoResolveAvailable()) {
+    return 'New orders are ready to resolve — ▶ Resolve new orders! first, and analysis reopens from the new position';
+  }
+  return null;
+}
+
+function enterAnalysis() {
+  const why = analysisUnavailableReason();
+  if (why) return toast(why);
+  if (inAnalysis()) return;
+  playback = null;
+  setEditMode(false);
+  if (!A.rootMatches(liveGame.analysis, liveGame)) {
+    liveGame.analysis = A.newTree(liveGame, assignedPower() || R.myCountry(liveGame) || '');
+  }
+  // The live game's draft is parked, not thrown away: for an assigned player
+  // it is the one thing on this screen worth more than the position.
+  liveDraft = fullOrdersText();
+  // A player's box is collapsed by default (openGame) because their orders
+  // are a second thing to check; in a line the orders ARE the thing.
+  $('orders-box').open = true;
+  openNode(A.ensureEntry(liveGame.analysis));
+  toast('🌿 Analysis — try anything; nothing here reaches the live game', 'info');
+}
+
+function exitAnalysis() {
+  if (!inAnalysis()) return;
+  persistLineOrders();
+  flushLineSave();
+  playback = null;
+  setEditMode(false);
+  game = liveGame;
+  refreshAll(); // puts the parked draft back — see the liveDraft branch there
+}
+
+// Put a variation on the board. `activeId` always names a variation: a plan is
+// a folder holding one power's orders, not a position to render.
+function openNode(id) {
+  const t = tree();
+  const n = A.getNode(t, id);
+  if (!n) return;
+  if (n.kind === 'plan') return openNode((A.variationsOf(t, id)[0] || {}).id);
+  if (inAnalysis() && game.nodeId !== id) persistLineOrders();
+  playback = null;
+  setEditMode(false);
+  t.activeId = id;
+  game = A.lineGame(t, id, liveGame);
+  flushLineSave();
+  refreshAll();
+}
+
+// Resolving inside a line. The line's own game object is advanced for real
+// (it is a disposable copy, rebuilt from the tree on every openNode), the
+// outcome is recorded on the variation, and the playback lands on the child
+// variation that continues the line rather than backing out to where it
+// started — the tree is the history, so forward is the only direction.
+async function resolveLine(skip) {
+  const { orders, errors } = onOrdersChanged();
+  if (errors.length) return toast('Fix the order problems first');
+  const t = tree();
+  const varId = game.nodeId;
+  const text = fullOrdersText();
+  A.setNodeOrders(t, varId, text, t.focus);
+  const entry = S.resolvePhase(game, orders, text);
+  const nextId = A.recordResolution(t, varId, game);
+  flushLineSave();
+  if (!skip) {
+    startPlayback(entry, false);
+    playback.lineNext = nextId;
+    return;
+  }
+  playback = null;
+  $('panel-orders').hidden = true;
+  $('panel-edit').hidden = true;
+  mobileSheet = null;
+  applyMobileSheetUI();
+  board.clearOrders();
+  board.setPhaseText('🌿 ANALYSIS — ' + entry.label);
+  board.setInfluence(entry.scOwnersBefore);
+  board.setUnits(entry.unitsBefore, entry.step === 'retreat' ? entry.dislodged : []);
+  await board.animateFinal(entry);
+  openNode(nextId);
+}
+
+// ---- the 🌿 Analysis panel -------------------------------------------------
+
+function renderAnalysisUI() {
+  const an = inAnalysis();
+  const available = R.isOnline(liveGame);
+  const why = analysisUnavailableReason();
+  // The switch is a two-state segmented control rather than a button, so it
+  // says which side you are on as well as offering the other — the single
+  // strongest thing on the page against thinking a line is the real game.
+  $('mode-switch').hidden = !available;
+  $('ms-live').classList.toggle('on', !an);
+  $('ms-analysis').classList.toggle('on', an);
+  $('ms-live').setAttribute('aria-pressed', String(!an));
+  $('ms-analysis').setAttribute('aria-pressed', String(an));
+  setGated($('ms-analysis'), an ? null : why,
+    'Open a private tree of plans and variations off this position');
+  $('mtab-analysis').hidden = !available;
+  // Cleared on the way out as well as set on the way in: setGated leaves an
+  // aria-disabled attribute behind, and a Resolve left gated by a stale line
+  // would refuse to resolve the real game.
+  const locked = an ? why : null;
+  setGated($('btn-resolve'), locked, $('btn-resolve').title);
+  setGated($('btn-resolve-final'), locked, $('btn-resolve-final').title);
+
+  $('panel-analysis').hidden = !an;
+  if (!an) return;
+  const t = tree();
+  $('analysis-root').textContent =
+    `Rooted at ${t.rootLabel} of “${liveGame.name}”. The whole tree is cleared when the live game moves past it.`;
+  // The live game moved on while we were in here. The board keeps showing what
+  // it was showing — yanking it out mid-thought is worse than saying so — but
+  // the line can no longer be resolved or extended, and going back to ☁ Live
+  // (where the new phase is waiting) is what clears it.
+  $('analysis-locked').hidden = !locked;
+  if (locked) {
+    $('analysis-locked').textContent =
+      `⚠ ${locked}. This line is out of date and can no longer be resolved.`;
+  }
+  const full = !A.canAddVariation(t)
+    ? `That is ${A.MAX_VARIATIONS} variations — delete one before adding another`
+    : null;
+  renderFocusSelect();
+  renderAnalysisTree();
+  const active = A.getNode(t, game.nodeId);
+  const plan = active && A.getNode(t, active.parent);
+  if (!plan) return;
+  setGated($('an-new-var'), locked || full,
+    `Another reply to “${plan.name}”, starting from a copy of this one`);
+  setGated($('an-new-plan'), locked || full,
+    'A different plan of your own at this same position');
+  setGated($('an-use-orders'),
+    t.focus ? null : 'Pick a country to plan for first — there are no orders of your own to take across',
+    `Copy ${cap(t.focus || '')}'s orders from this line into the live game's order box`);
+  setGated($('an-delete'),
+    A.variationCount(t) > 1 ? null : 'This is the only line in the tree — leave analysis instead',
+    'Delete this variation and everything explored under it');
+  $('an-rename').title = `Rename “${active.name}”`;
+}
+
+function renderFocusSelect() {
+  const t = tree();
+  const sel = $('analysis-focus');
+  sel.replaceChildren();
+  sel.appendChild(new Option('— no country —', ''));
+  for (const p of O.activePowers(liveGame)) sel.appendChild(new Option(cap(p), p));
+  sel.value = t.focus || '';
+  // An assigned player is locked to their own power here for the same reason
+  // they are everywhere else: it is the power they actually play.
+  sel.disabled = !!assignedPower();
+}
+
+// The tree itself: plans and the variations under them, indented, with the
+// open one marked. A variation that no longer follows from what is above it
+// (its plan was edited, or the position it started from moved) is flagged
+// rather than hidden — the orders in it are still the user's work.
+function renderAnalysisTree() {
+  const t = tree();
+  const host = $('analysis-tree');
+  if (!t || !host) return;
+  host.replaceChildren();
+  const addRow = (n, depth) => {
+    const row = document.createElement('button');
+    row.className = 'an-row an-' + n.kind;
+    row.style.paddingLeft = 6 + depth * 14 + 'px';
+    const isVar = n.kind === 'var';
+    if (isVar && n.id === t.activeId) row.classList.add('active');
+    const bits = [`<span class="an-icon">${isVar ? '🔀' : '📋'}</span>`,
+      `<span class="an-name">${escapeText(n.name)}</span>`];
+    if (isVar) {
+      if (n.stale) bits.push('<span class="an-meta warn">⚠ the line above changed</span>');
+      else if (n.after) bits.push(`<span class="an-meta">→ ${escapeText(S.phaseLabel(n.after))}</span>`);
+      else bits.push('<span class="an-meta">unresolved</span>');
+    }
+    row.innerHTML = bits.join(' ');
+    row.title = isVar ? 'Open this variation' : 'Rename this plan';
+    row.onclick = () => (isVar ? openNode(n.id) : renameNode(n.id));
+    host.appendChild(row);
+  };
+  const walkPlans = (parentVarId, depth) => {
+    for (const plan of A.plansAt(t, parentVarId)) {
+      // With no focus power there is nothing in a plan, so showing the level
+      // would be a row that never says anything — the tree is simply flat.
+      if (t.focus) addRow(plan, depth);
+      for (const v of A.variationsOf(t, plan.id)) {
+        addRow(v, t.focus ? depth + 1 : depth);
+        walkPlans(v.id, t.focus ? depth + 2 : depth + 1);
+      }
+    }
+  };
+  walkPlans(null, 0);
+}
+
+function renameNode(id) {
+  const t = tree();
+  const n = A.getNode(t, id);
+  if (!n) return;
+  const name = prompt(n.kind === 'plan' ? 'Name for this plan:' : 'Name for this variation:', n.name);
+  if (!name) return;
+  A.renameNode(t, id, name);
+  flushLineSave();
+  renderAnalysisTree();
+  renderModeChip();
+}
+
+// Another reply to the same plan, pre-filled with this one's opponent orders:
+// exploring "what else might they do?" is copy-then-tweak, never typing all
+// six powers again from scratch.
+function newVariation() {
+  const t = tree();
+  const active = A.getNode(t, t.activeId);
+  persistLineOrders();
+  const v = A.addVariation(t, active.parent, null, active.theirs, active.before);
+  openNode(v.id);
+  toast('🔀 New variation — change what the others do', 'info');
+}
+
+// A different plan of my own at the same position, with its own set of replies.
+function newPlan() {
+  const t = tree();
+  const active = A.getNode(t, t.activeId);
+  const plan = A.getNode(t, active.parent);
+  persistLineOrders();
+  const p = A.addPlan(t, plan.parent);
+  const v = A.addVariation(t, p.id, null, '', active.before);
+  openNode(v.id);
+  toast('📋 New plan — write your own orders, then add the replies', 'info');
+}
+
+function deleteActiveNode() {
+  const t = tree();
+  const active = A.getNode(t, game.nodeId);
+  const plan = active && A.getNode(t, active.parent);
+  if (!plan) return;
+  const below = A.plansAt(t, active.id).length;
+  if (!confirm(`Delete “${active.name}”${below ? ' and everything explored under it' : ''}?`)) return;
+  // A plan with nothing left under it is an empty folder, so it goes too.
+  const lone = A.variationsOf(t, plan.id).length === 1;
+  A.deleteNode(t, lone ? plan.id : active.id);
+  flushLineSave();
+  openNode(A.ensureEntry(t));
+}
+
+// The one sanctioned bridge from a line back to the real game. Without it the
+// way to act on what you worked out is to retype it, which is exactly where
+// the mistakes are — but it moves ONLY your own orders, and only into the
+// draft box, never into a submission.
+function useLineOrdersLive() {
+  const t = tree();
+  const focus = t.focus;
+  if (!focus) return;
+  persistLineOrders();
+  const plan = A.getNode(t, A.getNode(t, t.activeId).parent);
+  const mine = T.blockBody(T.splitOrdersByPower(plan.mine), focus);
+  if (!mine.trim()) return toast(`No ${cap(focus)} orders in this line yet`);
+  exitAnalysis();
+  replacePowerBlock(focus, mine);
+  $('orders-box').open = true;
+  toast(`${cap(focus)}'s orders from “${plan.name}” are in the live order box — nothing is submitted yet`, 'info');
+}
+
+function setAnalysisFocus(power) {
+  const t = tree();
+  persistLineOrders();
+  if (!A.refocus(t, power)) return;
+  flushLineSave();
+  openNode(t.activeId);
+  toast(power ? `Planning as ${cap(power)} — your orders are now shared across each plan's variations` : 'No planning country — every variation now holds a full order set', 'info');
+}
+
+// ---------------------------------------------------------------------------
+// 🧪 copy to sandbox — the durable, throw-nothing-away escape hatch
+// ---------------------------------------------------------------------------
+// Analysis is deliberately temporary: it dies with the position it is rooted
+// at. This is the other half — a real, permanent, freely editable game of your
+// own, which is what you want for a position worth keeping past the next
+// publish (and what the discard notice points at).
+//
+// `src` is any position: the live game, the open line, or the throwaway one a
+// preview resolved into ("keep this outcome").
+function copyToSandbox(src, atLabel) {
+  const name = prompt('Name for the sandbox:', uniqueName(`${liveGame.name} sandbox`));
   if (!name) return;
   const g = S.branchGame(src, uniqueName(name), {
-    name: game.name,
-    gistId: isOnline() ? game.gistId : null,
+    name: liveGame.name,
+    gistId: isOnline() ? liveGame.gistId : null,
     label: atLabel,
     at: new Date().toISOString(),
   });
@@ -1835,17 +2345,19 @@ function branchFrom(src, atLabel) {
   toast('🧪 Sandbox created — rearrange, resolve and try anything', 'info');
 }
 
-function branchCurrent() {
+function copyCurrentToSandbox() {
   if (playback && playback.preview) {
-    return branchFrom(playback.preview, `after ${playback.entry.label}`);
+    return copyToSandbox(playback.preview, `after ${playback.entry.label}`);
   }
-  branchFrom(game, S.phaseLabel(game));
+  copyToSandbox(game, inAnalysis()
+    ? `${A.lineLabel(tree(), game.nodeId)} · ${S.phaseLabel(game)}`
+    : S.phaseLabel(game));
 }
 
-// ⚙ → ↩ Open source game. A sandbox branched off an online game should not
+// ⚙ → ↩ Open source game. A sandbox copied off an online game should not
 // need a trip through the home screen to get back to the real one.
 function openBranchSource() {
-  const b = game.branchedFrom;
+  const b = liveGame.branchedFrom;
   if (!b) return;
   if (b.gistId) return loadPublishedGame(b.gistId);
   const src = S.listGames()[b.name];
@@ -1856,11 +2368,14 @@ function openBranchSource() {
 // ---------------------------------------------------------------------------
 // import/export
 // ---------------------------------------------------------------------------
+// Always the real game (analysis lines ride along inside it) — a line on its
+// own is not a game file, and importing one would produce a game with a node
+// id and no tree to look it up in.
 function exportCurrent() {
-  const blob = new Blob([S.exportGame(game)], { type: 'application/json' });
+  const blob = new Blob([S.exportGame(liveGame)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `${game.name.replace(/[^\w-]+/g, '_')}.json`;
+  a.download = `${liveGame.name.replace(/[^\w-]+/g, '_')}.json`;
   a.click();
   URL.revokeObjectURL(a.href);
 }
@@ -1884,26 +2399,26 @@ async function importFile(file) {
 // seen, which phase a deadline belongs to — live in js/online-rules.js, taking
 // `game` and the fetched `online` snapshot explicitly so they can be tested
 // against a hand-built phase. These wrappers bind those two.
-const activePowers = () => O.activePowers(game);
-const hasAssignedPlayers = () => O.hasAssignedPlayers(game);
-const publishMode = () => O.publishMode(game);
+const activePowers = () => O.activePowers(liveGame);
+const hasAssignedPlayers = () => O.hasAssignedPlayers(liveGame);
+const publishMode = () => O.publishMode(liveGame);
 const trustedNow = () => O.trustedNow(online);
-const deadlineDate = () => O.deadlineDate(game);
-const deadlinePassed = () => O.deadlinePassed(game, online);
-const deadlineUrgency = () => O.deadlineUrgency(game, online);
-const deadlineIsForCurrentPhase = () => O.deadlineIsForCurrentPhase(game);
-const ordersOpen = () => O.ordersOpen(game, online);
-const lateResubmitAllowed = (p) => O.lateResubmitAllowed(game, p);
-const isSubmitAllowed = (p) => O.isSubmitAllowed(game, online, p);
-const submissionOnTime = (found) => O.submissionOnTime(game, found);
-const phaseSubmission = (p) => O.phaseSubmission(game, online, p);
-const revealedEntry = (p) => O.revealedEntry(game, online, p);
-const powerOnlineStatus = (p) => O.powerOnlineStatus(game, online, p);
-const mySubmission = () => O.mySubmission(game, online, assignedPower());
-const matchesPhase = (x) => O.matchesPhase(game, x);
-const deadlineChainBase = () => O.deadlineChainBase(game);
+const deadlineDate = () => O.deadlineDate(liveGame);
+const deadlinePassed = () => O.deadlinePassed(liveGame, online);
+const deadlineUrgency = () => O.deadlineUrgency(liveGame, online);
+const deadlineIsForCurrentPhase = () => O.deadlineIsForCurrentPhase(liveGame);
+const ordersOpen = () => O.ordersOpen(liveGame, online);
+const lateResubmitAllowed = (p) => O.lateResubmitAllowed(liveGame, p);
+const isSubmitAllowed = (p) => O.isSubmitAllowed(liveGame, online, p);
+const submissionOnTime = (found) => O.submissionOnTime(liveGame, found);
+const phaseSubmission = (p) => O.phaseSubmission(liveGame, online, p);
+const revealedEntry = (p) => O.revealedEntry(liveGame, online, p);
+const powerOnlineStatus = (p) => O.powerOnlineStatus(liveGame, online, p);
+const mySubmission = () => O.mySubmission(liveGame, online, assignedPower());
+const matchesPhase = (x) => O.matchesPhase(liveGame, x);
+const deadlineChainBase = () => O.deadlineChainBase(liveGame);
 const bumpUnavailableReason = (hours, label) =>
-  O.bumpUnavailableReason(game, online, hours, label, fmtWhen);
+  O.bumpUnavailableReason(liveGame, online, hours, label, fmtWhen);
 
 const STATUS_ICON = {
   published: '✓', revealed: '✓', late: '⚠', submitted: '📨', none: '—', unknown: '…',
@@ -1918,8 +2433,18 @@ const STATUS_BADGE = {
   unknown: ['…', 'st-none'],
 };
 
+// While a line is open the live game's online controls are not merely
+// disabled, they are gone: submitting, reloading the table's moves and the
+// deadline countdown all belong to the game, and a line is not it. The state
+// behind them keeps refreshing in the background (refreshOnlineStatus), which
+// is what lets a publish arriving mid-analysis void the tree straight away.
+function hideOnlineUI() {
+  for (const id of ['online-row', 'btn-submit-moves', 'submit-status', 'btn-catch-up',
+    'deadline-countdown']) $(id).hidden = true;
+}
+
 function renderOnlineUI() {
-  if (!game) return;
+  if (!liveGame || inAnalysis()) return;
   const hasPlayers = hasAssignedPlayers();
   if (document.activeElement !== $('autopublish-toggle')) {
     $('autopublish-toggle').checked = publishMode() === 'auto';
@@ -1952,7 +2477,7 @@ function renderOnlineUI() {
   // only re-render the submissions modal's contents while it's actually open —
   // it's no longer part of the always-visible sidebar, so there's no need to
   // keep it in step on every poll otherwise
-  if (game.published && isOwnerView() && !$('submissions-modal').hidden) renderSubmissionsModal();
+  if (liveGame.published && isOwnerView() && !$('submissions-modal').hidden) renderSubmissionsModal();
 }
 
 function renderSubmitStatus() {
@@ -2057,7 +2582,7 @@ function renderDeadlinePanel() {
   const panel = $('panel-deadline');
   if (panel.hidden) return;
   const auto = publishMode() === 'auto';
-  const stoodDown = auto && autoPublishIdleFor === S.phaseLabel(game);
+  const stoodDown = auto && autoPublishIdleFor === S.phaseLabel(liveGame);
 
   $('deadline-mode-note').textContent = auto
     ? '⚡ Auto-Publish is on: this browser resolves and publishes the phase the moment the deadline passes. Nothing publishes while the tab is closed.'
@@ -2068,10 +2593,10 @@ function renderDeadlinePanel() {
   status.classList.toggle('past', stoodDown);
   if (auto) {
     status.textContent = stoodDown
-      ? `⚠ Nobody submitted for ${S.phaseLabel(game)} — auto-publish stood down. Load the orders yourself below, or confirm a new deadline to re-open submissions.`
+      ? `⚠ Nobody submitted for ${S.phaseLabel(liveGame)} — auto-publish stood down. Load the orders yourself below, or confirm a new deadline to re-open submissions.`
       : autoPublishing
         ? '⚙ Publishing…'
-        : !game.deadline
+        : !liveGame.deadline
           ? '⏳ No deadline set — nothing publishes until you confirm one.'
           : deadlinePassed()
             ? '⏳ Deadline passed — publishing on the next check, within a minute.'
@@ -2092,7 +2617,7 @@ function renderDeadlinePanel() {
     "Loads submitted orders once the deadline passes — or, with no deadline set, opens an empty box so you can skip the game forward",
   );
   setGated($('deadline-clear'),
-    game.deadline ? null : 'No deadline is set — there is nothing to clear',
+    liveGame.deadline ? null : 'No deadline is set — there is nothing to clear',
     'Remove the deadline — submissions stay closed until you confirm a new one');
   renderDeadlineButtons();
 }
@@ -2186,14 +2711,14 @@ function clearDeadline(g) {
 }
 
 async function setDeadline(date) {
-  if (!date) clearDeadline(game);
+  if (!date) clearDeadline(liveGame);
   else {
-    game.deadline = date.toISOString();
+    liveGame.deadline = date.toISOString();
     // Stamp the phase this deadline is for, so it can never outlive it — see
     // deadlineIsForCurrentPhase().
-    game.deadlineFor = O.currentPhase(game);
+    liveGame.deadlineFor = O.currentPhase(liveGame);
   }
-  S.saveGame(game);
+  S.saveGame(liveGame);
   renderDeadlineInfo();
   await pushSettings(
     date
@@ -2206,8 +2731,8 @@ async function setDeadline(date) {
 // GM: how the deadline resolves — auto-resolve on its own, or load and
 // resolve it yourself.
 async function setPublishMode(mode) {
-  game.publishMode = mode;
-  S.saveGame(game);
+  liveGame.publishMode = mode;
+  S.saveGame(liveGame);
   renderOnlineUI();
   await pushSettings(
     mode === 'auto'
@@ -2226,7 +2751,7 @@ const BUMP_STEPS = [
 function bumpDeadline(hours, label) {
   const reason = bumpUnavailableReason(hours, label);
   if (reason) return toast(reason);
-  setDeadline(new Date(O.bumpTarget(game, online, hours)));
+  setDeadline(new Date(O.bumpTarget(liveGame, online, hours)));
 }
 
 // Greys out the steps whose window has closed and, for the rest, names the
@@ -2237,7 +2762,7 @@ function bumpDeadline(hours, label) {
 function renderDeadlineButtons() {
   for (const [id, hours, label] of BUMP_STEPS) {
     const reason = bumpUnavailableReason(hours, label);
-    const when = fmtWhen(O.bumpTarget(game, online, hours));
+    const when = fmtWhen(O.bumpTarget(liveGame, online, hours));
     setGated($(id), reason, `Sets the deadline to ${when} — ${label} from the previous one`);
   }
 }
@@ -2254,7 +2779,7 @@ function renderSubmissionsModal() {
     name.innerHTML = `<span class="chip" style="background:${POWER_COLORS[p]}"></span>${cap(p)}`;
     const login = document.createElement('span');
     login.className = 'login';
-    login.textContent = (game.players || {})[p] ? '@' + (game.players || {})[p] : '—';
+    login.textContent = (liveGame.players || {})[p] ? '@' + (liveGame.players || {})[p] : '—';
     const st = powerOnlineStatus(p);
     const status = document.createElement('span');
     status.className = 'pstatus ' + STATUS_BADGE[st][1];
@@ -2281,10 +2806,10 @@ function renderSubmissionsModal() {
 // orders after the deadline has passed, for the phase on the table right
 // now only — see lateResubmitAllowed().
 async function setLateResubmit(power, allow) {
-  game.lateResubmit = { ...(game.lateResubmit || {}) };
-  if (allow) game.lateResubmit[power] = O.currentPhase(game);
-  else delete game.lateResubmit[power];
-  S.saveGame(game);
+  liveGame.lateResubmit = { ...(liveGame.lateResubmit || {}) };
+  if (allow) liveGame.lateResubmit[power] = O.currentPhase(liveGame);
+  else delete liveGame.lateResubmit[power];
+  S.saveGame(liveGame);
   renderSubmissionsModal();
   const ok = await pushSettings(
     allow
@@ -2322,19 +2847,19 @@ function closeSubmissionsModal() {
 // assignments (game.assignedPower is refreshed by refreshOnlineStatus()).
 function renderPlayAsControls() {
   const row = $('play-as-row');
-  const canPlay = !!(game && game.published && game.isOwner && game.assignedPower);
+  const canPlay = !!(liveGame && liveGame.published && liveGame.isOwner && liveGame.assignedPower);
   row.hidden = !canPlay;
   if (!canPlay) return;
   const sel = $('play-as-select');
-  sel.options[1].textContent = `${POWER_FLAGS[game.assignedPower] || ''} ${cap(game.assignedPower)}`;
+  sel.options[1].textContent = `${POWER_FLAGS[liveGame.assignedPower] || ''} ${cap(liveGame.assignedPower)}`;
   sel.value = isPlayingAsPlayer() ? 'player' : 'gm';
 }
 
 function setPlayAs(mode) {
-  if (!game) return;
+  if (!liveGame) return;
   const toPlayer = mode === 'player';
-  game.playAs = toPlayer ? 'player' : 'gm';
-  S.saveGame(game);
+  liveGame.playAs = toPlayer ? 'player' : 'gm';
+  S.saveGame(liveGame);
   refreshAll();
   // Switching into playing your own power should surface your submitted
   // orders the same way opening the game on a second device does. refreshAll()
@@ -2372,7 +2897,7 @@ function renderPlayersAssignRows() {
     const input = document.createElement('input');
     input.type = 'text';
     input.placeholder = 'GitHub username';
-    input.value = (game.players || {})[p] || '';
+    input.value = (liveGame.players || {})[p] || '';
     input.dataset.power = p;
     row.append(name, input);
     rows.appendChild(row);
@@ -2439,7 +2964,7 @@ function syncViewerToGist(g, fresh) {
 // moves files, everyone's submission comments, and this browser's login —
 // then re-renders all online UI. Safe to call often; all reads are public.
 async function refreshOnlineStatus() {
-  const g = game;
+  const g = liveGame;
   if (!g || !g.published || !g.gistId) return;
   try {
     const gistJson = await fetchGist(g.gistId);
@@ -2455,7 +2980,7 @@ async function refreshOnlineStatus() {
     const comments = await unsealComments(await listComments(g.gistId), sealKey, g.gistId);
     const token = getToken();
     const login = token ? await getAuthenticatedLogin(token) : null;
-    if (game !== g) return; // user switched games while we were fetching
+    if (liveGame !== g) return; // user switched games while we were fetching
     if (fresh && fresh.players) g.players = fresh.players;
     if (fresh) {
       // deadline/publishMode/settings are pushed to the gist immediately by
@@ -2510,14 +3035,24 @@ async function refreshOnlineStatus() {
     // GM's real version.
     if (fresh && Array.isArray(fresh.history)) reconcileProvisionalPhase(g, fresh);
     if (fresh && isReadOnly() && Array.isArray(fresh.history)) syncViewerToGist(g, fresh);
-    if (changed) {
+    // The order box belongs to whatever is on screen, so while a line is open
+    // nothing here may touch it — refilling it from the live game's phase, or
+    // dropping the player's submitted orders into it, would quietly rewrite
+    // the variation they are working on. The fetch itself still ran, which is
+    // the point: this is how a publish arriving mid-analysis is noticed.
+    const boxIsLive = !inAnalysis();
+    if (changed && boxIsLive) {
       renderCountrySelect();
       prefillOrders(true);
       onOrdersChanged();
     }
-    maybeRestoreSubmission();
+    if (boxIsLive) maybeRestoreSubmission();
     renderOnlineUI();
     renderPlayAsControls();
+    // A line rooted at a position the gist has now moved past is void. Say so
+    // where the person actually is — inside the line — rather than waiting for
+    // them to come back out and find it gone.
+    renderAnalysisUI();
     ensureMyMailbox(g); // fire-and-forget; see below
   } catch {
     // offline or rate-limited — keep whatever state we already had
@@ -2588,7 +3123,7 @@ function maybeRestoreSubmission() {
   const s = mySubmission();
   if (!s) return;
   online.restored = true;
-  if (parseOrders(powerBlockText(p), phaseKind()).orders.length) return;
+  if (parseOrders(powerBlockText(p), livePhaseKind()).orders.length) return;
   replacePowerBlock(p, s.orders);
   toast('Loaded your published orders', 'info');
 }
@@ -2598,7 +3133,7 @@ async function doSubmitMoves() {
   if (!power) return;
   if (!isSubmitAllowed(power)) {
     return toast(
-      game.deadline
+      liveGame.deadline
         ? 'The deadline has passed — ask your game master to re-open with a new deadline'
         : "Your game master hasn't set a deadline yet — submissions open once they confirm one"
     );
@@ -2606,14 +3141,14 @@ async function doSubmitMoves() {
   if (!getToken() && !askToken()) return;
   // only this player's block is submitted, whatever view the box is in
   const block = powerBlockText(power);
-  const parsed = parseOrders(power.toUpperCase() + '\n' + block, phaseKind());
+  const parsed = parseOrders(power.toUpperCase() + '\n' + block, livePhaseKind());
   if (parsed.errors.length) return toast('Fix the order problems first');
   if (!parsed.orders.length) return toast(`Write some ${cap(power)} orders first`);
   const btn = $('btn-submit-moves');
   btn.disabled = true;
   try {
-    const { comment, sealed } = await submitOrders(game.gistId, {
-      power, year: game.year, season: game.season, step: game.step,
+    const { comment, sealed } = await submitOrders(liveGame.gistId, {
+      power, year: liveGame.year, season: liveGame.season, step: liveGame.step,
       orders: block,
     }, online.sealKey);
     online.restored = true; // what's in the box IS the submission now
@@ -2650,7 +3185,7 @@ async function doLoadPublishedMoves() {
       toast('Reloaded your published orders', 'info');
       return;
     }
-    const { text, submitted } = O.gatherPhaseBlocks(game, online, 'revealed');
+    const { text, submitted } = O.gatherPhaseBlocks(liveGame, online, 'revealed');
     if (!submitted) return toast('No published moves for this phase yet');
     applyOrdersText(text);
     toast(`Loaded moves for ${submitted} power${submitted === 1 ? '' : 's'}`, 'info');
@@ -2674,7 +3209,7 @@ async function gmLoadOrders() {
     // everyone else gets the blank per-phase template — so the box always
     // shows the full roster to fill in by hand, submissions or not.
     const blanks = T.splitOrdersByPower(defaultOrdersText());
-    const { text, submitted } = O.gatherPhaseBlocks(game, online, 'gm', blanks);
+    const { text, submitted } = O.gatherPhaseBlocks(liveGame, online, 'gm', blanks);
     applyOrdersText(text);
     gmOrdersLoaded = true;
     refreshAll();
@@ -2704,7 +3239,7 @@ async function gmLoadOrders() {
 async function gmWriteLoadedMovesFiles(text, phase) {
   const byPower = T.splitOrdersByPower(text);
   if (!byPower.size) return;
-  const moves = await readMovesFiles(await fetchGist(game.gistId));
+  const moves = await readMovesFiles(await fetchGist(liveGame.gistId));
   const updates = {};
   for (const [p, lines] of byPower) {
     const ordersText = lines.slice(1).join('\n').trim();
@@ -2715,7 +3250,7 @@ async function gmWriteLoadedMovesFiles(text, phase) {
       publishedAt: new Date().toISOString(), publishedBy: 'gm',
     });
   }
-  if (Object.keys(updates).length) await writeMovesFiles(game.gistId, updates);
+  if (Object.keys(updates).length) await writeMovesFiles(liveGame.gistId, updates);
 }
 
 // A GM setting — the deadline, the publish mode, player assignments, a late
@@ -2732,7 +3267,7 @@ async function gmWriteLoadedMovesFiles(text, phase) {
 // refresh only on success.
 async function pushSettings(okMsg, failMsg) {
   try {
-    await updatePublished(game, game.publishedState);
+    await updatePublished(liveGame, liveGame.publishedState);
     if (okMsg) toast(okMsg, 'info');
     return true;
   } catch (e) {
@@ -2753,13 +3288,13 @@ async function pushSettings(okMsg, failMsg) {
 // phase. Returns the history entry, whose phase stamp is the one the orders
 // belong to — never game.year/season/step, which has already advanced by then.
 async function publishResolvedPhase(orders, text) {
-  const entry = S.resolvePhase(game, orders, text);
-  S.saveGame(game);
+  const entry = S.resolvePhase(liveGame, orders, text);
+  S.saveGame(liveGame);
   await gmWriteLoadedMovesFiles(text, entry);
-  clearDeadline(game);
-  await updatePublished(game);
-  game.publishedState = S.boardSnapshot(game);
-  S.saveGame(game);
+  clearDeadline(liveGame);
+  await updatePublished(liveGame);
+  liveGame.publishedState = S.boardSnapshot(liveGame);
+  S.saveGame(liveGame);
   return entry;
 }
 
@@ -2830,13 +3365,13 @@ async function gmPublishPreview() {
 // It also stands down while a preview is open (`playback`), so it never yanks
 // the board out from under one.
 async function autoPublishIfDue() {
-  if (!game || !game.published || !isOwnerView() || playback || autoPublishing) return;
+  if (!liveGame || !liveGame.published || !isOwnerView() || playback || autoPublishing) return;
   if (publishMode() !== 'auto') return;
   if (!deadlineIsForCurrentPhase() || !deadlinePassed()) return;
   // The board came from an optimistic local resolve that no GM has confirmed
   // (a play-as session earlier in this browser). Its phase is not ours to
   // publish — belt and braces for games too old to carry a deadlineFor stamp.
-  if (game.provisionalPhase) return;
+  if (liveGame.provisionalPhase) return;
   autoPublishing = true;
   try {
     await refreshOnlineStatus();
@@ -2845,7 +3380,7 @@ async function autoPublishIfDue() {
     // to a resolution — the GM may have moved the deadline from another device
     // in the moments since the gate above.
     if (publishMode() !== 'auto' || !deadlineIsForCurrentPhase() || !deadlinePassed()) return;
-    const { text, submitted } = O.gatherPhaseBlocks(game, online, 'ontime');
+    const { text, submitted } = O.gatherPhaseBlocks(liveGame, online, 'ontime');
     // Not one power submitted anything readable and on time. Resolving that is
     // a whole-board all-hold nobody asked for — never a result worth committing
     // unattended, and the shape every "the deadline outlived its phase" bug
@@ -2854,7 +3389,7 @@ async function autoPublishIfDue() {
     // non-empty block and counts, which is the (rare, legal) all-hold phase
     // players actually chose.
     if (!submitted) {
-      const label = S.phaseLabel(game);
+      const label = S.phaseLabel(liveGame);
       if (autoPublishIdleFor !== label) {
         autoPublishIdleFor = label;
         toast(
@@ -2864,7 +3399,7 @@ async function autoPublishIfDue() {
       }
       return;
     }
-    const parsed = parseOrders(text, phaseKind());
+    const parsed = parseOrders(text, livePhaseKind());
     const entry = await publishResolvedPhase(parsed.orders, text);
     autoPublishIdleFor = null;
     refreshAll();
@@ -2882,8 +3417,8 @@ async function savePlayers() {
     const v = input.value.trim().replace(/^@/, '');
     if (v) players[input.dataset.power] = v;
   }
-  game.players = players;
-  S.saveGame(game);
+  liveGame.players = players;
+  S.saveGame(liveGame);
   if (await pushSettings('Player assignments saved to the published game', 'Save failed')) {
     closePlayersModal();
     await refreshOnlineStatus();
@@ -2921,20 +3456,20 @@ function doEditToken() {
 async function doPublish() {
   if (!getToken() && !askToken()) return;
   try {
-    const { id, url } = await publishGame(game);
-    game.gistId = id;
-    game.gistUrl = url;
-    game.published = true;
-    game.isOwner = true;
-    delete game.branchedFrom; // it is its own game now, not a copy of one
-    game.publishedState = S.boardSnapshot(game);
-    S.saveGame(game);
+    const { id, url } = await publishGame(liveGame);
+    liveGame.gistId = id;
+    liveGame.gistUrl = url;
+    liveGame.published = true;
+    liveGame.isOwner = true;
+    delete liveGame.branchedFrom; // it is its own game now, not a copy of one
+    liveGame.publishedState = S.boardSnapshot(liveGame);
+    S.saveGame(liveGame);
     refreshAll();
     const shareLink = `${location.origin}${location.pathname}?gist=${id}`;
     prompt(
       'Published — this sandbox is now the live game, and you are its game master. ' +
       'Send this link to every player: they get the position live, can pick their ' +
-      'country to draft orders, and can preview or branch freely without ever ' +
+      'country to draft orders, and can preview or analyse freely without ever ' +
       'touching it. Assign their GitHub usernames in 👥 Set players so they can ' +
       'submit in-app. After you resolve a turn, "☁ Publish changes" is what the ' +
       'table sees.',
@@ -2951,16 +3486,16 @@ async function doPublish() {
 // order-reveal flow). Only enabled while boardDirty() — see refreshAll().
 async function doUpdatePublished() {
   try {
-    await updatePublished(game);
-    game.publishedState = S.boardSnapshot(game);
-    S.saveGame(game);
+    await updatePublished(liveGame);
+    liveGame.publishedState = S.boardSnapshot(liveGame);
+    S.saveGame(liveGame);
     $('btn-update-published').disabled = !boardDirty();
     updateSyncPill();
     const hasPlayers = hasAssignedPlayers();
     if (hasPlayers && !ordersOpen()) {
-      toast(`Published ${S.phaseLabel(game)} — now confirm the next deadline in ⏰ Deadline`, 'info');
+      toast(`Published ${S.phaseLabel(liveGame)} — now confirm the next deadline in ⏰ Deadline`, 'info');
     } else {
-      toast(`Published — every player now sees ${S.phaseLabel(game)}`, 'info');
+      toast(`Published — every player now sees ${S.phaseLabel(liveGame)}`, 'info');
     }
   } catch (e) {
     toast('Publish failed: ' + e.message);
@@ -2974,29 +3509,32 @@ async function doUpdatePublished() {
 // an unsubmitted draft is the one thing here worth more than the position,
 // which can always be re-fetched.
 async function revertToPublished() {
-  if (!isOnline() || !game.gistId) return;
+  if (!isOnline() || !liveGame.gistId) return;
   if (!confirm(
     'Reload the published position?\n\n' +
     'Every local change to this game\'s board, phase and history is thrown away ' +
     'and replaced with what is on the shared link. Your draft orders stay in the box.'
   )) return;
   try {
-    const { game: fresh } = await fetchPublished(game.gistId);
+    const { game: fresh } = await fetchPublished(liveGame.gistId);
     const keep = {
-      name: game.name,
-      gistId: game.gistId,
-      gistUrl: game.gistUrl,
+      name: liveGame.name,
+      gistId: liveGame.gistId,
+      gistUrl: liveGame.gistUrl,
       published: true,
-      isOwner: game.isOwner,
-      myCountry: game.myCountry,
-      assignedPower: game.assignedPower,
-      playAs: game.playAs,
+      isOwner: liveGame.isOwner,
+      myCountry: liveGame.myCountry,
+      assignedPower: liveGame.assignedPower,
+      playAs: liveGame.playAs,
     };
     playback = null;
-    game = Object.assign(S.importGame(JSON.stringify(fresh)), keep);
-    game.settings = S.gameSettings(game);
-    game.publishedState = S.boardSnapshot(game);
-    S.saveGame(game);
+    // The game object itself is replaced, so the analysis tree that hung off
+    // the old one goes with it — which is right: this is the position moving.
+    liveGame = game = Object.assign(S.importGame(JSON.stringify(fresh)), keep);
+    liveGame.settings = S.gameSettings(liveGame);
+    liveGame.publishedState = S.boardSnapshot(liveGame);
+    liveDraft = null;
+    S.saveGame(liveGame);
     refreshAll();
     toast('Reloaded the published position', 'info');
     refreshOnlineStatus();
@@ -3057,7 +3595,7 @@ async function loadPublishedGame(idOrUrl) {
     toast(
       isOwner
         ? 'Loaded published game — you can publish updates from this browser too'
-        : 'Loaded published game — pick your country to write orders, or Branch to plan ahead',
+        : 'Loaded published game — pick your country to write orders, or 🌿 Analysis to plan ahead',
       'info'
     );
   } catch (e) {
@@ -3089,10 +3627,15 @@ async function init() {
   $('btn-home').onclick = () => {
     // a GM walking away from an unpublished turn is the one exit worth
     // catching: the table is still waiting on a board only this browser has
-    if (boardDirty() && !confirm(
+    if (!inAnalysis() && boardDirty() && !confirm(
       'This game has changes that are not published yet.\n\n' +
       'Leave anyway? They stay saved here — ☁ Publish changes when you come back.'
     )) return;
+    if (inAnalysis()) {
+      persistLineOrders();
+      flushLineSave();
+      game = liveGame; // the tree stays on the game, ready for next time
+    }
     playback = null;
     renderHome();
     showScreen('home-screen');
@@ -3149,7 +3692,7 @@ async function init() {
   // caught after resolving can be backed out and fixed instead of already
   // being committed to game.history. Only a sandbox (or a debug "view as
   // player") ever mutates the real game directly on Resolve.
-  const gmPublishFlow = () => isOwnerView() && game.published;
+  const gmPublishFlow = () => isOwnerView() && liveGame.published;
   $('btn-resolve').onclick = () => (isReadOnly() || gmPublishFlow() ? previewResolve(false, gmPublishFlow()) : resolveCurrent());
   $('btn-resolve-final').onclick = () => (isReadOnly() || gmPublishFlow() ? previewResolve(true, gmPublishFlow()) : resolveAndSkip());
   $('btn-token').onclick = doEditToken;
@@ -3159,8 +3702,8 @@ async function init() {
   $('btn-open-source').onclick = openBranchSource;
   $('btn-sync').onclick = doUpdatePublished;
   $('country-select').onchange = () => {
-    game.myCountry = $('country-select').value || null;
-    S.saveGame(game);
+    liveGame.myCountry = $('country-select').value || null;
+    S.saveGame(liveGame);
     prefillOrders(true);
     onOrdersChanged();
   };
@@ -3202,7 +3745,7 @@ async function init() {
     game.year = +$('edit-year').value || 1901;
     game.step = 'movement';
     game.pending = null;
-    S.saveGame(game);
+    saveCurrent();
     refreshAll();
   };
   $('edit-1901').onclick = () => {
@@ -3211,7 +3754,7 @@ async function init() {
     game.units = fresh.units;
     game.scOwners = fresh.scOwners;
     game.pending = null;
-    S.saveGame(game);
+    saveCurrent();
     refreshAll();
   };
   $('edit-clear').onclick = () => {
@@ -3219,7 +3762,7 @@ async function init() {
     game.units = [];
     for (const k of Object.keys(game.scOwners)) game.scOwners[k] = null;
     game.pending = null;
-    S.saveGame(game);
+    saveCurrent();
     refreshAll();
   };
 
@@ -3231,7 +3774,7 @@ async function init() {
   $('pb-continue').onclick = pbContinue;
   $('pb-back-current').onclick = endPlayback;
   $('pb-copy').onclick = copyResults;
-  $('pb-branch').onclick = branchCurrent;
+  $('pb-branch').onclick = copyCurrentToSandbox;
   // the floating on-map set drives the same playback as the sidebar's
   $('pbf-next').onclick = () => stepPlayback(1);
   $('pbf-prev').onclick = () => stepPlayback(-1);
@@ -3249,7 +3792,17 @@ async function init() {
   $('btn-replay').onclick = replaySelected;
   $('btn-undo').onclick = undoPhase;
   $('btn-redo').onclick = doRedoPhase;
-  $('btn-branch').onclick = branchCurrent;
+  $('btn-copy-sandbox').onclick = copyCurrentToSandbox;
+
+  // 🌿 analysis
+  $('ms-live').onclick = exitAnalysis;
+  $('ms-analysis').onclick = enterAnalysis;
+  $('an-new-plan').onclick = newPlan;
+  $('an-new-var').onclick = newVariation;
+  $('an-rename').onclick = () => renameNode(tree().activeId);
+  $('an-delete').onclick = deleteActiveNode;
+  $('an-use-orders').onclick = useLineOrdersLive;
+  $('analysis-focus').onchange = (e) => setAnalysisFocus(e.target.value);
 
   $('btn-game-settings').onclick = openGameSettings;
   $('set-cancel').onclick = () => $('game-settings-dialog').close();
@@ -3284,17 +3837,26 @@ async function init() {
   // where autoPublishIfDue() is the one place outside explicit buttons/🔄 the
   // network gets touched — deliberately, since auto-publish means no one has
   // to be watching for the deadline to pass.
+  // Both ticks watch the LIVE game, whichever line is on screen: a line is
+  // exactly when a player is least likely to notice the deadline passing or
+  // the table's next phase landing, so the poll that notices it for them must
+  // not stand down just because the board shows a hypothetical.
   setInterval(() => {
-    if (game && game.published && !playback) {
-      renderOnlineUI();
-      if (game.isOwner) autoPublishIfDue();
+    if (liveGame && liveGame.published && !playback) {
+      if (inAnalysis()) renderAnalysisUI();
+      else renderOnlineUI();
+      // Deliberately runs during analysis too: the table is waiting on this
+      // browser, and a line is a private aside. Publishing moves the live
+      // position, so validateAnalysis() then clears the tree and says so —
+      // being pulled out of a hypothetical beats a phase never publishing.
+      if (liveGame.isOwner) autoPublishIfDue();
     }
   }, 60000);
 
   // the topbar countdown chip ticks every second on its own — far cheaper
   // than a full renderOnlineUI(), and it's the one place a second matters
   setInterval(() => {
-    if (game && game.published && !playback) updateDeadlineCountdown();
+    if (liveGame && liveGame.published && !playback && !inAnalysis()) updateDeadlineCountdown();
   }, 1000);
 
   renderHome();

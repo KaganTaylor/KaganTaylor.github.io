@@ -33,7 +33,15 @@ export function setToken(t) {
   else localStorage.removeItem(TOKEN_KEY);
 }
 
-function stripForPublish(game) {
+// What actually goes into the gist's game.json. A DROP LIST, not a keep list,
+// so a field added to the game object is published unless someone thinks about
+// it — which is why test/publish-strip.test.js asserts the exact key set and
+// fails on any new one until it has been classified here.
+//
+// Getting this wrong is not cosmetic. `analysis` holds the plans this browser
+// is working out against the other six powers; publishing it would hand every
+// player at the table their opponent's notes.
+export function stripForPublish(game) {
   // viewer-local fields only — `players` (power → GitHub login) stays in,
   // it is shared state every viewer needs to know their assignment.
   // publishedState is the game master's own bookkeeping of what's already
@@ -45,9 +53,11 @@ function stripForPublish(game) {
   // session — and an inherited provisionalPhase is actively harmful, since
   // syncViewerToGist() treats it as "I am deliberately ahead of the gist" and
   // stops reconciling (it reached the gist once; see DECISIONS.md).
+  // `analysis` is this browser's private 🌿 analysis tree (js/analysis.js) —
+  // secret plans, and never part of the position.
   const {
     gistId, gistUrl, published, isOwner, myCountry, assignedPower, publishedState,
-    branchedFrom, sandbox, provisionalPhase, playAs,
+    branchedFrom, sandbox, provisionalPhase, playAs, analysis,
     ...rest
   } = game;
   return rest;
