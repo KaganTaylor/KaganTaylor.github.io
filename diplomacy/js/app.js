@@ -386,10 +386,9 @@ const inAnalysis = () => A.isLine(game);
 const tree = () => (liveGame && liveGame.analysis) || null;
 
 // Which power's orders the visible textarea shows, everything else going to
-// the hidden buffer. A line shows every power at once: exploring what the
-// other six might do is the entire point, and the plan/variation split that
-// keeps my own orders separate is applied when the box is stored back into the
-// tree (analysis.js setNodeOrders), not by hiding half of it here.
+// the hidden buffer. A line shows every power at once, with no filter and no
+// hidden buffer: exploring what the other six might do is the entire point,
+// and the line's draft is the whole box (persistLineOrders).
 const myCountry = () => (inAnalysis() ? '' : R.myCountry(liveGame));
 
 function openGame(g) {
@@ -426,9 +425,7 @@ function refreshAll() {
   // that is belongs to the mode chip, not to the game's identity.
   $('game-name').textContent = liveGame ? liveGame.name : '';
   $('phase-label').textContent = S.phaseLabel(game);
-  // Said on the map itself, so it survives a full-screen phone with every
-  // panel closed — the one place mode confusion would otherwise be invisible.
-  board.setPhaseText((an ? '🌿 ANALYSIS — ' : '') + S.phaseLabel(game));
+  board.setPhaseText(S.phaseLabel(game));
   board.setInfluence(game.scOwners);
   board.setUnits(game.units, game.step === 'retreat' ? game.pending.dislodged : []);
   board.clearOrders();
@@ -483,11 +480,11 @@ function refreshAll() {
   // a viewer's local copy is never allowed to move, so there is nothing to
   // undo there — and never anything to publish either — so the buttons
   // disappear entirely rather than sitting there disabled; 🌿 Analysis is the
-  // way to explore instead. Inside a line the tree IS the history: stepping
-  // back is picking the variation above, so undo/redo would be a second,
-  // disagreeing way to say the same thing.
-  $('btn-undo').hidden = ro || an;
-  $('btn-redo').hidden = ro || an;
+  // way to explore instead. A LINE always keeps them: it is a game of its own,
+  // and running phases forward and stepping back through them is the whole
+  // point of one — which is also how you get back to a phase worth branching at.
+  $('btn-undo').hidden = ro && !an;
+  $('btn-redo').hidden = ro && !an;
   setGated($('btn-undo'), game.history.length ? null : 'Nothing to undo — no phase has been resolved yet',
     'Undo the most recent phase — the board goes back and your orders return to the box');
   setGated($('btn-redo'), (game.redoStack && game.redoStack.length) ? null : 'Nothing to redo — undo a phase first',
@@ -554,13 +551,11 @@ function renderModeChip() {
   const el = $('mode-chip');
   const mode = gameMode();
   let icon, text, title;
-  if (mode === 'analysis') {
-    // Naming the open line is the point: "🌿 Analysis" alone would say which
-    // mode this is but not which of six hypotheticals is on the board.
-    const label = A.lineLabel(tree(), game.nodeId);
-    [icon, text, title] = ['🌿', `Analysis · ${label}`,
-      `A private line off ${liveGame.name}, rooted at ${tree().rootLabel}. Nothing here reaches the live game, and the whole tree is cleared when the live position moves on.`];
-  } else if (mode === 'player') {
+  // 'analysis' deliberately has no chip. The ☁/🌿 switch beside it is already
+  // a mode indicator, and it names the open line on its own button (see
+  // renderAnalysisUI) — a chip repeating that was the same fact twice, in two
+  // places, with a breadcrumb long enough to push the phase off a phone.
+  if (mode === 'player') {
     const power = assignedPower();
     [icon, text, title] = ['☁', `Live · ${POWER_FLAGS[power] || ''} ${cap(power)}`,
       `You are playing ${cap(power)} in a published game. Orders here are a private draft until you 📤 Submit them; the board itself is the game master's to move.`];
@@ -606,21 +601,11 @@ function renderBranchNote() {
 function renderDraftNote() {
   const el = $('draft-note');
   const mode = gameMode();
-  // Inside a line the box is doing something no other mode asks of it: the
-  // focus power's orders belong to the PLAN and are shared with every sibling
-  // variation, everyone else's belong to this variation alone. Editing your
-  // own orders here deliberately changes all the replies you have explored
-  // under this plan, and that has to be said or it reads as a bug.
   if (mode === 'analysis') {
-    const t = tree();
-    const active = A.getNode(t, game.nodeId);
-    const plan = active && A.getNode(t, active.parent);
-    if (!plan) return;
-    const sibs = A.variationsOf(t, plan.id).length;
+    const active = A.getNode(tree(), game.nodeId);
     el.hidden = false;
-    el.textContent = t.focus
-      ? `🌿 ${cap(t.focus)}'s orders belong to the plan “${plan.name}” — editing them updates all ${sibs} variation${sibs === 1 ? '' : 's'} under it. Everyone else's belong to this variation alone.`
-      : '🌿 These orders belong to this variation alone. Pick a country to plan for in 🌿 Analysis to keep your own orders shared across its variations.';
+    el.textContent = `🌿 Orders for “${active ? active.name : 'this line'}” — write everyone's, resolve, and keep going. ` +
+      'Nothing here reaches the live game.';
     return;
   }
   if (mode === 'sandbox' || mode === 'player') {
@@ -686,10 +671,10 @@ function prefillOrders(preserve = false) {
     info.textContent = infoLines.join('\n') || 'No builds or disbands required.';
   }
 
-  // A line's box starts from the orders stored on its node rather than from a
-  // blank template — reopening a variation must show the moves that make it
-  // that variation. Powers the node has no block for still get the template.
-  const stored = inAnalysis() ? A.nodeOrdersText(tree(), game.nodeId) : '';
+  // A line's box starts from the draft stored on the line's own game rather
+  // than from a blank template — reopening a line must show the moves that
+  // make it that line. Powers with no block yet still get the template.
+  const stored = inAnalysis() ? (game.orders || '') : '';
   const merged = T.mergeBlocks(
     T.splitOrdersByPower(preserve ? fullOrdersText() : stored),
     T.splitOrdersByPower(defaultOrdersText())
@@ -752,9 +737,10 @@ function onOrdersChanged() {
   // keystroke, or it is reporting the state from the last network refresh
   if (game && !inAnalysis() && assignedPower()) renderSubmitStatus();
   // The order box IS the line, exactly as it is the game everywhere else, so
-  // every keystroke and every drag writes straight through into the node. The
-  // localStorage write behind it is debounced (scheduleLineSave); the node
-  // itself is updated immediately, so nothing can be lost by navigating away.
+  // every keystroke and every drag writes straight through onto the line's own
+  // game object. The localStorage write behind it is debounced
+  // (scheduleLineSave); the draft itself is updated immediately, so nothing can
+  // be lost by navigating away.
   if (game && inAnalysis() && !playback) persistLineOrders();
   drawLive();
   return { orders: own.orders, errors: own.errors };
@@ -1255,7 +1241,9 @@ function editApply() {
   onOrdersChanged();
   if (!inAnalysis() && liveGame.published && isOwnerView()) $('btn-update-published').disabled = !boardDirty();
   updateSyncPill();
-  if (inAnalysis()) renderAnalysisTree(); // the edit may have invalidated an outcome below
+  // an edited board is a different phase label, and may have orphaned a
+  // branch cut from this line (analysis.js isStale)
+  if (inAnalysis()) renderAnalysisTree();
 }
 
 function editClick(p, ev) {
@@ -1310,17 +1298,21 @@ function editDrop(from, to, ev) {
 // ---------------------------------------------------------------------------
 // resolve + playback
 // ---------------------------------------------------------------------------
-// The three resolve entry points all guard on analysis first rather than being
-// routed at the buttons, because which of them a button calls depends on the
-// viewer's role in the LIVE game (a spectator's Resolve is previewResolve),
-// and a line must resolve as a line whichever role opened it.
+// Resolving a line is resolving a game — the same call, on the line's own game
+// object, saved through saveCurrent(). What a line needs is not a second
+// resolve path but a way past previewResolve(), which exists because a
+// SPECTATOR must not move the published position; inside a line there is
+// nothing published to protect.
 function resolveCurrent() {
-  if (inAnalysis()) return resolveLine(false);
   const { orders, errors } = onOrdersChanged();
   if (errors.length) return toast('Fix the order problems first');
   const text = $('orders-text').value;
   const entry = S.resolvePhase(game, orders, text);
-  S.saveGame(game);
+  // A line's draft lives on its game object, so the phase it belonged to
+  // taking it into history is also the moment to clear it — otherwise the next
+  // phase opens on the last one's orders.
+  if (inAnalysis()) game.orders = '';
+  saveCurrent();
   startPlayback(entry, false);
   updateSyncPill();
 }
@@ -1361,7 +1353,7 @@ function shadowGame() {
 // gmPublishPreview() can commit the identical resolution for real once the
 // GM is happy with it, instead of re-deriving from a possibly-since-edited box.
 function previewResolve(toFinal, gmPublish = false) {
-  if (inAnalysis()) return resolveLine(toFinal);
+  if (inAnalysis()) return toFinal ? resolveAndSkip() : resolveCurrent();
   const { orders, errors } = onOrdersChanged();
   if (errors.length) return toast('Fix the order problems first');
   const shadow = shadowGame();
@@ -1376,12 +1368,12 @@ function previewResolve(toFinal, gmPublish = false) {
 // lands on the next phase's order screen. Lets sandbox users blitz through
 // several turns without clicking through each one's step-through.
 async function resolveAndSkip() {
-  if (inAnalysis()) return resolveLine(true);
   const { orders, errors } = onOrdersChanged();
   if (errors.length) return toast('Fix the order problems first');
   const text = $('orders-text').value;
   const entry = S.resolvePhase(game, orders, text);
-  S.saveGame(game);
+  if (inAnalysis()) game.orders = '';
+  saveCurrent();
   playback = null;
   $('panel-orders').hidden = true;
   $('panel-edit').hidden = true;
@@ -1400,7 +1392,8 @@ function doRedoPhase() {
   const entry = S.redoPhase(game);
   if (!entry) return toast('Nothing to redo');
   playback = null;
-  S.saveGame(game);
+  if (inAnalysis()) game.orders = '';
+  saveCurrent();
   refreshAll();
   toast(`Redid ${entry.label}`, 'info');
 }
@@ -1601,6 +1594,10 @@ function startPlayback(entry, readonly, preview = null, gmPending = null) {
   });
   playback.step = playback.orders.length ? 0 : outcomeStep();
   renderPlayback();
+  // Replaying a past phase of a line moves the branch point (viewedIndex), and
+  // nothing else on this path calls refreshAll — so the panel would otherwise
+  // go on offering to branch from the position you just stepped away from.
+  if (inAnalysis()) renderAnalysisUI();
 }
 
 const outcomeStep = () => playback.orders.length;
@@ -1654,7 +1651,7 @@ function renderPlayback() {
   const { entry, step, orders } = playback;
   const isAdjustment = entry.step === 'adjustment';
   board.clearOrders();
-  board.setPhaseText((inAnalysis() ? '🌿 ANALYSIS — ' : '') + entry.label);
+  board.setPhaseText(entry.label);
 
   if (step >= finalStep()) {
     board.setInfluence(entry.scOwnersAfter);
@@ -1743,12 +1740,7 @@ function stepPlayback(delta) {
 function endPlayback() {
   const wasPreview = !!(playback && playback.preview);
   const wasCatchUp = !!(playback && playback.catchUp);
-  const lineNext = playback && playback.lineNext;
   playback = null;
-  // A line's resolution lands IN the line: the variation it just played out
-  // now has an outcome, and the board comes back on the position that outcome
-  // produced, ready for the next phase's orders (see resolveLine).
-  if (lineNext) return openNode(lineNext);
   // More phases to see before this browser matches the published game —
   // step straight into the next one instead of dropping back to the order
   // box in between (see catchUpNext()).
@@ -1941,6 +1933,18 @@ function replaySelected() {
 }
 
 function undoPhase() {
+  // Inside a line, undo is just undo: the line is a game of its own, nobody
+  // else can see it, and stepping a phase back is how you get to the position
+  // you want to try something else from.
+  if (inAnalysis()) {
+    const entry = S.undoLastPhase(game);
+    if (!entry) return toast('Nothing to undo — this line has not resolved a phase yet');
+    playback = null;
+    game.orders = entry.ordersText || '';
+    flushLineSave();
+    refreshAll();
+    return toast(`Undid ${entry.label} — orders restored below`, 'info');
+  }
   // undoing a published turn walks the official position backwards — fine (it
   // is how a GM fixes a mis-entered order) but worth being deliberate about
   if (isOwnerView() && liveGame.published && liveGame.history.length && !confirm(
@@ -1978,12 +1982,10 @@ function undoPhase() {
 // game; anything else is an ordinary saved game. Replaces the bare
 // S.saveGame(game) at every call site that a line can reach.
 function saveCurrent() {
-  if (inAnalysis()) {
-    // ✏ Edit board inside a line moves that variation's starting position
-    A.setNodeBefore(tree(), game.nodeId, game);
-    flushLineSave();
-    return;
-  }
+  // A line's game object IS the node's game object, so there is nothing to
+  // copy across — resolving, undoing and ✏ Edit board have already written to
+  // the tree, and all that is left is to put the live game in the store.
+  if (inAnalysis()) return flushLineSave();
   S.saveGame(game);
 }
 
@@ -2010,9 +2012,8 @@ function flushLineSave() {
 }
 
 function persistLineOrders() {
-  const t = tree();
-  if (!t || !inAnalysis()) return;
-  if (A.setNodeOrders(t, game.nodeId, fullOrdersText(), t.focus)) renderAnalysisTree();
+  if (!tree() || !inAnalysis()) return;
+  game.orders = fullOrdersText();
   scheduleLineSave();
 }
 
@@ -2028,7 +2029,7 @@ function persistLineOrders() {
 function validateAnalysis() {
   const t = tree();
   if (!t || A.rootMatches(t, liveGame)) return;
-  discardedLines = A.variationCount(t);
+  discardedLines = A.lineCount(t);
   liveGame.analysis = null;
   if (inAnalysis()) {
     game = liveGame;
@@ -2061,17 +2062,15 @@ function enterAnalysis() {
   if (inAnalysis()) return;
   playback = null;
   setEditMode(false);
-  if (!A.rootMatches(liveGame.analysis, liveGame)) {
-    liveGame.analysis = A.newTree(liveGame, assignedPower() || R.myCountry(liveGame) || '');
-  }
+  if (!A.rootMatches(liveGame.analysis, liveGame)) liveGame.analysis = A.newTree(liveGame);
   // The live game's draft is parked, not thrown away: for an assigned player
   // it is the one thing on this screen worth more than the position.
   liveDraft = fullOrdersText();
   // A player's box is collapsed by default (openGame) because their orders
   // are a second thing to check; in a line the orders ARE the thing.
   $('orders-box').open = true;
-  openNode(A.ensureEntry(liveGame.analysis));
-  toast('🌿 Analysis — try anything; nothing here reaches the live game', 'info');
+  openNode(A.ensureEntry(liveGame.analysis, S.gameSettings(liveGame)));
+  toast('🌿 Analysis — resolve as far ahead as you like; nothing here reaches the live game', 'info');
 }
 
 function exitAnalysis() {
@@ -2084,53 +2083,84 @@ function exitAnalysis() {
   refreshAll(); // puts the parked draft back — see the liveDraft branch there
 }
 
-// Put a variation on the board. `activeId` always names a variation: a plan is
-// a folder holding one power's orders, not a position to render.
+// Put a line on the board. `activeId` always names a LINE — a folder is
+// organisation, never a position to render.
 function openNode(id) {
   const t = tree();
   const n = A.getNode(t, id);
-  if (!n) return;
-  if (n.kind === 'plan') return openNode((A.variationsOf(t, id)[0] || {}).id);
+  if (!n || n.kind !== 'line') return;
   if (inAnalysis() && game.nodeId !== id) persistLineOrders();
   playback = null;
   setEditMode(false);
   t.activeId = id;
+  t.selectedId = id;
+  // A line hidden inside a collapsed folder would be on the board with nothing
+  // in the tree pointing at it, so opening one opens the way to it.
+  for (const a of A.pathTo(t, id)) if (a.kind === 'folder') a.collapsed = false;
   game = A.lineGame(t, id, liveGame);
   flushLineSave();
   refreshAll();
 }
 
-// Resolving inside a line. The line's own game object is advanced for real
-// (it is a disposable copy, rebuilt from the tree on every openNode), the
-// outcome is recorded on the variation, and the playback lands on the child
-// variation that continues the line rather than backing out to where it
-// started — the tree is the history, so forward is the only direction.
-async function resolveLine(skip) {
-  const { orders, errors } = onOrdersChanged();
-  if (errors.length) return toast('Fix the order problems first');
-  const t = tree();
-  const varId = game.nodeId;
-  const text = fullOrdersText();
-  A.setNodeOrders(t, varId, text, t.focus);
-  const entry = S.resolvePhase(game, orders, text);
-  const nextId = A.recordResolution(t, varId, game);
-  flushLineSave();
-  if (!skip) {
-    startPlayback(entry, false);
-    playback.lineNext = nextId;
-    return;
+// Which phase of the open line is being looked at — the branch point, and the
+// only input to where ⑂ Branch puts the new line. It is the line's current
+// position unless a past phase of it is being replayed, which is what "click
+// in the history bar and view the previous phase" leaves on screen.
+function viewedIndex() {
+  if (!inAnalysis()) return 0;
+  if (playback && !playback.preview) {
+    const i = game.history.indexOf(playback.entry);
+    if (i >= 0) return i;
   }
-  playback = null;
-  $('panel-orders').hidden = true;
-  $('panel-edit').hidden = true;
-  mobileSheet = null;
-  applyMobileSheetUI();
-  board.clearOrders();
-  board.setPhaseText('🌿 ANALYSIS — ' + entry.label);
-  board.setInfluence(entry.scOwnersBefore);
-  board.setUnits(entry.unitsBefore, entry.step === 'retreat' ? entry.dislodged : []);
-  await board.animateFinal(entry);
-  openNode(nextId);
+  return game.history.length;
+}
+
+const selectedNode = () => {
+  const t = tree();
+  return A.getNode(t, t.selectedId) || A.getNode(t, t.activeId);
+};
+
+function selectNode(id) {
+  const t = tree();
+  if (!A.getNode(t, id)) return;
+  t.selectedId = id;
+  renderAnalysisUI();
+}
+
+// ⑂ Branch. Everything about where the new line lands comes from the phase on
+// screen (viewedIndex) — see analysis.js branchParent for the rule and why it
+// is the one worth having.
+function branchLine() {
+  const t = tree();
+  const src = A.getNode(t, t.activeId);
+  if (!src) return;
+  if (!A.canBranch(t)) {
+    return toast(`That is ${A.MAX_LINES} lines — delete one before branching again`);
+  }
+  persistLineOrders();
+  const i = viewedIndex();
+  const node = A.branchFrom(t, src.id, i, S.gameSettings(liveGame));
+  if (!node) return;
+  flushLineSave();
+  openNode(node.id);
+  toast(i > 0
+    ? `⑂ ${node.name} — nested under “${src.name}”, from ${node.from.label}`
+    : `⑂ ${node.name} — beside “${src.name}”, from ${node.from.label}`, 'info');
+}
+
+// 📁 Folder. Takes the selected row's whole level with it (analysis.js
+// groupSiblings) — a folder that starts empty would be a folder that starts by
+// doing nothing.
+function newFolder() {
+  const t = tree();
+  const sel = selectedNode();
+  if (!sel) return;
+  const f = A.groupSiblings(t, sel.id);
+  if (!f) return;
+  t.selectedId = f.id;
+  flushLineSave();
+  renderAnalysisUI();
+  toast(`📁 ${f.name} — the lines at that level are now inside it. Drag any row in or out.`, 'info');
 }
 
 // ---- the 🌿 Analysis panel -------------------------------------------------
@@ -2139,16 +2169,23 @@ function renderAnalysisUI() {
   const an = inAnalysis();
   const available = R.isOnline(liveGame);
   const why = analysisUnavailableReason();
+  const t = tree();
+  const active = an ? A.getNode(t, game.nodeId) : null;
   // The switch is a two-state segmented control rather than a button, so it
   // says which side you are on as well as offering the other — the single
-  // strongest thing on the page against thinking a line is the real game.
+  // strongest thing on the page against thinking a line is the real game. It
+  // also carries the open line's NAME, which is why there is no analysis mode
+  // chip and no breadcrumb beside it: one control, saying both facts once.
   $('mode-switch').hidden = !available;
   $('ms-live').classList.toggle('on', !an);
   $('ms-analysis').classList.toggle('on', an);
   $('ms-live').setAttribute('aria-pressed', String(!an));
   $('ms-analysis').setAttribute('aria-pressed', String(an));
-  setGated($('ms-analysis'), an ? null : why,
-    'Open a private tree of plans and variations off this position');
+  $('ms-analysis').querySelector('.ms-label').textContent = active ? active.name : 'Analysis';
+  setGated($('ms-analysis'), an ? null : why, an
+    ? `${A.lineLabel(t, active.id)} — a private line off ${liveGame.name}, rooted at ${t.rootLabel}. ` +
+      'Nothing here reaches the live game, and the whole tree is cleared when the live position moves on.'
+    : 'Open a private tree of lines off this position');
   $('mtab-analysis').hidden = !available;
   // Cleared on the way out as well as set on the way in: setGated leaves an
   // aria-disabled attribute behind, and a Resolve left gated by a stale line
@@ -2158,8 +2195,7 @@ function renderAnalysisUI() {
   setGated($('btn-resolve-final'), locked, $('btn-resolve-final').title);
 
   $('panel-analysis').hidden = !an;
-  if (!an) return;
-  const t = tree();
+  if (!an || !active) return;
   $('analysis-root').textContent =
     `Rooted at ${t.rootLabel} of “${liveGame.name}”. The whole tree is cleared when the live game moves past it.`;
   // The live game moved on while we were in here. The board keeps showing what
@@ -2171,128 +2207,179 @@ function renderAnalysisUI() {
     $('analysis-locked').textContent =
       `⚠ ${locked}. This line is out of date and can no longer be resolved.`;
   }
-  const full = !A.canAddVariation(t)
-    ? `That is ${A.MAX_VARIATIONS} variations — delete one before adding another`
-    : null;
-  renderFocusSelect();
   renderAnalysisTree();
-  const active = A.getNode(t, game.nodeId);
-  const plan = active && A.getNode(t, active.parent);
-  if (!plan) return;
-  setGated($('an-new-var'), locked || full,
-    `Another reply to “${plan.name}”, starting from a copy of this one`);
-  setGated($('an-new-plan'), locked || full,
-    'A different plan of your own at this same position');
-  setGated($('an-use-orders'),
-    t.focus ? null : 'Pick a country to plan for first — there are no orders of your own to take across',
-    `Copy ${cap(t.focus || '')}'s orders from this line into the live game's order box`);
+
+  // Where ⑂ Branch would put a line RIGHT NOW, said before the click rather
+  // than discovered after it. The rule is one comparison (analysis.js
+  // branchParent) but it is invisible from the button alone, and a line that
+  // silently landed at the wrong level would be the whole feature misfiring.
+  const i = viewedIndex();
+  const at = S.phaseLabel(A.positionAt(active.game, i));
+  const nested = i > 0;
+  $('an-branch').textContent = nested ? '⑂ Branch here' : '⑂ Branch';
+  $('analysis-branch-note').textContent = nested
+    ? `⑂ Branch starts a line at ${at}, nested under “${active.name}” — that phase only exists because this line produced it.`
+    : `⑂ Branch starts a line at ${at}, beside “${active.name}” — a different idea from the same position. Resolve or step forward first to nest one instead.`;
+  const full = A.canBranch(t) ? null : `That is ${A.MAX_LINES} lines — delete one before branching again`;
+  setGated($('an-branch'), locked || full, $('analysis-branch-note').textContent);
+
+  const sel = selectedNode();
+  setGated($('an-new-folder'), sel ? null : 'Pick a line or folder first',
+    sel ? `Group “${sel.name}” and everything beside it into a folder` : 'Group this level into a folder');
+  $('an-rename').title = sel ? `Rename “${sel.name}”` : 'Rename';
   setGated($('an-delete'),
-    A.variationCount(t) > 1 ? null : 'This is the only line in the tree — leave analysis instead',
-    'Delete this variation and everything explored under it');
-  $('an-rename').title = `Rename “${active.name}”`;
+    A.lineCount(t) > 1 ? null : 'This is the only line in the tree — leave analysis instead',
+    sel ? `Delete “${sel.name}” and everything inside it` : 'Delete the selected row');
+
+  // ↥ Use these orders live only makes sense while the line is still standing
+  // on the live game's own phase — orders written three phases into a
+  // hypothetical are not orders for the turn the table is actually playing.
+  const power = assignedPower() || R.myCountry(liveGame);
+  setGated($('an-use-orders'),
+    !power ? 'Pick a country to play as first — there are no orders of your own to take across'
+      : active.game.history.length
+        ? `This line has moved on to ${S.phaseLabel(active.game)} — the live game is still at ${t.rootLabel}. ⤺ Undo back to the start of the line to take its orders across.`
+        : null,
+    power ? `Copy ${cap(power)}'s orders from this line into the live game's order box` : '');
 }
 
-function renderFocusSelect() {
-  const t = tree();
-  const sel = $('analysis-focus');
-  sel.replaceChildren();
-  sel.appendChild(new Option('— no country —', ''));
-  for (const p of O.activePowers(liveGame)) sel.appendChild(new Option(cap(p), p));
-  sel.value = t.focus || '';
-  // An assigned player is locked to their own power here for the same reason
-  // they are everywhere else: it is the power they actually play.
-  sel.disabled = !!assignedPower();
-}
+// The tree itself: folders and the lines inside them, indented, with the open
+// line marked and the selected row (which may be a folder) outlined. Rows are
+// draggable — dropping one on a folder puts it inside, dropping it on a line
+// puts it in front of that line, dropping it on the empty space below moves it
+// back out to the top level.
+let dragNodeId = null;
 
-// The tree itself: plans and the variations under them, indented, with the
-// open one marked. A variation that no longer follows from what is above it
-// (its plan was edited, or the position it started from moved) is flagged
-// rather than hidden — the orders in it are still the user's work.
 function renderAnalysisTree() {
   const t = tree();
   const host = $('analysis-tree');
   if (!t || !host) return;
-  host.replaceChildren();
-  const addRow = (n, depth) => {
-    const row = document.createElement('button');
-    row.className = 'an-row an-' + n.kind;
-    row.style.paddingLeft = 6 + depth * 14 + 'px';
-    const isVar = n.kind === 'var';
-    if (isVar && n.id === t.activeId) row.classList.add('active');
-    const bits = [`<span class="an-icon">${isVar ? '🔀' : '📋'}</span>`,
-      `<span class="an-name">${escapeText(n.name)}</span>`];
-    if (isVar) {
-      if (n.stale) bits.push('<span class="an-meta warn">⚠ the line above changed</span>');
-      else if (n.after) bits.push(`<span class="an-meta">→ ${escapeText(S.phaseLabel(n.after))}</span>`);
-      else bits.push('<span class="an-meta">unresolved</span>');
+  const clearMarks = () => {
+    for (const el of host.querySelectorAll('.drop-into,.drop-before')) {
+      el.classList.remove('drop-into', 'drop-before');
     }
-    row.innerHTML = bits.join(' ');
-    row.title = isVar ? 'Open this variation' : 'Rename this plan';
-    row.onclick = () => (isVar ? openNode(n.id) : renameNode(n.id));
+  };
+  const applyMove = (id, parentId, beforeId) => {
+    clearMarks();
+    if (!id) return;
+    if (!A.moveNode(t, id, parentId, beforeId)) return toast('A folder cannot be moved inside itself');
+    flushLineSave();
+    renderAnalysisUI();
+  };
+  host.replaceChildren();
+  host.ondragover = (e) => { if (dragNodeId) e.preventDefault(); };
+  host.ondrop = (e) => {
+    e.preventDefault();
+    applyMove(dragNodeId, null, null);
+  };
+
+  const addRow = (n, depth) => {
+    const isFolder = n.kind === 'folder';
+    const row = document.createElement('div');
+    row.className = 'an-row an-' + n.kind;
+    row.style.paddingLeft = 4 + depth * 14 + 'px';
+    row.draggable = true;
+    if (!isFolder && n.id === t.activeId) row.classList.add('active');
+    if (n.id === t.selectedId) row.classList.add('selected');
+
+    const chev = document.createElement('button');
+    chev.className = 'an-chev';
+    chev.textContent = isFolder ? (n.collapsed ? '▸' : '▾') : '';
+    chev.tabIndex = isFolder ? 0 : -1;
+    chev.title = isFolder ? (n.collapsed ? 'Expand' : 'Collapse') : '';
+    chev.onclick = (e) => {
+      e.stopPropagation();
+      if (!isFolder) return;
+      A.toggleCollapsed(t, n.id);
+      flushLineSave();
+      renderAnalysisTree();
+    };
+    row.appendChild(chev);
+
+    const main = document.createElement('button');
+    main.className = 'an-main';
+    const bits = [`<span class="an-icon">${isFolder ? '📁' : '🔀'}</span>`,
+      `<span class="an-name">${escapeText(n.name)}</span>`];
+    if (isFolder) {
+      const inside = A.descendantIds(t, n.id).size;
+      bits.push(`<span class="an-meta">${inside} inside</span>`);
+      main.title = `Select this folder — ✎ renames it, 🗑 deletes it and everything in it`;
+    } else {
+      if (A.isStale(t, n)) bits.push('<span class="an-meta warn">⚠ the line it came from changed</span>');
+      else bits.push(`<span class="an-meta">${escapeText(S.phaseLabel(n.game))}</span>`);
+      const depthNote = n.game.history.length
+        ? `${n.game.history.length} phase${n.game.history.length === 1 ? '' : 's'} in`
+        : 'not resolved yet';
+      main.title = `Open “${n.name}” — ${depthNote}` +
+        (n.from ? `, branched from ${n.from.label}` : '');
+    }
+    main.innerHTML = bits.join(' ');
+    main.onclick = () => (isFolder ? selectNode(n.id) : openNode(n.id));
+    row.appendChild(main);
+
+    row.ondragstart = (e) => {
+      dragNodeId = n.id;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', n.id);
+    };
+    row.ondragend = () => { dragNodeId = null; clearMarks(); };
+    row.ondragover = (e) => {
+      if (!dragNodeId || dragNodeId === n.id) return;
+      e.preventDefault();
+      clearMarks();
+      row.classList.add(isFolder ? 'drop-into' : 'drop-before');
+    };
+    row.ondragleave = () => row.classList.remove('drop-into', 'drop-before');
+    row.ondrop = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const id = dragNodeId;
+      // dropped on itself — the host's dragover let the event through, so this
+      // is the one place that has to say "nothing happened"
+      if (!id || id === n.id) return clearMarks();
+      if (isFolder) applyMove(id, n.id, null);
+      else applyMove(id, n.parent || null, n.id);
+    };
     host.appendChild(row);
   };
-  const walkPlans = (parentVarId, depth) => {
-    for (const plan of A.plansAt(t, parentVarId)) {
-      // With no focus power there is nothing in a plan, so showing the level
-      // would be a row that never says anything — the tree is simply flat.
-      if (t.focus) addRow(plan, depth);
-      for (const v of A.variationsOf(t, plan.id)) {
-        addRow(v, t.focus ? depth + 1 : depth);
-        walkPlans(v.id, t.focus ? depth + 2 : depth + 1);
-      }
+
+  const walk = (parentId, depth) => {
+    for (const n of A.childrenOf(t, parentId)) {
+      addRow(n, depth);
+      if (n.kind === 'folder' && n.collapsed) continue;
+      walk(n.id, depth + 1);
     }
   };
-  walkPlans(null, 0);
+  walk(null, 0);
 }
 
-function renameNode(id) {
+function renameSelected() {
   const t = tree();
-  const n = A.getNode(t, id);
+  const n = selectedNode();
   if (!n) return;
-  const name = prompt(n.kind === 'plan' ? 'Name for this plan:' : 'Name for this variation:', n.name);
+  const name = prompt(n.kind === 'folder' ? 'Name for this folder:' : 'Name for this line:', n.name);
   if (!name) return;
-  A.renameNode(t, id, name);
+  A.renameNode(t, n.id, name);
   flushLineSave();
-  renderAnalysisTree();
-  renderModeChip();
+  renderAnalysisUI();
 }
 
-// Another reply to the same plan, pre-filled with this one's opponent orders:
-// exploring "what else might they do?" is copy-then-tweak, never typing all
-// six powers again from scratch.
-function newVariation() {
+function deleteSelected() {
   const t = tree();
-  const active = A.getNode(t, t.activeId);
-  persistLineOrders();
-  const v = A.addVariation(t, active.parent, null, active.theirs, active.before);
-  openNode(v.id);
-  toast('🔀 New variation — change what the others do', 'info');
-}
-
-// A different plan of my own at the same position, with its own set of replies.
-function newPlan() {
-  const t = tree();
-  const active = A.getNode(t, t.activeId);
-  const plan = A.getNode(t, active.parent);
-  persistLineOrders();
-  const p = A.addPlan(t, plan.parent);
-  const v = A.addVariation(t, p.id, null, '', active.before);
-  openNode(v.id);
-  toast('📋 New plan — write your own orders, then add the replies', 'info');
-}
-
-function deleteActiveNode() {
-  const t = tree();
-  const active = A.getNode(t, game.nodeId);
-  const plan = active && A.getNode(t, active.parent);
-  if (!plan) return;
-  const below = A.plansAt(t, active.id).length;
-  if (!confirm(`Delete “${active.name}”${below ? ' and everything explored under it' : ''}?`)) return;
-  // A plan with nothing left under it is an empty folder, so it goes too.
-  const lone = A.variationsOf(t, plan.id).length === 1;
-  A.deleteNode(t, lone ? plan.id : active.id);
+  const n = selectedNode();
+  if (!n) return;
+  const inside = A.descendantIds(t, n.id);
+  const goingLines = [...inside].filter((id) => A.getNode(t, id).kind === 'line').length +
+    (n.kind === 'line' ? 1 : 0);
+  if (A.lineCount(t) - goingLines < 1) {
+    return toast('That would leave no lines at all — leave analysis instead');
+  }
+  if (!confirm(`Delete “${n.name}”${inside.size
+    ? ` and the ${inside.size} row${inside.size === 1 ? '' : 's'} inside it`
+    : ''}?`)) return;
+  A.deleteNode(t, n.id);
   flushLineSave();
-  openNode(A.ensureEntry(t));
+  openNode(A.ensureEntry(t, S.gameSettings(liveGame)));
 }
 
 // The one sanctioned bridge from a line back to the real game. Without it the
@@ -2300,26 +2387,17 @@ function deleteActiveNode() {
 // the mistakes are — but it moves ONLY your own orders, and only into the
 // draft box, never into a submission.
 function useLineOrdersLive() {
-  const t = tree();
-  const focus = t.focus;
-  if (!focus) return;
+  const power = assignedPower() || R.myCountry(liveGame);
+  if (!power) return;
+  if (game.history.length) return toast('Step this line back to its first phase first — ⤺ Undo');
   persistLineOrders();
-  const plan = A.getNode(t, A.getNode(t, t.activeId).parent);
-  const mine = T.blockBody(T.splitOrdersByPower(plan.mine), focus);
-  if (!mine.trim()) return toast(`No ${cap(focus)} orders in this line yet`);
+  const mine = powerBlockText(power);
+  if (!mine.trim()) return toast(`No ${cap(power)} orders in this line yet`);
+  const name = (A.getNode(tree(), game.nodeId) || {}).name || 'this line';
   exitAnalysis();
-  replacePowerBlock(focus, mine);
+  replacePowerBlock(power, mine);
   $('orders-box').open = true;
-  toast(`${cap(focus)}'s orders from “${plan.name}” are in the live order box — nothing is submitted yet`, 'info');
-}
-
-function setAnalysisFocus(power) {
-  const t = tree();
-  persistLineOrders();
-  if (!A.refocus(t, power)) return;
-  flushLineSave();
-  openNode(t.activeId);
-  toast(power ? `Planning as ${cap(power)} — your orders are now shared across each plan's variations` : 'No planning country — every variation now holds a full order set', 'info');
+  toast(`${cap(power)}'s orders from “${name}” are in the live order box — nothing is submitted yet`, 'info');
 }
 
 // ---------------------------------------------------------------------------
@@ -3038,7 +3116,7 @@ async function refreshOnlineStatus() {
     // The order box belongs to whatever is on screen, so while a line is open
     // nothing here may touch it — refilling it from the live game's phase, or
     // dropping the player's submitted orders into it, would quietly rewrite
-    // the variation they are working on. The fetch itself still ran, which is
+    // the line they are working on. The fetch itself still ran, which is
     // the point: this is how a publish arriving mid-analysis is noticed.
     const boxIsLive = !inAnalysis();
     if (changed && boxIsLive) {
@@ -3797,12 +3875,11 @@ async function init() {
   // 🌿 analysis
   $('ms-live').onclick = exitAnalysis;
   $('ms-analysis').onclick = enterAnalysis;
-  $('an-new-plan').onclick = newPlan;
-  $('an-new-var').onclick = newVariation;
-  $('an-rename').onclick = () => renameNode(tree().activeId);
-  $('an-delete').onclick = deleteActiveNode;
+  $('an-new-folder').onclick = newFolder;
+  $('an-branch').onclick = branchLine;
+  $('an-rename').onclick = renameSelected;
+  $('an-delete').onclick = deleteSelected;
   $('an-use-orders').onclick = useLineOrdersLive;
-  $('analysis-focus').onchange = (e) => setAnalysisFocus(e.target.value);
 
   $('btn-game-settings').onclick = openGameSettings;
   $('set-cancel').onclick = () => $('game-settings-dialog').close();

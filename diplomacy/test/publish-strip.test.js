@@ -17,7 +17,7 @@ import assert from 'node:assert/strict';
 
 import { stripForPublish } from '../js/publish.js';
 import { newGame, boardSnapshot } from '../js/state.js';
-import { newTree, addPlan } from '../js/analysis.js';
+import { newTree, addLine, renameNode } from '../js/analysis.js';
 
 // Everything the app ever writes onto a game object, private half included —
 // see openGame/loadPublishedGame/doPublish/refreshOnlineStatus in js/app.js.
@@ -42,8 +42,10 @@ function fullyLoadedGame() {
   g.provisionalPhase = { year: 1901, season: 'spring', step: 'movement' };
   g.branchedFrom = { name: 'somewhere', gistId: null, label: 'Spring 1901' };
   g.sandbox = true;
-  g.analysis = newTree(g, 'france');
-  addPlan(g.analysis, null, 'Attack Munich in the spring', 'FRANCE\nA Par - Bur');
+  g.analysis = newTree(g);
+  const line = addLine(g.analysis, { position: g.analysis.root });
+  renameNode(g.analysis, line.id, 'Attack Munich in the spring');
+  line.game.orders = 'FRANCE\nA Par - Bur';
   return g;
 }
 

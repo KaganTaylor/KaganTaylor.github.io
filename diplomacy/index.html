@@ -59,12 +59,14 @@
     <!-- ☁ Live / 🌿 Analysis. A two-state segmented control rather than a
          button, so it says which side you are on as well as offering the
          other one — the strongest single guard on this screen against
-         mistaking a hypothetical line for the real game. -->
+         mistaking a hypothetical line for the real game. The 🌿 side also
+         carries the open line's NAME, which is why there is no separate mode
+         chip or breadcrumb for analysis: one control, both facts, said once. -->
     <div id="mode-switch" role="group" aria-label="Live game or analysis" hidden>
       <button id="ms-live" class="ms-btn" aria-pressed="true"
               title="The live game — the real position, orders and deadline">☁ <span class="ms-label">Live</span></button>
       <button id="ms-analysis" class="ms-btn" aria-pressed="false"
-              title="Open a private tree of plans and variations off this position">🌿 <span class="ms-label">Analysis</span></button>
+              title="Open a private tree of lines off this position">🌿 <span class="ms-label">Analysis</span></button>
     </div>
     <span id="game-name"></span>
     <span id="phase-label"></span>
@@ -146,29 +148,27 @@
         </div>
       </details>
 
-      <!-- 🌿 analysis: the tree of plans and variations hanging off the live
+      <!-- 🌿 analysis: the tree of lines and folders hanging off the live
            position (js/analysis.js). Only on screen while a line is open —
            the live game has no use for it, and the ☁/🌿 switch in the topbar
-           is how you get here. -->
+           is how you get here. A line is a game of its own: resolve as many
+           phases in it as you like and it stays one row. -->
       <details id="panel-analysis" class="panel" open hidden>
         <summary><h2>🌿 Analysis</h2></summary>
         <p class="hint" id="analysis-root"></p>
         <p class="analysis-locked" id="analysis-locked" hidden></p>
-        <div class="sandbox-row">
-          <label for="analysis-focus" class="hint">Planning as</label>
-          <select id="analysis-focus" title="Whose orders are the shared plan level: change them once and every variation under that plan follows"></select>
-        </div>
         <div id="analysis-tree"></div>
+        <p class="hint" id="analysis-branch-note"></p>
         <div class="btnrow">
-          <button id="an-new-var" title="Another reply to the same plan">⑂ Variation</button>
-          <button id="an-new-plan" title="A different plan of your own at this position">📋 Plan</button>
-          <button id="an-rename" title="Rename this variation">✎</button>
-          <button id="an-delete" title="Delete this variation and everything under it">🗑</button>
+          <button id="an-branch" title="Start a new line from the phase on screen">⑂ Branch</button>
+          <button id="an-new-folder" title="Group the selected row and everything beside it into a folder">📁 Folder</button>
+          <button id="an-rename" title="Rename the selected row">✎</button>
+          <button id="an-delete" title="Delete the selected row and everything inside it">🗑</button>
         </div>
         <div class="btnrow">
           <button id="an-use-orders" title="Copy your own orders from this line into the live game's order box">↥ Use these orders live</button>
         </div>
-        <p class="hint">Every line here is thrown away when the live game moves past the position they hang off. For a position worth keeping, use ⚙ → 🧪 Copy to sandbox.</p>
+        <p class="hint">Drag a row onto a 📁 folder to file it, onto another row to reorder, or onto the space below to move it back out. Every line here is thrown away when the live game moves past the position they hang off — for a position worth keeping, use ⚙ → 🧪 Copy to sandbox.</p>
       </details>
 
       <!-- history (kept at the top: the one panel every viewer of a live game

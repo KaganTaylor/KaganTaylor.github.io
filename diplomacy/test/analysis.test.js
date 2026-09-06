@@ -1,337 +1,338 @@
-// The analysis tree (js/analysis.js): plans, variations, and the rule that
-// decides when the whole thing is thrown away.
+// The 🌿 analysis tree (js/analysis.js) — the pure half of the feature.
 //
-// Two things here are worth more than the rest. The FIRST is the lifetime
-// rule — a tree is rooted at one position and dies with it — because getting
-// it wrong in either direction is a real bug: too eager and a player loses an
-// evening's planning to a refresh, too lax and they plan against a board
-// nobody else can see, which is the exact divergence the whole permission
-// model exists to prevent. The SECOND is that editing a plan moves every
-// variation under it: that is the feature ("change my move, keep all the
-// replies"), and it is the one place where an edit reaches sideways.
+// Three things are worth a test here and the rest is bookkeeping:
+//   1. THE LIFETIME RULE. A tree that outlives the position it hangs off is
+//      the exact bug this feature exists to fix, so positionKey has to say
+//      "same position" for a board that came back and "different" for one that
+//      moved — whatever order the arrays happen to be in.
+//   2. THE BRANCH RULE. Sibling-or-child is decided by one comparison, and
+//      getting it backwards would file every idea at the wrong level.
+//   3. A LINE IS A GAME. Its game object is handed back live, so resolving and
+//      undoing in it are the ordinary operations writing to the ordinary place.
 
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
+import test from 'node:test';
+import assert from 'node:assert';
+import * as A from '../js/analysis.js';
+import { newGame, resolvePhase, undoLastPhase, gameSettings } from '../js/state.js';
+import { parseOrders } from '../js/parser.js';
 
-import {
-  positionKey, positionOf, newTree, rootMatches, isLine,
-  addPlan, addVariation, plansAt, variationsOf, variationCount, canAddVariation,
-  nodeOrdersText, setNodeOrders, setNodeBefore, recordResolution,
-  deleteNode, renameNode, pathTo, lineLabel, firstVariation, ensureEntry,
-  lineGame, refocus, positionFor, getNode, MAX_VARIATIONS,
-} from '../js/analysis.js';
-import { newGame } from '../js/state.js';
-import { splitOrdersByPower, mergeBlocks, defaultOrdersText } from '../js/orders-text.js';
+const live = () => newGame('Live');
 
-const live = () => ({ ...newGame('the real game'), published: true, gistId: 'abc123' });
-
-// A tree with one plan holding France's orders and two replies under it —
-// the shape the two-level model exists for.
-function seeded(focus = 'france') {
-  const g = live();
-  const t = newTree(g, focus);
-  const plan = addPlan(t, null, 'Burgundy push', 'FRANCE\nA Par - Bur');
-  const v1 = addVariation(t, plan.id, 'Germany holds', 'GERMANY\nA Mun H', t.root);
-  const v2 = addVariation(t, plan.id, 'Germany contests', 'GERMANY\nA Mun - Bur', t.root);
-  return { g, t, plan, v1, v2 };
+// resolve a phase on a game the way app.js does, so tests exercise real history
+function play(g, text) {
+  const { orders } = parseOrders(text, g.step);
+  return resolvePhase(g, orders, text);
 }
 
 // ---------------------------------------------------------------------------
-// the lifetime rule
+// 1. the lifetime rule
 // ---------------------------------------------------------------------------
 
-test('positionKey ignores the order the arrays happen to be in', () => {
-  const a = live();
-  const b = live();
-  b.units = [...b.units].reverse();
-  b.scOwners = Object.fromEntries(Object.entries(b.scOwners).reverse());
-  assert.equal(positionKey(a), positionKey(b));
+test('a tree matches the position it was rooted at', () => {
+  const g = live();
+  const t = A.newTree(g);
+  assert.equal(A.rootMatches(t, g), true);
 });
 
-test('a tree stays rooted while the board does not move', () => {
+test('array order does not change a position key', () => {
   const g = live();
-  const t = newTree(g);
-  assert.ok(rootMatches(t, g));
-  // drafting orders, which never touches the position, is not a move
-  g.ordersText = 'FRANCE\nA Par - Bur';
-  assert.ok(rootMatches(t, g));
+  const t = A.newTree(g);
+  g.units.reverse();
+  g.scOwners = Object.fromEntries(Object.entries(g.scOwners).reverse());
+  assert.equal(A.rootMatches(t, g), true, 'a reordered board is the same board');
 });
 
-test('a tree is void the moment the live position moves', () => {
+test('moving a unit voids the tree', () => {
   const g = live();
-  const t = newTree(g);
-  g.units.find((u) => u.loc === 'par').loc = 'bur';
-  assert.equal(rootMatches(t, g), false);
+  const t = A.newTree(g);
+  g.units[0].loc = 'Ruh';
+  assert.equal(A.rootMatches(t, g), false);
 });
 
-test('a phase change alone voids the tree, units unmoved', () => {
+test('a phase change voids the tree even with the same units', () => {
   const g = live();
-  const t = newTree(g);
+  const t = A.newTree(g);
   g.season = 'fall';
-  assert.equal(rootMatches(t, g), false);
+  assert.equal(A.rootMatches(t, g), false);
 });
 
-// This is why the catch-up path LOCKS analysis rather than deleting it: a game
-// master who undoes a phase and re-resolves it identically lands back on the
-// same board, and there is nothing wrong with the lines hanging off it.
-test('a position that comes back is still the same root', () => {
+test('a position that comes back keeps the tree alive', () => {
   const g = live();
-  const t = newTree(g);
-  const par = g.units.find((u) => u.loc === 'par');
-  par.loc = 'bur';
-  assert.equal(rootMatches(t, g), false);
-  par.loc = 'par';
-  assert.ok(rootMatches(t, g));
-});
-
-test('rootMatches is false for a missing tree rather than throwing', () => {
-  assert.equal(rootMatches(null, live()), false);
-  assert.equal(rootMatches(newTree(live()), null), false);
+  const t = A.newTree(g);
+  play(g, 'FRANCE\nA Par - Bur');
+  assert.equal(A.rootMatches(t, g), false, 'moved on');
+  undoLastPhase(g);
+  assert.equal(A.rootMatches(t, g), true, 'a GM undo brings the tree back');
 });
 
 // ---------------------------------------------------------------------------
-// the two levels
+// 2. the branch rule
 // ---------------------------------------------------------------------------
 
-test('a variation is its plan orders plus its own', () => {
-  const { t, v1 } = seeded();
-  const text = nodeOrdersText(t, v1.id);
-  assert.match(text, /FRANCE\nA Par - Bur/);
-  assert.match(text, /GERMANY\nA Mun H/);
-});
-
-test('the order box splits back into the two levels on the focus power', () => {
-  const { t, v1, plan } = seeded();
-  setNodeOrders(t, v1.id, 'FRANCE\nA Par - Pic\nGERMANY\nA Mun - Ruh', 'france');
-  assert.match(plan.mine, /A Par - Pic/);
-  assert.equal(/Par/.test(v1.theirs), false);
-  assert.match(v1.theirs, /A Mun - Ruh/);
-});
-
-test('with no focus power there is no plan level — the variation holds it all', () => {
-  const { t, v1, plan } = seeded('');
-  setNodeOrders(t, v1.id, 'FRANCE\nA Par - Pic\nGERMANY\nA Mun - Ruh', '');
-  assert.equal(plan.mine, '');
-  assert.match(v1.theirs, /A Par - Pic/);
-  assert.match(v1.theirs, /A Mun - Ruh/);
-});
-
-// The feature: one plan, many replies. Editing my own orders is *meant* to
-// reach sideways into every variation under the plan.
-test('editing the plan invalidates every variation under it', () => {
-  const { t, v1, v2 } = seeded();
-  v1.after = positionOf(live());
-  v2.after = positionOf(live());
-  setNodeOrders(t, v1.id, 'FRANCE\nA Par - Pic\nGERMANY\nA Mun H', 'france');
-  assert.equal(v1.after, null);
-  assert.equal(v2.after, null, 'the sibling reply no longer follows from the new plan');
-});
-
-test('editing one variation leaves its siblings alone', () => {
-  const { t, v1, v2 } = seeded();
-  v1.after = positionOf(live());
-  v2.after = positionOf(live());
-  setNodeOrders(t, v1.id, 'FRANCE\nA Par - Bur\nGERMANY\nA Mun - Tyr', 'france');
-  assert.equal(v1.after, null);
-  assert.notEqual(v2.after, null);
-});
-
-// The order box is refilled from a blank per-phase template on every render,
-// so a node reopened and not touched comes back with extra headings and blank
-// lines. Reading that as an edit would throw away a resolved outcome on every
-// single re-render.
-test('re-storing the same orders with different formatting is not a change', () => {
-  const { t, v1 } = seeded();
-  const after = positionOf(live());
-  v1.after = after;
-  const changed = setNodeOrders(
-    t, v1.id,
-    'FRANCE\n\na par - bur   # the plan\n\nGERMANY\nA Mun H\n\nITALY\n',
-    'france'
-  );
-  assert.equal(changed, false);
-  assert.equal(v1.after, after, 'the outcome survives a cosmetic re-store');
-});
-
-// The round trip app.js actually performs on every render: the node's orders
-// go into the box through prefillOrders() (merged with a blank per-phase
-// template) and come straight back out through persistLineOrders(). It has to
-// be a fixed point, or simply looking at a variation destroys its outcome and
-// everything explored below it.
-test('opening a variation and storing it back changes nothing', () => {
-  const { g, t, v1 } = seeded();
-  const resolvedTo = positionOf({ ...live(), season: 'fall' });
-  v1.after = resolvedTo;
-
-  for (let i = 0; i < 3; i++) {
-    // prefillOrders(): the node's orders, with the blank template filling in
-    // every power that has no block of its own
-    const box = mergeBlocks(
-      splitOrdersByPower(nodeOrdersText(t, v1.id)),
-      splitOrdersByPower(defaultOrdersText(g))
-    );
-    // persistLineOrders()
-    assert.equal(setNodeOrders(t, v1.id, box, t.focus), false, `render ${i + 1} counted as an edit`);
-    assert.equal(v1.after, resolvedTo, `render ${i + 1} discarded the outcome`);
-  }
-  // and the orders themselves survived the trip
-  assert.match(nodeOrdersText(t, v1.id), /A Par - Bur/);
-  assert.match(nodeOrdersText(t, v1.id), /A Mun H/);
-});
-
-// ---------------------------------------------------------------------------
-// resolving and re-basing
-// ---------------------------------------------------------------------------
-
-test('resolving records the outcome and hands back a variation to continue in', () => {
-  const { t, v1 } = seeded();
-  const resolved = { ...live(), season: 'fall' };
-  const nextId = recordResolution(t, v1.id, resolved);
-  const next = getNode(t, nextId);
-  assert.equal(next.kind, 'var');
-  assert.equal(v1.after.season, 'fall');
-  assert.equal(getNode(t, next.parent).parent, v1.id, 'the continuation hangs off the resolved variation');
-  assert.equal(positionKey(next.before), positionKey(resolved));
-});
-
-test('re-resolving re-bases what was already explored underneath', () => {
-  const { t, v1 } = seeded();
-  const first = { ...live(), season: 'fall' };
-  const childId = recordResolution(t, v1.id, first);
-  const child = getNode(t, childId);
-  child.theirs = 'GERMANY\nA Ruh - Bel';
-  child.after = positionOf(live());
-
-  const second = { ...live(), season: 'fall', year: 1902 };
-  const againId = recordResolution(t, v1.id, second);
-  assert.equal(againId, childId, 'the same continuation is reused, not duplicated');
-  assert.equal(child.before.year, 1902, 'it now starts from the new outcome');
-  assert.equal(child.after, null, 'and must be resolved again');
-  assert.equal(child.theirs, 'GERMANY\nA Ruh - Bel', 'but the orders written in it are kept');
-});
-
-test('an invalidated variation marks everything below it stale rather than deleting it', () => {
-  const { t, v1 } = seeded();
-  const childId = recordResolution(t, v1.id, { ...live(), season: 'fall' });
-  const grandId = recordResolution(t, childId, { ...live(), season: 'fall', year: 1902 });
-  setNodeOrders(t, v1.id, 'FRANCE\nA Par - Pic\nGERMANY\nA Mun H', 'france');
-  assert.equal(getNode(t, childId).stale, true);
-  assert.equal(getNode(t, grandId).stale, true);
-  assert.ok(getNode(t, grandId), 'the work is flagged, never thrown away');
-});
-
-test('a board edit inside a line moves that variation and invalidates its outcome', () => {
-  const { t, v1 } = seeded();
-  v1.after = positionOf(live());
-  const edited = live();
-  edited.units.push({ power: 'france', type: 'A', loc: 'bur' });
-  assert.equal(setNodeBefore(t, v1.id, edited), true);
-  assert.equal(v1.after, null);
-  assert.equal(setNodeBefore(t, v1.id, edited), false, 'an edit that changes nothing is not a change');
-});
-
-// ---------------------------------------------------------------------------
-// the shape of the tree
-// ---------------------------------------------------------------------------
-
-test('plans and variations nest, and deleting takes the subtree with it', () => {
-  const { t, plan, v1, v2 } = seeded();
-  const childId = recordResolution(t, v1.id, { ...live(), season: 'fall' });
-  assert.equal(plansAt(t, null).length, 1);
-  assert.equal(variationsOf(t, plan.id).length, 2);
-  assert.equal(plansAt(t, v1.id).length, 1, 'the continuation is a plan at the new position');
-
-  deleteNode(t, v1.id);
-  assert.equal(getNode(t, childId), null);
-  assert.equal(getNode(t, v2.id), v2, 'the sibling reply is untouched');
-});
-
-test('deleting the open variation clears activeId so nothing dangles', () => {
-  const { t, v1 } = seeded();
-  t.activeId = v1.id;
-  deleteNode(t, v1.id);
-  assert.equal(t.activeId, null);
-});
-
-test('the path names the line, plan by variation', () => {
-  const { t, v1 } = seeded();
-  assert.deepEqual(pathTo(t, v1.id).map((n) => n.name), ['Burgundy push', 'Germany holds']);
-  assert.equal(lineLabel(t, v1.id), 'Burgundy push ▸ Germany holds');
-  renameNode(t, v1.id, 'Germany sits still');
-  assert.equal(lineLabel(t, v1.id), 'Burgundy push ▸ Germany sits still');
-  renameNode(t, v1.id, '   ');
-  assert.equal(lineLabel(t, v1.id), 'Burgundy push ▸ Germany sits still', 'a blank rename is ignored');
-});
-
-test('an empty tree opens on a fresh plan and variation at the root', () => {
+test('the first line is the Main line and starts at the root', () => {
   const g = live();
-  const t = newTree(g);
-  assert.equal(firstVariation(t), null);
-  const id = ensureEntry(t);
-  const v = getNode(t, id);
-  assert.equal(v.kind, 'var');
-  assert.equal(t.activeId, id);
-  assert.equal(positionKey(v.before), positionKey(g));
-  assert.equal(ensureEntry(t), id, 'and re-entering comes back to the same one');
+  const t = A.newTree(g);
+  const n = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
+  assert.equal(n.name, 'Main line');
+  assert.equal(n.kind, 'line');
+  assert.equal(A.positionKey(n.game), t.rootKey);
+  assert.equal(n.from, null, 'nothing to be stale against');
 });
 
-test('ensureEntry recovers from an activeId that names a plan or nothing', () => {
-  const { t, plan, v1 } = seeded();
-  t.activeId = plan.id;
-  assert.equal(ensureEntry(t), v1.id);
-  t.activeId = 'gone';
-  assert.equal(ensureEntry(t), v1.id);
+test('resolving inside a line adds history, not nodes', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
+  play(main.game, 'FRANCE\nA Par - Bur');
+  play(main.game, 'FRANCE\nA Bur - Mun');
+  assert.equal(A.lineCount(t), 1, 'planning several phases ahead is still one line');
+  assert.equal(main.game.history.length, 2);
 });
 
-test('positionFor is the root for a top-level plan and the outcome above otherwise', () => {
-  const { t, plan, v1 } = seeded();
-  assert.equal(positionKey(positionFor(t, plan.id)), positionKey(t.root));
-  const childId = recordResolution(t, v1.id, { ...live(), season: 'fall' });
-  const childPlan = getNode(t, getNode(t, childId).parent);
-  assert.equal(positionFor(t, childPlan.id).season, 'fall');
+test('branching at the start of a line makes a sibling', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
+  const sib = A.branchFrom(t, main.id, 0, gameSettings(g));
+  assert.equal(sib.parent, main.parent, 'same level as the line it came from');
+  assert.equal(A.positionKey(sib.game), t.rootKey);
+  assert.deepEqual(A.childrenOf(t, null).map((n) => n.id), [main.id, sib.id]);
 });
 
-test('the tree is capped, and says so before it is full', () => {
-  const { t, plan } = seeded();
-  assert.ok(canAddVariation(t));
-  while (variationCount(t) < MAX_VARIATIONS) addVariation(t, plan.id, null, '', t.root);
-  assert.equal(canAddVariation(t), false);
+test('branching at a later phase nests beneath that line', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
+  play(main.game, 'FRANCE\nA Par - Bur');
+  const child = A.branchFrom(t, main.id, 1, gameSettings(g));
+  assert.equal(child.parent, main.id);
+  assert.deepEqual(A.childrenOf(t, null).map((n) => n.id), [main.id]);
+  assert.deepEqual(A.childrenOf(t, main.id).map((n) => n.id), [child.id]);
+});
+
+test('two branches from the same later phase come out parallel', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
+  play(main.game, 'FRANCE\nA Par - Bur');
+  const a = A.branchFrom(t, main.id, 1, gameSettings(g));
+  // now inside `a`, at ITS starting phase — the sibling rule applies
+  const b = A.branchFrom(t, a.id, 0, gameSettings(g));
+  assert.equal(b.parent, a.parent);
+  assert.deepEqual(A.childrenOf(t, main.id).map((n) => n.id), [a.id, b.id]);
+});
+
+test('a branch opens on a copy of the orders it was cut from', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
+  main.game.orders = 'FRANCE\nA Par - Bur';
+  const sib = A.branchFrom(t, main.id, 0, gameSettings(g));
+  assert.equal(sib.game.orders, 'FRANCE\nA Par - Bur', 'tweak-one-order, not retype-all');
+  sib.game.orders = 'FRANCE\nA Par - Pic';
+  assert.equal(main.game.orders, 'FRANCE\nA Par - Bur', 'and the copy is a copy');
+});
+
+test('a branch starts from the position at the phase it was cut at', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
+  play(main.game, 'FRANCE\nA Par - Bur');
+  const before = A.positionKey(A.positionAt(main.game, 1));
+  const child = A.branchFrom(t, main.id, 1, gameSettings(g));
+  assert.equal(A.positionKey(child.game), before);
+  assert.notEqual(A.positionKey(child.game), t.rootKey, 'a phase on, not the root');
+});
+
+test('the branch index is clamped to the phases the line actually has', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
+  const n = A.branchFrom(t, main.id, 99, gameSettings(g));
+  assert.equal(n.from.index, 0);
+  assert.equal(n.parent, main.parent, 'and it is still a sibling');
+});
+
+test('a child goes stale when the line above it is undone', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
+  play(main.game, 'FRANCE\nA Par - Bur');
+  const child = A.branchFrom(t, main.id, 1, gameSettings(g));
+  assert.equal(A.isStale(t, child), false);
+  undoLastPhase(main.game);
+  assert.equal(A.isStale(t, child), true, 'the phase it was cut from is gone');
+  assert.equal(child.game.history.length, 0, 'but the child itself is untouched');
+});
+
+test('re-resolving the parent identically un-stales the child', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
+  play(main.game, 'FRANCE\nA Par - Bur');
+  const child = A.branchFrom(t, main.id, 1, gameSettings(g));
+  undoLastPhase(main.game);
+  play(main.game, 'FRANCE\nA Par - Bur');
+  assert.equal(A.isStale(t, child), false);
+});
+
+test('branching is capped', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
+  while (A.canBranch(t)) A.branchFrom(t, main.id, 0, gameSettings(g));
+  assert.equal(A.lineCount(t), A.MAX_LINES);
+  assert.equal(A.canBranch(t), false);
+});
+
+test('branchParent says where a branch will land before it happens', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
+  assert.equal(A.branchParent(t, main.id, 0), null, 'sibling at the top level');
+  assert.equal(A.branchParent(t, main.id, 1), main.id, 'child');
 });
 
 // ---------------------------------------------------------------------------
-// the line as a game object
+// 3. a line is a game
 // ---------------------------------------------------------------------------
 
-test('a line is a real game object, marked as a view rather than a game', () => {
-  const { g, t, v1 } = seeded();
-  g.settings = { ...g.settings, convoyRule: 'strict' };
-  const l = lineGame(t, v1.id, g);
-  assert.ok(isLine(l), 'app.js keys every analysis rule off this');
-  assert.equal(isLine(g), false);
-  assert.equal(l.nodeId, v1.id);
-  assert.equal(l.analysisOf.gistId, 'abc123');
-  assert.equal(l.settings.convoyRule, 'strict', 'a line adjudicates by the live game’s house rules');
-  assert.equal(l.published, undefined, 'and can never be mistaken for the published game');
-  assert.equal(positionKey(l), positionKey(v1.before));
+test('lineGame hands back the node own game, not a copy', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const id = A.ensureEntry(t, gameSettings(g));
+  const view = A.lineGame(t, id, g);
+  assert.equal(view, A.getNode(t, id).game, 'so resolving in it writes to the tree');
+  assert.equal(A.isLine(view), true);
+  assert.equal(A.isLine(g), false);
+  assert.equal(view.nodeId, id);
 });
 
-test('refocusing moves orders between the plan and variation levels', () => {
-  const { t, plan, v1, v2 } = seeded();
-  assert.equal(refocus(t, 'germany'), true);
-  assert.match(plan.mine, /A Mun H/, 'the first variation’s German orders become the shared plan');
-  assert.match(v1.theirs, /A Par - Bur/, 'and France drops to the variation level');
-  assert.equal(refocus(t, 'germany'), false, 'refocusing to the same power does nothing');
+test('a line carries the live game house rules', () => {
+  const g = live();
+  g.settings = { ...gameSettings(g), supportRule: 'strict' };
+  const t = A.newTree(g);
+  const view = A.lineGame(t, A.ensureEntry(t, gameSettings(g)), g);
+  assert.equal(view.settings.supportRule, 'strict', 'or it is not analysis');
 });
 
-// The two replies disagreed about Germany, which is what makes them two
-// German plans once Germany is the focus. Folding them into one would throw
-// half the user's work away silently.
-test('refocusing splits variations that disagree about the new focus power', () => {
-  const { t, plan, v1, v2 } = seeded();
-  refocus(t, 'germany');
-  assert.notEqual(v2.parent, plan.id, 'the second reply gets a plan of its own');
-  const other = getNode(t, v2.parent);
-  assert.match(other.mine, /A Mun - Bur/, 'carrying its own German orders');
-  assert.match(v2.theirs, /A Par - Bur/);
-  assert.equal(plansAt(t, null).length, 2);
+test('lineGame refuses a folder — activeId always names a line', () => {
+  const g = live();
+  const t = A.newTree(g);
+  A.ensureEntry(t, gameSettings(g));
+  const f = A.addFolder(t, null);
+  assert.equal(A.lineGame(t, f.id, g), null);
+});
+
+test('renaming a line renames its game too', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const id = A.ensureEntry(t, gameSettings(g));
+  A.renameNode(t, id, '  Munich gambit  ');
+  assert.equal(A.getNode(t, id).name, 'Munich gambit');
+  assert.equal(A.getNode(t, id).game.name, 'Munich gambit');
+});
+
+test('positionAt and ordersAt read a line at any phase it has played', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
+  play(main.game, 'FRANCE\nA Par - Bur');
+  main.game.orders = 'FRANCE\nA Bur - Mun';
+  assert.equal(A.ordersAt(main.game, 0), 'FRANCE\nA Par - Bur', 'what was played');
+  assert.equal(A.ordersAt(main.game, 1), 'FRANCE\nA Bur - Mun', 'the live draft');
+  assert.equal(A.positionKey(A.positionAt(main.game, 0)), t.rootKey);
+  assert.equal(A.positionKey(A.positionAt(main.game, 1)), A.positionKey(main.game));
+});
+
+// ---------------------------------------------------------------------------
+// folders and placement
+// ---------------------------------------------------------------------------
+
+test('a folder swallows the level it was made at', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
+  const b = A.branchFrom(t, main.id, 0, gameSettings(g));
+  const f = A.groupSiblings(t, main.id, 'Plan A');
+  assert.deepEqual(A.childrenOf(t, null).map((n) => n.id), [f.id]);
+  assert.deepEqual(A.childrenOf(t, f.id).map((n) => n.id), [main.id, b.id]);
+});
+
+test('a folder keeps the children of what it swallowed', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
+  play(main.game, 'FRANCE\nA Par - Bur');
+  const child = A.branchFrom(t, main.id, 1, gameSettings(g));
+  const f = A.groupSiblings(t, main.id);
+  assert.equal(A.getNode(t, child.id).parent, main.id, 'the nesting is unchanged');
+  assert.equal(A.descendantIds(t, f.id).size, 2);
+});
+
+test('drag and drop files a line into a folder and back out', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
+  const b = A.branchFrom(t, main.id, 0, gameSettings(g));
+  const f = A.addFolder(t, null, 'Plan A');
+  assert.equal(A.moveNode(t, b.id, f.id, null), true);
+  assert.deepEqual(A.childrenOf(t, f.id).map((n) => n.id), [b.id]);
+  assert.equal(A.moveNode(t, b.id, null, main.id), true);
+  assert.deepEqual(A.childrenOf(t, null).map((n) => n.id), [b.id, main.id, f.id],
+    'dropping on a row inserts in front of it');
+});
+
+test('a folder cannot be dropped inside itself', () => {
+  const g = live();
+  const t = A.newTree(g);
+  A.ensureEntry(t, gameSettings(g));
+  const outer = A.addFolder(t, null);
+  const inner = A.addFolder(t, outer.id);
+  assert.equal(A.moveNode(t, outer.id, inner.id, null), false);
+  assert.equal(A.moveNode(t, outer.id, outer.id, null), false);
+  assert.equal(A.getNode(t, inner.id).parent, outer.id, 'nothing was orphaned');
+});
+
+test('deleting a folder takes everything inside it', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
+  A.branchFrom(t, main.id, 0, gameSettings(g));
+  const f = A.groupSiblings(t, main.id); // both lines
+  const keep = A.addLine(t, { position: t.root, name: 'Kept', settings: gameSettings(g) });
+  A.deleteNode(t, f.id);
+  assert.deepEqual(Object.keys(t.nodes), [keep.id]);
+  assert.equal(t.activeId, null, 'the open line went with it');
+});
+
+test('ensureEntry reopens the line left open, and rebuilds one if there is none', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const first = A.ensureEntry(t, gameSettings(g));
+  assert.equal(A.ensureEntry(t, gameSettings(g)), first, 'idempotent');
+  A.deleteNode(t, first);
+  const fresh = A.ensureEntry(t, gameSettings(g));
+  assert.notEqual(fresh, first);
+  assert.equal(A.getNode(t, fresh).name, 'Main line');
+});
+
+test('the entry line is the first one in display order, folders and all', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
+  A.branchFrom(t, main.id, 0, gameSettings(g));
+  A.groupSiblings(t, main.id);
+  t.activeId = null;
+  assert.equal(A.ensureEntry(t, gameSettings(g)), main.id);
+  assert.equal(A.firstLine(t).id, main.id);
+});
+
+test('lineLabel spells out the whole placement', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
+  const f = A.groupSiblings(t, main.id, 'Plan A');
+  assert.equal(A.lineLabel(t, main.id), 'Plan A ▸ Main line');
+  assert.equal(A.pathTo(t, main.id).map((n) => n.id).join(','), `${f.id},${main.id}`);
 });

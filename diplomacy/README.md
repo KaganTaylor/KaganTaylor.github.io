@@ -15,7 +15,7 @@ A dependency-free web app for playing and practicing [Diplomacy](https://en.wiki
 - **Tolerant order parsing** — `A Par - Bur`, `F ENG S A Bre - Pic`, `via convoy`, full names or abbreviations, all coast notations (`spa/sc`, `Spa(sc)`).
 - **Full game loop** — spring/fall movement, retreats, supply-center capture, winter builds & civil-disorder disbands.
 - **History** — replay any past turn's step-through; 🧪 copy any position (including a preview's outcome) into a sandbox, which remembers where it came from and offers a way back.
-- **🌿 Analysis lines** — a chess-style tree of plans and variations hanging off the live position, for working out what to do next. Try a plan of your own, explore several replies to it under that plan, resolve each and keep going — the tree nests as deep as you like. Lines are attached to the live game rather than being copies of it: nothing to keep in step by hand, and when the table's next phase lands they are cleared and you start again from the new board. See [Analysis](#analysis).
+- **🌿 Analysis lines** — a private tree of what-ifs hanging off the live position, for working out what to do next. Each line is a game of its own: resolve as many phases ahead as you like, undo and replay inside it, and ⑂ branch wherever you decided something differently — beside the line if you branch at its start, nested under it if you branch further on. 📁 Folders group parallel ideas into plans, and rows drag between them. Lines are attached to the live game rather than being copies of it: nothing to keep in step by hand, and when the table's next phase lands they are cleared and you start again from the new board. See [Analysis](#analysis).
 - **Nothing you do to someone else's game can break it** — spectating a game you don't own and aren't assigned to, Resolve becomes **👁 Preview result**: it adjudicates on a throwaway copy, so you can try any orders — including guesses at what the other six powers will do — and the live position is still there when you close the playback. An assigned player submits for real instead (see [Playing online](#playing-online)) — there's nothing to preview.
 - **Sharing** — export/import the whole game as a JSON file; state also autosaves in your browser.
 - **Online play** — publish a sandbox to turn it into the real game; assigned players submit their orders in-app with their own GitHub token. When the game master's confirmed deadline passes, moves either reveal to everyone instantly (auto publish) or go to the game master first for review (manual publish, the default). See [Playing online](#playing-online).
@@ -70,7 +70,7 @@ Practice copies are all just sandboxes. **Publishing a sandbox is what makes it 
 
 A 🌿 **analysis line** is not a third kind — it is a *view* of an online game, a private what-if hanging off its current position, and it never appears on the home screen. See [Analysis](#analysis).
 
-**Telling them apart.** The chip beside the game's name says which (`🧪 Sandbox`, `☁ Live · 👑 Game master`, `☁ Live · 🇫🇷 France`, `☁ Live · 👁 Watching`, `🌿 Analysis · …`), a stripe along the top of the topbar carries the same colour, and so does a ring around the board. On the home screen your games are grouped into ☁ Online games and 🧪 Sandboxes, each row showing its role badge (a flag for an assigned power), its deadline countdown, and — for a copy — the game it came from.
+**Telling them apart.** The chip beside the game's name says which (`🧪 Sandbox`, `☁ Live · 👑 Game master`, `☁ Live · 🇫🇷 France`, `☁ Live · 👁 Watching`), a stripe along the top of the topbar carries the same colour, and so does a ring around the board. On the home screen your games are grouped into ☁ Online games and 🧪 Sandboxes, each row showing its role badge (a flag for an assigned power), its deadline countdown, and — for a copy — the game it came from.
 
 **Previewing.** Spectating a game — watching without an assigned power — Resolve reads **👁 Preview result** and adjudicates on a throwaway copy: step through it, play the moves, copy the results, and the published position is untouched when you close it. If the outcome was worth keeping, **🧪 Keep as a sandbox** picks it up from there. An assigned player has no preview — see below.
 
@@ -107,27 +107,33 @@ A published game (a public GitHub gist) can collect each player's orders directl
 
 ## Analysis
 
-**🌿 Analysis** is a private tree of what-ifs hanging off the live game's current position — the thinking-ahead half of correspondence play, without the bookkeeping. The `☁ Live | 🌿 Analysis` switch in the topbar moves between the two; the lit half is always the one you're in, and in analysis the topbar stripe, the chip, the ring around the board and a `🌿 ANALYSIS` label on the map itself all turn violet. Everything that could touch the real game — 📤 Submit, ☁ Publish changes, ⏰ Deadline, ⤺ Undo — disappears while you're in there.
+**🌿 Analysis** is a private tree of what-ifs hanging off the live game's current position — the thinking-ahead half of correspondence play, without the bookkeeping. The `☁ Live | 🌿 Analysis` switch in the topbar moves between the two: the lit half is always the one you're in, and in analysis it carries the name of the line you have open. The topbar stripe and the ring around the board turn violet with it. Everything that could touch the real game — 📤 Submit, ☁ Publish changes, ⏰ Deadline — disappears while you're in there.
 
-**Plans and variations.** Because all seven powers move at once, you can't branch on a single move. So each phase splits in two: a **📋 plan** is your own orders, and the **🔀 variations** under it are what everyone else might do in reply.
+**A line is a game of its own.** Write orders for all seven powers, press **Resolve**, watch it play out, and keep going — as many phases ahead as you like. ⤺ Undo, ⤻ Redo and the History panel work inside a line exactly as they do in a sandbox, so you can step back through what you played and look at any earlier turn. Doing all of that stays **one line**: the tree only grows where you decide something differently.
+
+**⑂ Branch** starts a new line from the phase you're looking at, opening on a copy of the orders that were there so you only change the move you want to try. Where it lands is one rule, and the panel says which it will be before you click:
+
+- at the **start** of the line you're in → a **sibling**, beside it
+- at any **later phase** of it → **nested beneath** it
+
+So: plan five phases ahead in the Main line, branch at Fall 1901 to try a different reply (it nests), then look at Fall 1901 again in that new line and branch a second time (it comes out parallel to the first).
+
+**📁 Folder** groups the row you have selected and everything parallel to it — that's your "Plan A". Folders hold nothing but other rows: collapse them, rename them, and drag any row onto a folder to file it, onto another row to reorder, or onto the space below the tree to move it back out.
 
 ```
-🌿 Spring 1901 — Movement
-├─ 📋 Munich gambit           ← your orders
-│   ├─ 🔀 Russia holds         → Fall 1901
-│   │      └─ 📋 Press on          ← and on into the next phase
-│   └─ 🔀 Russia to Galicia    → Fall 1901
-└─ 📋 North first             ← a different plan of yours
-    └─ 🔀 quiet England
+🌿 Spring 1901 — Movement   (the live position)
+📁 Plan A
+├─ 🔀 Main line            Fall 1902 — Movement
+│   ├─ 🔀 Austria bounces me
+│   └─ 🔀 Austria folds
+└─ 🔀 North first          Spring 1901 — Movement
 ```
 
-Write orders, press **Resolve this line**, watch it play out, and you land on the position it produced with the tree carrying on from there. **⑂ Variation** adds another reply to the same plan, starting from a copy of the current one so you only change the order you want to try. **📋 Plan** starts a different idea of your own at the same position, with its own replies. Edit your own orders and *every* variation under that plan follows — one plan, many replies. Rename anything, delete a line and everything under it, and ✏ Edit board works inside a line too.
-
-**Planning as.** An assigned player plans as their own power. A spectator picks one in the panel (or none, in which case each variation is simply a full order set for all seven powers).
+✏ Edit board works inside a line too, and a line whose parent has since been undone or re-resolved is flagged rather than deleted — the work in it is still yours.
 
 **Lines are temporary, on purpose.** The tree is rooted at one position. While the table has a phase waiting for you, 🌿 is greyed out and says so — resolve it with ▶ Resolve new orders! and analysis reopens from the new board. Once the live position actually moves, the tree is cleared and you start again from where the game now is. Nothing to keep in step by hand, and no chance of planning against a board nobody else can see.
 
-**Keeping something.** Two ways out. **↥ Use these orders live** copies your own orders from the line into the live order box (a draft — nothing is submitted). For a position worth keeping past the next phase, ⚙ Settings → **🧪 Copy to sandbox** makes a permanent, ordinary game of your own.
+**Keeping something.** Two ways out. **↥ Use these orders live** copies your own orders from the line into the live order box (a draft — nothing is submitted), and is offered while the line is still standing on the live game's own phase. For a position worth keeping past the next phase, ⚙ Settings → **🧪 Copy to sandbox** makes a permanent, ordinary game of your own.
 
 **No servers, no schedules.** The deadline is enforced by the app itself: submissions are gist comments, GitHub stamps every comment with an edit time, and any client can therefore tell — from public data — which submissions beat the deadline. Nothing needs to run *at* the deadline. An optional GitHub Action (`.github/workflows/diplomacy-publish-moves.yml`, manual `workflow_dispatch` only — it never runs on a schedule) can copy auto-mode games' revealed submissions into per-power `moves-<power>.json` files as a durable record; it needs a repository secret named `DIPLOMACY_GIST_TOKEN` holding the GM's gist-scope token.
 

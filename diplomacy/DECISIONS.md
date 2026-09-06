@@ -147,7 +147,7 @@ A game is either **☁ online** — a published gist, with one authoritative pos
 
 The reason is that the game is only ever really *played* online. Everything local is thinking-out-loud: setting up a position to check a tactic, copying the live game to plan three moves ahead, blitzing a few turns to see where a year goes. Those want the same permissions as each other (edit anything, resolve anything, throw it away), and the *opposite* permissions from the real game. Two kinds, drawn along the line that actually matters — *can what I do here change the real game?* — beat four kinds drawn along how the file happened to be created.
 
-A **🌿 analysis line is not a third kind**. It is a *view* of an online game — one node of the tree hanging off its current position — that happens to wear a game object so the rest of the app can work on it unchanged. It is never in the saved-games map, so the two kinds above still describe everything that is. See *A line is a view, not a game*, below.
+A **🌿 analysis line is not a third kind**. It is a *view* of an online game — one line of the tree hanging off its current position — that happens to wear a game object so the rest of the app can work on it unchanged. It is never in the saved-games map, so the two kinds above still describe everything that is. See *A line is a view, not a game*, below.
 
 `gameMode()` in `js/roles.js` names the five faces of that: `sandbox`, `gm`, `player` (an assigned power), `spectator` and `analysis`. It is written to `#game-screen[data-mode]`, so the stylesheet reads the same answer the interaction code does and the two cannot drift apart. It is derived from `isOwnerView()`, not raw `isOwner`, so a game master who has switched `🎭 Play as → 🧑 Player` sees the `player` colours too — see below.
 
@@ -155,7 +155,7 @@ A **🌿 analysis line is not a third kind**. It is a *view* of an online game �
 
 A rule you can only discover by tripping over it is a bad rule. So the mode is on screen in three places at once, in one colour — amber for sandbox, blue for online:
 
-- a **chip** beside the game's name (`🧪 Sandbox`, `☁ Live · 👑 Game master`, `☁ Live · 🎖 France`, `☁ Live · 👁 Watching`, `🌿 Analysis · Munich gambit ▸ Russia holds`),
+- a **chip** beside the game's name (`🧪 Sandbox`, `☁ Live · 👑 Game master`, `☁ Live · 🎖 France`, `☁ Live · 👁 Watching`, and analysis, which has none — the ☁/🌿 switch names the open line itself),
 - a **stripe** along the top edge of the topbar,
 - a **ring** around the board itself.
 
@@ -193,7 +193,7 @@ The fix is not to sync branches. It is to stop making them games.
 
 An analysis line is the **👁 Preview** (`shadowGame()`/`previewResolve()`) made persistent and nestable. The whole tree lives on `liveGame.analysis` (`js/analysis.js`), so it is saved and loaded with the game it belongs to, has no identity of its own, and never appears on the home screen. There is nothing to keep in step by hand because there is no second copy.
 
-The implementation is **two pointers** in `js/app.js`. `liveGame` is the real game; `game` is what is on screen — normally `liveGame`, but while a line is open it points at that line's own game object instead. A line *is* an ordinary game object (`state.js branchGame` over the variation's stored position), so every drag, coast picker, retreat, build, board edit, resolve and playback in the file works on one without knowing analysis exists.
+The implementation is **two pointers** in `js/app.js`. `liveGame` is the real game; `game` is what is on screen — normally `liveGame`, but while a line is open it points at that line's own game object instead. A line *is* an ordinary game object (`state.js branchGame`), so every drag, coast picker, retreat, build, board edit, resolve and playback in the file works on one without knowing analysis exists.
 
 The alternative was to keep `game` as the live game and thread a `view()` through the render path. That is more principled and was rejected anyway: it means editing ~45 call sites, the riskiest of which are the drag handlers that mutate `game.units`, and missing one shows live state inside a line — the precise confusion this feature has to prevent. The pointer swap inverts the cost onto the online/publish/deadline code, which is one contiguous block, already takes `game` as an explicit argument throughout (`O.*(game, online, …)`), and whose failure mode if a site were missed is a blank deadline chip rather than a corrupted board.
 
@@ -211,50 +211,57 @@ That is also why a pending catch-up **locks** analysis rather than deleting it. 
 
 Lines are therefore **deliberately temporary**, and the app says so in the panel. **🧪 Copy to sandbox** is the other half of the pair: a real, permanent, freely editable game for a position worth keeping past the next publish. Temporary-and-attached and permanent-and-detached are different jobs; one control cannot be both, which is what the old 🌿 Branch was trying to be.
 
-### Why plans and variations are two levels
+### A line is a whole game, not one phase
 
-This is the one place the chess analogy breaks, and getting it wrong would make the tree useless.
+The first cut modelled a phase as a node — my orders as a folder, their replies as children under it — because that is how a chess tree looks. It was wrong, and using it made that obvious within a turn: planning four phases ahead of the table produced four levels of nesting for a single unbroken idea, and the panel filled up with rows that were not decisions.
 
-In chess, moves alternate, so a tree of single moves nests my-move/their-move on its own. **In Diplomacy all seven powers write orders for the same phase simultaneously**, so "my plan" and "their reply to it" cannot be parent and child — they are one order set. You cannot branch on a single move at all.
+**A line is one game object** (`state.js branchGame`), stored on its node, run forward as far as you like. Resolving inside it is `resolvePhase`, stepping back is `undoLastPhase`, looking at an earlier turn is the same History select — the ordinary operations, writing to the ordinary place, because `game` points at the node's own game rather than at a copy rebuilt from stored positions. Ten phases deep is still one row.
 
-So a phase splits in two instead:
+That leaves the tree to record only what a tree is for: **the places you decided differently**.
+
+### Where a branch lands is decided by the phase on screen
 
 ```
 🌿 Spring 1901 — Movement   (the live position)
-├─ 📋 Munich gambit                  ← my orders
-│   ├─ 🔀 Russia holds        →  Fall 1901
-│   │      └─ 📋 Press on
-│   │             ├─ 🔀 Austria bounces me
-│   │             └─ 🔀 Austria folds
-│   └─ 🔀 Russia to Galicia    →  Fall 1901
-└─ 📋 North first                    ← a different plan of mine
-    └─ 🔀 quiet England
+📁 Plan A
+├─ 🔀 Main line            Fall 1902 — Movement    ← five phases played inside it
+│   ├─ 🔀 Austria bounces me     ← branched at Fall 1901, so it nests
+│   └─ 🔀 Austria folds          ← branched at the same phase, so it is parallel
+└─ 🔀 North first          Spring 1901 — Movement  ← branched at the start, so it is a sibling
 ```
 
-A **plan** holds the focus power's orders and is a folder with no position of its own; a **variation** holds what everyone else does and is the only kind that resolves. Edit the plan and every variation under it moves with it — one plan, many replies, which is exactly "try my move, then explore all of theirs". `activeId` always names a variation: a plan is not a full order set, so it is never a board.
+⑂ **Branch** takes one input, the phase you are looking at:
 
-The split maps onto machinery that already existed — `orders-text.js splitForFilter()` is precisely *my orders* / *everyone else's* — so the order box stays one textarea and the two levels are separated only when the box is stored back into the node.
+> **At the line's own starting phase → a sibling. At any later phase of it → a child of it.**
 
-Two consequences worth recording:
+Those two mean exactly what nesting should mean: *another idea from the same place*, and *an idea that only exists because this line got us here*. Nesting therefore records real dependency rather than the order you happened to click in, and two branches cut from the same phase come out parallel to each other for free — the second is made while standing at its own start.
 
-- **With no focus power the plan level is empty**, variations are full order sets, and the tree renders flat. The two-level model degenerates cleanly into the one-level model rather than needing a second code path.
-- **Changing the focus power splits plans rather than merging them.** Sibling variations normally disagree about the new focus power's orders, since until then those orders were variation-local. A plan is shared by definition, so they cannot all sit under one: the first set keeps the plan and each distinct other set gets a plan of its own. Nothing is discarded, and the result is right — *those two replies were really two different German plans all along*.
+The phase on screen is `viewedIndex()` (app.js): the line's current position, unless a past phase of it is being replayed, which is what "look at the previous turn in the History panel" leaves up. It is stated in the panel *before* the click (`#analysis-branch-note`), because the rule is one comparison but invisible from the button alone, and a line silently filed at the wrong level is the whole feature misfiring.
 
-### An edit means an edit, not a re-render
+A branch opens on a **copy of the orders at that phase**, so exploring "what else might they do?" is tweak-one-order rather than retype-all-seven-powers.
 
-`setNodeOrders()` compares what the orders **say** (`orderContent`: per power, normalized, empty blocks dropped), never the raw text. The order box is refilled from a blank per-phase template on every render, so a variation reopened and left untouched comes back carrying a bare `ITALY` heading it did not have before. `normalizeOrders()` alone keeps that line — it has content — so comparing on it read every single re-render as an edit and wiped the resolved outcome underneath. Both halves of that (the empty-block drop, and the fact that a plan edit invalidates its siblings while a variation edit does not) are pinned by `test/analysis.test.js`.
+### Folders are organisation and nothing else
+
+📁 **Folder** wraps the selected row's whole level — the row and everything parallel to it — and takes the position they were in. A folder that started empty would be a folder that started by doing nothing; grouping the siblings is what *"these parallel ideas are one plan"* actually means, and dragging back out is the cheap direction. Rows drag onto a folder to file them, onto another row to reorder, and onto the space below the tree to come back out to the top level (`moveNode`, which refuses to put a folder inside its own subtree).
+
+Folders hold no orders, no position and no rules. That is the point. The earlier design gave the folder level a *meaning* — one power's orders, shared downward — which made "how do I just group these?" unanswerable and "why did editing my orders change six other lines?" a question that had to be explained in the panel.
+
+### A branch knows what it was cut from
+
+Each branched line stores `from = {lineId, index, key, label}`. If the line above is undone, or re-resolved into a different position, `isStale()` says so on the row — *⚠ the line it came from changed*. It is a flag and never a deletion: the child is a self-contained game, and the orders in it are the user's work. Re-resolving the parent back to the same position clears the flag on its own, since the comparison is on the position key rather than on a version counter.
 
 ### Saying which world you are in
 
 A line is the only mode you can be in *by accident*, so it is the loudest:
 
 - the `☁ Live | 🌿 Analysis` **switch** in the topbar is a two-state segmented control, not a button — the lit half is where you are, so the switch is the indicator as well as the way out;
-- `data-mode="analysis"` turns the topbar stripe, the chip and the board ring **violet**, and the ring is thicker than the other modes';
-- the chip names the open line (`🌿 Analysis · Munich gambit ▸ Russia holds`);
-- `Board.setPhaseText()` prints `🌿 ANALYSIS —` onto the map itself, which is the only one of these that survives a full-screen phone with every panel closed;
-- every control that could reach the real game — 📤 Submit, ☁ Publish changes, the ● pill, ⏰ Deadline, 👥 Set players, ⤺ Undo — is **gone**, not disabled. A line is a different place.
+- **the lit half carries the open line's name** — `🌿 Main line`, `🌿 Munich gambit` — so one control says both *which world am I in* and *which of my ideas is on the board*. There is deliberately no analysis mode chip and no breadcrumb beside it: an earlier version had the switch, a chip and a `Plan A ▸ Main line` path all saying the same thing, which is three places to keep in step and enough text to push the phase label off a phone;
+- `data-mode="analysis"` turns the topbar stripe and the board ring **violet**, and the ring is thicker than the other modes';
+- every control that could reach the real game — 📤 Submit, ☁ Publish changes, the ● pill, ⏰ Deadline, 👥 Set players — is **gone**, not disabled. A line is a different place. ⤺ Undo / ⤻ Redo are the exception and are *kept*: inside a line they act on the line, and stepping a phase back is how you reach the position you want to branch from.
 
-And one bridge back, because without it people retype orders by hand and that is where the mistakes are: **↥ Use these orders live** copies the focus power's orders from the line into the live *draft* box and switches to ☁ Live. Only your own orders, and never into a submission.
+The map itself used to print `🌿 ANALYSIS —` in front of the phase. It was dropped: the violet ring around the board is on the same screen, says the same thing without words, and the label cost the phase label the room it needed on a phone.
+
+And one bridge back, because without it people retype orders by hand and that is where the mistakes are: **↥ Use these orders live** copies your own power's orders from the line into the live *draft* box and switches to ☁ Live. Only your own orders, never into a submission, and only while the line is still standing on the live game's own phase — orders written three phases into a hypothetical are not orders for the turn the table is playing.
 
 ### `stripForPublish` is a drop list, and that is now a tested fact
 

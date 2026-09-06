@@ -1,4 +1,4 @@
-// The analysis tree: plans, variations, and the position each one leads to.
+// The analysis tree: lines, folders, and where each line branched off.
 //
 // A LINE IS NOT A GAME. It is a view of the live game's current position — the
 // 👁 Preview (app.js shadowGame/previewResolve), made persistent and nestable.
@@ -8,63 +8,51 @@
 // goes stale the moment the live game moves on" — a branch used to be a peer
 // game with its own identity, so nothing could keep it attached.
 //
-// TWO LEVELS, BECAUSE DIPLOMACY IS SIMULTANEOUS. In chess, moves alternate, so
-// a tree of single moves nests my-move/their-move on its own. Here all seven
-// powers write orders for the SAME phase, so "my plan" and "their reply to it"
-// cannot be parent and child — they are one order set. So a phase splits in
-// two instead:
+// A LINE IS AN ORDINARY GAME OBJECT (state.js branchGame), stored on its node.
+// That one decision is what makes a line feel like the game rather than like a
+// form: resolving inside it is S.resolvePhase, stepping back is S.undoLastPhase,
+// looking at an earlier turn is the same history select, and every drag, coast
+// picker, retreat, build and board edit in app.js works on it unchanged. A line
+// runs as many phases forward as you like and stays ONE line — it is not chopped
+// into a node per phase, because the phases of a plan are the plan.
 //
-//   📋 plan       my power's orders for the phase        (a folder)
-//   🔀 variation  what everyone else does, given that plan
+// TWO KINDS OF NODE, and only one of them is a position:
 //
-// Change the plan and every variation under it moves with it — one plan, many
-// replies, which is exactly "try my move, then explore all of theirs". A
-// variation resolves to a position; the plans under it belong to the next
-// phase. With no focus power (a spectator who has not picked a country) the
-// plan level is empty and variations are simply full order sets — the flat
-// tree, as a degenerate case of the same shape.
+//   🔀 line    a game of its own: a starting position and every phase since
+//   📁 folder  organisation, nothing else — drag lines into it, collapse it
+//
+// BRANCHING IS EXPLICIT, and where the new line lands is decided by ONE rule:
+// the phase you are looking at when you press ⑂ Branch.
+//
+//   at the line's own starting phase  →  a sibling, beside the line you are in
+//   at any later phase of it          →  a child, nested beneath that line
+//
+// which is exactly what those two mean — "another idea from the same place" and
+// "an idea that only exists because this line got us here". Nesting therefore
+// records real dependency rather than the order you happened to click in, and
+// two children branched from the same phase come out parallel to each other.
 //
 // Every function is pure: plain data in, plain data out, no DOM, no storage,
 // no `game` module state. See DECISIONS.md, "A line is a view, not a game".
 
 import { branchGame, gameSettings, phaseLabel } from './state.js';
-import {
-  splitForFilter, splitOrdersByPower, blockBody, normalizeOrders,
-} from './orders-text.js';
 
 // localStorage holds every saved game in one JSON blob that is rewritten on
 // each save, so a tree is capped rather than allowed to grow without limit.
-// A variation is ~2 KB (two positions plus its order text).
-export const MAX_VARIATIONS = 60;
+// A line carries a full game object, so it costs more than the old two-position
+// variation did — a few KB, plus a few more for each phase resolved in it.
+export const MAX_LINES = 30;
 
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-
-// What a block of order text actually SAYS: per power, its orders, normalized
-// and with empty blocks dropped entirely.
-//
-// normalizeOrders() alone is not enough here. The order box is refilled from a
-// blank per-phase template on every render, so a variation reopened and left
-// untouched comes back carrying a bare "ITALY" heading it did not have before
-// — which normalizeOrders keeps, being a line with content. Comparing that
-// would read every re-render as an edit and wipe the outcome underneath it.
-function orderContent(text) {
-  const byPower = splitOrdersByPower(text || '');
-  const parts = [];
-  for (const p of [...byPower.keys()].sort()) {
-    const body = normalizeOrders(blockBody(byPower, p));
-    if (body) parts.push(p + '\n' + body);
-  }
-  return parts.join('\n');
-}
 
 // ---------------------------------------------------------------------------
 // positions
 // ---------------------------------------------------------------------------
 
 // The board itself, with nothing of the game around it: what a tree is rooted
-// at, and what every variation stores as its starting point. Deliberately not
-// state.js's boardSnapshot() — that carries history and redoStack, which are
-// the live game's bookkeeping and say nothing about where the pieces are.
+// at, and what a new line is started from. Deliberately not state.js's
+// boardSnapshot() — that carries history and redoStack, which are the live
+// game's bookkeeping and say nothing about where the pieces are.
 export function positionOf(g) {
   return structuredClone({
     year: g.year,
@@ -92,17 +80,41 @@ export function positionKey(g) {
   return `${g.year}/${g.season}/${g.step}\n${units}\n${scs}\n${dislodged}`;
 }
 
+// The position a game was at N resolved phases in — `i === history.length` is
+// where it stands now. This is what "branch at the phase I am looking at"
+// resolves to, and what tells a child line whether the line above it still
+// arrives at the position the child was cut from (isStale).
+export function positionAt(g, i) {
+  if (i >= g.history.length) return positionOf(g);
+  const h = g.history[i];
+  return structuredClone({
+    year: h.year,
+    season: h.season,
+    step: h.step,
+    units: h.unitsBefore,
+    scOwners: h.scOwnersBefore,
+    pending: h.pendingBefore || null,
+  });
+}
+
+// The orders written at that phase — so a branch opens on a copy of what was
+// tried, and exploring "what else?" is tweak-one-order rather than retype-all.
+export function ordersAt(g, i) {
+  if (i >= g.history.length) return g.orders || '';
+  return g.history[i].ordersText || '';
+}
+
 // ---------------------------------------------------------------------------
 // the tree
 // ---------------------------------------------------------------------------
 
-export function newTree(liveGame, focus = '') {
+export function newTree(liveGame) {
   return {
     root: positionOf(liveGame),
     rootKey: positionKey(liveGame),
     rootLabel: phaseLabel(liveGame),
-    focus: focus || '',
-    activeId: null,
+    activeId: null,   // the line on the board
+    selectedId: null, // the node ✎ and 🗑 act on — a line OR a folder
     seq: 0,
     nodes: {},
   };
@@ -128,202 +140,198 @@ export function getNode(tree, id) {
   return (tree && id && tree.nodes[id]) || null;
 }
 
-const bySeq = (a, b) => a.seq - b.seq;
-
-// Plans written at a given position: `parentVarId` null means the root.
-export function plansAt(tree, parentVarId = null) {
-  return Object.values(tree.nodes)
-    .filter((n) => n.kind === 'plan' && (n.parent || null) === (parentVarId || null))
-    .sort(bySeq);
+export function allNodes(tree) {
+  return tree ? Object.values(tree.nodes) : [];
 }
 
-export function variationsOf(tree, planId) {
-  return Object.values(tree.nodes)
-    .filter((n) => n.kind === 'var' && n.parent === planId)
-    .sort(bySeq);
+export function lines(tree) {
+  return allNodes(tree).filter((n) => n.kind === 'line');
 }
 
-export function variationCount(tree) {
-  return tree ? Object.values(tree.nodes).filter((n) => n.kind === 'var').length : 0;
+export function lineCount(tree) {
+  return lines(tree).length;
 }
 
-export function canAddVariation(tree) {
-  return variationCount(tree) < MAX_VARIATIONS;
+export function canBranch(tree) {
+  return lineCount(tree) < MAX_LINES;
 }
 
-// Where a plan's orders are written: the outcome of the variation above it, or
-// the root for a top-level plan.
-export function positionFor(tree, planId) {
-  const plan = getNode(tree, planId);
-  if (!plan) return tree.root;
-  const parent = getNode(tree, plan.parent);
-  return (parent && parent.after) || tree.root;
+// Children of a node (or of the top level, with `parentId` null), in the order
+// they are shown. `pos` is what drag-and-drop rewrites; `seq` only breaks ties.
+export function childrenOf(tree, parentId = null) {
+  return allNodes(tree)
+    .filter((n) => (n.parent || null) === (parentId || null))
+    .sort((a, b) => (a.pos - b.pos) || (a.seq - b.seq));
 }
 
-export function defaultPlanName(tree, parentVarId) {
-  const n = plansAt(tree, parentVarId).length;
-  return `Plan ${LETTERS[n] || n + 1}`;
+function nextPos(tree, parentId) {
+  const sibs = childrenOf(tree, parentId);
+  return sibs.length ? sibs[sibs.length - 1].pos + 1 : 0;
 }
 
-export function defaultVariationName(tree, planId) {
-  const n = variationsOf(tree, planId).length;
+export function descendantIds(tree, id) {
+  const out = new Set();
+  const walk = (pid) => {
+    for (const c of childrenOf(tree, pid)) {
+      out.add(c.id);
+      walk(c.id);
+    }
+  };
+  walk(id);
+  return out;
+}
+
+export function defaultLineName(tree) {
+  const n = lineCount(tree);
   return n === 0 ? 'Main line' : `Variation ${n + 1}`;
 }
 
-export function addPlan(tree, parentVarId, name = null, mine = '') {
+export function defaultFolderName(tree) {
+  const n = allNodes(tree).filter((x) => x.kind === 'folder').length;
+  return `Plan ${LETTERS[n] || n + 1}`;
+}
+
+// A new line. `position` is where it starts, `orders` the draft it opens on,
+// `from` how it relates to the line it was cut from (null for the first line):
+// {lineId, index, key, label}. `from.lineId` is the ORIGIN, which is not always
+// the tree parent — a sibling branch shares its origin's parent — so staleness
+// and placement stay independent facts.
+export function addLine(tree, opts = {}) {
   const seq = ++tree.seq;
-  const id = `p${seq}`;
+  const id = `l${seq}`;
+  const name = opts.name || defaultLineName(tree);
+  const g = branchGame(opts.position || tree.root, name);
+  if (opts.settings) g.settings = { ...opts.settings };
+  g.orders = opts.orders || '';
   tree.nodes[id] = {
-    id, seq, kind: 'plan',
-    parent: parentVarId || null,
-    name: name || defaultPlanName(tree, parentVarId),
-    mine,
+    id, seq, kind: 'line',
+    parent: opts.parent || null,
+    pos: nextPos(tree, opts.parent || null),
+    name,
+    game: g,
+    from: opts.from || null,
   };
   return tree.nodes[id];
 }
 
-export function addVariation(tree, planId, name = null, theirs = '', before = null) {
+export function addFolder(tree, parentId = null, name = null) {
   const seq = ++tree.seq;
-  const id = `v${seq}`;
+  const id = `f${seq}`;
   tree.nodes[id] = {
-    id, seq, kind: 'var',
-    parent: planId,
-    name: name || defaultVariationName(tree, planId),
-    theirs,
-    before: structuredClone(before || positionFor(tree, planId)),
-    after: null,
-    stale: false,
+    id, seq, kind: 'folder',
+    parent: parentId || null,
+    pos: nextPos(tree, parentId || null),
+    name: name || defaultFolderName(tree),
+    collapsed: false,
   };
   return tree.nodes[id];
+}
+
+// 📁 Folder: a folder appears WHERE THE SELECTED NODE IS and swallows that
+// node and everything parallel to it. Making it empty and asking the user to
+// drag things in would be a folder that starts by doing nothing; grouping the
+// siblings is what "these parallel ideas are one plan" actually means, and
+// dragging back out is the cheap direction.
+export function groupSiblings(tree, id, name = null) {
+  const n = getNode(tree, id);
+  if (!n) return null;
+  const parentId = n.parent || null;
+  const sibs = childrenOf(tree, parentId);
+  const folder = addFolder(tree, parentId, name);
+  sibs.forEach((s, i) => {
+    s.parent = folder.id;
+    s.pos = i;
+  });
+  folder.pos = 0;
+  return folder;
+}
+
+// Drag-and-drop, and the only thing that changes a node's placement after it is
+// created. `beforeId` names a sibling to insert in front of; null appends.
+// Moving a node into its own subtree would orphan the whole branch, so it is
+// refused rather than silently repaired.
+export function moveNode(tree, id, parentId, beforeId = null) {
+  const n = getNode(tree, id);
+  if (!n || id === parentId) return false;
+  if (parentId && descendantIds(tree, id).has(parentId)) return false;
+  const target = parentId || null;
+  const sibs = childrenOf(tree, target).filter((s) => s.id !== id);
+  const at = beforeId ? sibs.findIndex((s) => s.id === beforeId) : -1;
+  const list = at < 0 ? [...sibs, n] : [...sibs.slice(0, at), n, ...sibs.slice(at)];
+  n.parent = target;
+  list.forEach((s, i) => { s.pos = i; });
+  return true;
 }
 
 export function renameNode(tree, id, name) {
   const n = getNode(tree, id);
-  if (n && name && name.trim()) n.name = name.trim();
+  if (!n || !name || !name.trim()) return;
+  n.name = name.trim();
+  if (n.game) n.game.name = n.name;
+}
+
+export function toggleCollapsed(tree, id) {
+  const n = getNode(tree, id);
+  if (n && n.kind === 'folder') n.collapsed = !n.collapsed;
 }
 
 export function deleteNode(tree, id) {
   const n = getNode(tree, id);
   if (!n) return;
-  const doomed = new Set();
-  const walkVar = (vid) => {
-    doomed.add(vid);
-    for (const p of plansAt(tree, vid)) walkPlan(p.id);
-  };
-  const walkPlan = (pid) => {
-    doomed.add(pid);
-    for (const v of variationsOf(tree, pid)) walkVar(v.id);
-  };
-  if (n.kind === 'plan') walkPlan(id);
-  else walkVar(id);
+  const doomed = descendantIds(tree, id);
+  doomed.add(id);
   for (const d of doomed) delete tree.nodes[d];
   if (doomed.has(tree.activeId)) tree.activeId = null;
+  if (doomed.has(tree.selectedId)) tree.selectedId = null;
 }
 
 // ---------------------------------------------------------------------------
-// orders
+// branching
 // ---------------------------------------------------------------------------
 
-// The full order set a variation stands for: its plan's orders plus its own.
-export function nodeOrdersText(tree, varId) {
-  const v = getNode(tree, varId);
-  if (!v) return '';
-  const plan = getNode(tree, v.parent);
-  return [plan ? plan.mine : '', v.theirs]
-    .filter((s) => s && s.trim()).join('\n');
-}
-
-// Split the order box back into the two levels and store it. The focus power's
-// block belongs to the PLAN — shared with every sibling variation, which is
-// the point of the split — and everything else to this variation alone. With
-// no focus power the plan holds nothing and the variation holds it all.
+// Where ⑂ Branch puts the new line, given the phase being looked at. The whole
+// nesting rule, in one expression, so the panel can say it out loud before the
+// click as well as act on it after (app.js renderAnalysisUI).
 //
-// Anything that changes invalidates the outcome it used to produce: a plan
-// edit invalidates every variation under it, a variation edit only itself.
-//
-// "Changed" means the ORDERS changed, not the text — the box is refilled from
-// a blank per-phase template on every render, so a node reopened and not
-// touched comes back carrying extra headings and blank lines. Comparing raw
-// text would read that as an edit and throw away a resolved outcome on every
-// single re-render.
-export function setNodeOrders(tree, varId, fullText, focus) {
-  const v = getNode(tree, varId);
-  if (!v) return false;
-  const plan = getNode(tree, v.parent);
-  const { visible, hidden } = splitForFilter(fullText, focus || '');
-  const mine = focus ? visible : '';
-  const theirs = focus ? hidden : visible;
-  let changed = false;
-  if (plan) {
-    const planChanged = orderContent(plan.mine) !== orderContent(mine);
-    plan.mine = mine;
-    if (planChanged) {
-      changed = true;
-      for (const sib of variationsOf(tree, plan.id)) invalidate(tree, sib.id);
-    }
-  }
-  const varChanged = orderContent(v.theirs) !== orderContent(theirs);
-  v.theirs = theirs;
-  if (varChanged) {
-    changed = true;
-    invalidate(tree, v.id);
-  }
-  return changed;
+//   index 0  →  the line's own starting phase: a sibling
+//   index >0 →  a phase this line produced: a child of it
+export function branchParent(tree, srcId, index) {
+  const src = getNode(tree, srcId);
+  if (!src) return null;
+  return index > 0 ? src.id : (src.parent || null);
 }
 
-// ✏ Edit board inside a line: the variation's starting position moves, so
-// whatever it used to resolve to no longer follows from it.
-export function setNodeBefore(tree, varId, g) {
-  const v = getNode(tree, varId);
-  if (!v) return false;
-  const next = positionOf(g);
-  if (positionKey(next) === positionKey(v.before)) return false;
-  v.before = next;
-  invalidate(tree, varId);
-  return true;
+// Cut a new line off `srcId` at the phase `index` phases into it.
+export function branchFrom(tree, srcId, index, settings) {
+  const src = getNode(tree, srcId);
+  if (!src || src.kind !== 'line') return null;
+  const i = Math.max(0, Math.min(index, src.game.history.length));
+  const position = positionAt(src.game, i);
+  return addLine(tree, {
+    parent: branchParent(tree, srcId, i),
+    position,
+    orders: ordersAt(src.game, i),
+    settings,
+    from: {
+      lineId: src.id,
+      index: i,
+      key: positionKey(position),
+      label: phaseLabel(position),
+    },
+  });
 }
 
-function invalidate(tree, varId) {
-  const v = getNode(tree, varId);
-  if (!v) return;
-  v.after = null;
-  markStale(tree, varId);
-}
-
-// Everything below an invalidated variation is still explorable — its orders
-// are the user's work — but it no longer follows from what is above it, so it
-// is flagged rather than deleted. Re-resolving the parent re-bases it.
-function markStale(tree, varId) {
-  for (const plan of plansAt(tree, varId)) {
-    for (const child of variationsOf(tree, plan.id)) {
-      child.stale = true;
-      child.after = null;
-      markStale(tree, child.id);
-    }
-  }
-}
-
-// A variation has been resolved: record where it lands, re-base anything
-// already explored underneath onto the new outcome (their orders are kept,
-// their results are not), and hand back the variation to continue in.
-export function recordResolution(tree, varId, resolved) {
-  const v = getNode(tree, varId);
-  if (!v) return null;
-  v.after = positionOf(resolved);
-  v.stale = false;
-  for (const plan of plansAt(tree, varId)) {
-    for (const child of variationsOf(tree, plan.id)) {
-      child.before = structuredClone(v.after);
-      child.after = null;
-      child.stale = false;
-      markStale(tree, child.id);
-    }
-  }
-  let plan = plansAt(tree, varId)[0];
-  if (!plan) plan = addPlan(tree, varId);
-  let next = variationsOf(tree, plan.id)[0];
-  if (!next) next = addVariation(tree, plan.id, null, '', v.after);
-  return next.id;
+// Does the line this one was cut from still arrive at the position it was cut
+// from? Undo a phase in the parent, or resolve it differently, and the child no
+// longer follows from it. The child is still perfectly explorable — it is a
+// self-contained game — so this is a flag, never a deletion.
+export function isStale(tree, node) {
+  const f = node && node.from;
+  if (!f) return false;
+  const src = getNode(tree, f.lineId);
+  if (!src || src.kind !== 'line') return false;
+  if (f.index > src.game.history.length) return true;
+  return positionKey(positionAt(src.game, f.index)) !== f.key;
 }
 
 // ---------------------------------------------------------------------------
@@ -340,87 +348,51 @@ export function pathTo(tree, id) {
   return out;
 }
 
-// "Munich gambit ▸ Russia holds" — what the mode chip says out loud, so the
-// line you are in is never a guess.
+// "Plan A ▸ Munich gambit" — the full placement of a line, for the one place
+// that wants it spelled out (the switch's tooltip).
 export function lineLabel(tree, id) {
   return pathTo(tree, id).map((n) => n.name).join(' ▸ ');
 }
 
-export function firstVariation(tree) {
-  for (const p of plansAt(tree, null)) {
-    const v = variationsOf(tree, p.id)[0];
-    if (v) return v.id;
-  }
-  return null;
+// The first line in display order, wherever it sits in the folders.
+export function firstLine(tree) {
+  const walk = (parentId) => {
+    for (const c of childrenOf(tree, parentId)) {
+      if (c.kind === 'line') return c;
+      const inside = walk(c.id);
+      if (inside) return inside;
+    }
+    return null;
+  };
+  return walk(null);
 }
 
-// The variation to open when entering analysis: the one left open last time,
-// else the first in the tree, else a fresh plan-and-variation at the root.
-// `activeId` always names a VARIATION — a plan is a folder holding one power's
-// orders, never a full position to put on the board.
-export function ensureEntry(tree) {
-  const open = getNode(tree, tree.activeId);
-  let id = open && open.kind === 'var' ? open.id : null;
-  if (!id) id = firstVariation(tree);
-  if (!id) {
-    const plan = addPlan(tree, null);
-    id = addVariation(tree, plan.id, null, '', tree.root).id;
-  }
-  tree.activeId = id;
-  return id;
+// The line to open when entering analysis: the one left open last time, else
+// the first in the tree, else a fresh Main line at the root. `activeId` always
+// names a LINE — a folder is organisation, never a position to put on a board.
+export function ensureEntry(tree, settings) {
+  let n = getNode(tree, tree.activeId);
+  if (!n || n.kind !== 'line') n = firstLine(tree);
+  if (!n) n = addLine(tree, { position: tree.root, name: 'Main line', settings });
+  tree.activeId = n.id;
+  if (!getNode(tree, tree.selectedId)) tree.selectedId = n.id;
+  return n.id;
 }
 
-// The game object the app points at while a line is open. It is a real,
-// ordinary game object (state.js branchGame) holding nothing but the position
-// the variation starts from — which is what lets every drag, coast picker,
-// retreat, build, board edit and playback in app.js work on a line unchanged.
-// `analysisOf` is what marks it as a view rather than a game (isLine).
-export function lineGame(tree, varId, liveGame) {
-  const v = getNode(tree, varId);
-  if (!v) return null;
-  const g = branchGame(v.before, lineLabel(tree, varId));
+// The game object the app points at while a line is open — the node's OWN game,
+// handed back live rather than rebuilt, so resolving, undoing and editing the
+// board inside a line are the ordinary operations writing to the ordinary
+// place. `analysisOf` is what marks it as a view rather than a game (isLine).
+export function lineGame(tree, id, liveGame) {
+  const n = getNode(tree, id);
+  if (!n || n.kind !== 'line') return null;
+  const g = n.game;
+  g.name = n.name;
   g.settings = { ...gameSettings(liveGame) }; // the live game's house rules, or it isn't analysis
   g.analysisOf = { name: liveGame.name, gistId: liveGame.gistId || null };
-  g.nodeId = varId;
-  g.focus = tree.focus || '';
+  g.nodeId = id;
+  if (!g.redoStack) g.redoStack = [];
   return g;
-}
-
-// Which power's orders are the shared "plan" level. Changing it re-splits
-// every node: each variation's full order set is recombined and split again
-// along the new line.
-//
-// The awkward case is sibling variations that disagree about the NEW focus
-// power's orders — which is the normal case, since until now those orders were
-// variation-local. A plan is shared by definition, so they cannot all sit
-// under one; the first set keeps the plan and each distinct other set gets a
-// plan of its own. Nothing is discarded, and the result is exactly right:
-// "these two replies were really two different German plans all along".
-export function refocus(tree, focus) {
-  const next = focus || '';
-  if (next === (tree.focus || '')) return false;
-  for (const plan of Object.values(tree.nodes).filter((n) => n.kind === 'plan')) {
-    const groups = new Map(); // order content -> { mine, vars }
-    for (const v of variationsOf(tree, plan.id)) {
-      const full = [plan.mine, v.theirs].filter((s) => s && s.trim()).join('\n');
-      const { visible, hidden } = splitForFilter(full, next);
-      const mine = next ? visible : '';
-      v.theirs = next ? hidden : visible;
-      v.after = null;
-      v.stale = false;
-      const key = orderContent(mine);
-      if (!groups.has(key)) groups.set(key, { mine, vars: [] });
-      groups.get(key).vars.push(v);
-    }
-    const sets = [...groups.values()];
-    plan.mine = sets.length ? sets[0].mine : '';
-    for (const extra of sets.slice(1)) {
-      const p = addPlan(tree, plan.parent, null, extra.mine);
-      for (const v of extra.vars) v.parent = p.id;
-    }
-  }
-  tree.focus = next;
-  return true;
 }
 
 export { phaseLabel };

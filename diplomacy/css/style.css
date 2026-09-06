@@ -238,21 +238,41 @@ details.panel:not([open]) summary { margin-bottom: 0; }
 }
 
 /* ---------- 🌿 analysis tree ---------- */
-/* Plans are folders holding one power's orders; the variations under them are
-   what the other six do, and the only rows that name a position. Indentation
-   is the whole structure — see js/analysis.js. */
-#analysis-tree { margin: 8px 0; display: flex; flex-direction: column; gap: 2px; }
+/* Two kinds of row: 🔀 lines (a game of its own — the only rows that name a
+   position) and 📁 folders (organisation, nothing else). Indentation is the
+   whole structure, and every row is draggable — see js/analysis.js. */
+#analysis-tree {
+  margin: 8px 0; display: flex; flex-direction: column; gap: 2px;
+  /* the drop target for "move back out to the top level", so it has to have
+     some height even when the tree is one row */
+  min-height: 48px;
+}
 .an-row {
-  display: flex; align-items: baseline; gap: 6px; width: 100%;
-  text-align: left; background: none; border: 1px solid transparent;
-  border-radius: 6px; padding: 4px 6px; color: #c8cfda; font-size: 0.9em;
+  display: flex; align-items: baseline; gap: 2px; width: 100%;
+  border: 1px solid transparent; border-radius: 6px;
+  color: #c8cfda; font-size: 0.9em;
 }
 .an-row:hover { background: #2c313a; }
-.an-row.an-plan { color: #cbb0f5; }
+.an-row.an-folder { color: #cbb0f5; }
+.an-row.selected { border-color: #4d5563; }
 .an-row.active { background: #2c2340; border-color: #7d5cb8; color: #eadfff; }
+.an-row .an-chev {
+  flex: none; width: 16px; padding: 4px 0; background: none; border: none;
+  color: inherit; font-size: 0.9em; line-height: 1; min-height: 0; cursor: pointer;
+}
+.an-row.an-line .an-chev { cursor: default; }
+.an-row .an-main {
+  display: flex; align-items: baseline; gap: 6px; flex: 1; min-width: 0;
+  text-align: left; background: none; border: none; min-height: 0;
+  padding: 4px 4px; color: inherit; font-size: 1em;
+}
+.an-row .an-icon { flex: none; }
 .an-row .an-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .an-row .an-meta { flex: none; color: #7f8896; font-size: 0.85em; }
 .an-row .an-meta.warn { color: #ffc46b; }
+/* where a dragged row would land: inside this folder, or in front of this row */
+.an-row.drop-into { background: #33294a; border-color: #9b6fd6; }
+.an-row.drop-before { border-top-color: #9b6fd6; box-shadow: inset 0 2px 0 #9b6fd6; }
 .analysis-locked {
   margin: 0 0 8px; padding: 6px 9px; border-radius: 6px; font-size: 0.85em;
   background: #3a2f18; border-left: 3px solid #8a6a2f; color: #ffc46b;
@@ -448,6 +468,12 @@ dialog.modal h2 { margin: 0 0 14px; font-size: 1.1rem; }
      and the ● dot carry it, and the game's name is worth more room than the
      label. The topbar stripe and the board ring are unaffected. */
   .mode-chip .mc-text, .sync-pill .sp-text, #mode-switch .ms-label { display: none; }
+  /* …except the side you are actually on, because in analysis that label is
+     the open line's name — the one thing a phone screen must not drop. */
+  #mode-switch .ms-btn.on .ms-label {
+    display: inline-block; max-width: 9ch; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom;
+  }
   .mode-chip, .sync-pill { padding: 2px 6px; font-size: 0.75em; min-height: 0; }
   /* The ☁/🌿 switch keeps both halves on a phone — it is the way back out of
      a line, so it is the one thing in this bar that may not lose a state. */
