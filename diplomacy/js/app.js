@@ -2253,19 +2253,35 @@ function renderAnalysisUI() {
 }
 
 // The tree itself: folders and the lines inside them, indented, with the open
-// line marked and the selected row (which may be a folder) outlined. Rows are
-// draggable — dropping one on a folder puts it inside, dropping it on a line
-// puts it in front of that line, dropping it on the empty space below moves it
-// back out to the top level.
+// line marked and the selected row (which may be a folder) outlined.
+//
+// Every row is draggable and every row is a drop target with THREE zones, so
+// dragging can build any shape the tree can hold rather than only the ones
+// ⑂ Branch produces: the top edge inserts before the row, the bottom edge
+// after it, and the whole middle drops INSIDE it — under a line as readily as
+// into a folder. The first cut only had "before" for lines, which meant a row
+// dragged out of a nesting could never be put back into one.
 let dragNodeId = null;
+
+// Which of the three a pointer is over. Fixed pixel edges rather than a
+// fraction of the row: rows are ~26px, so a percentage band would be three or
+// four pixels wide and the middle would swallow everything on a touch device.
+function dropZone(ev, row) {
+  const r = row.getBoundingClientRect();
+  const edge = Math.max(4, Math.min(8, r.height / 3));
+  const y = ev.clientY - r.top;
+  if (y < edge) return 'before';
+  if (y > r.height - edge) return 'after';
+  return 'into';
+}
 
 function renderAnalysisTree() {
   const t = tree();
   const host = $('analysis-tree');
   if (!t || !host) return;
   const clearMarks = () => {
-    for (const el of host.querySelectorAll('.drop-into,.drop-before')) {
-      el.classList.remove('drop-into', 'drop-before');
+    for (const el of host.querySelectorAll('.drop-into,.drop-before,.drop-after')) {
+      el.classList.remove('drop-into', 'drop-before', 'drop-after');
     }
   };
   const applyMove = (id, parentId, beforeId) => {
@@ -2314,13 +2330,16 @@ function renderAnalysisTree() {
       bits.push(`<span class="an-meta">${inside} inside</span>`);
       main.title = `Select this folder — ✎ renames it, 🗑 deletes it and everything in it`;
     } else {
+      // The phase the line STARTS at, which is the fixed thing about it. Its
+      // current phase moves every time you resolve inside it, and the board
+      // and the topbar are already saying that.
       if (A.isStale(t, n)) bits.push('<span class="an-meta warn">⚠ the line it came from changed</span>');
-      else bits.push(`<span class="an-meta">${escapeText(S.phaseLabel(n.game))}</span>`);
-      const depthNote = n.game.history.length
-        ? `${n.game.history.length} phase${n.game.history.length === 1 ? '' : 's'} in`
-        : 'not resolved yet';
-      main.title = `Open “${n.name}” — ${depthNote}` +
-        (n.from ? `, branched from ${n.from.label}` : '');
+      else bits.push(`<span class="an-meta">from ${escapeText(A.lineStartLabel(n))}</span>`);
+      const played = n.game.history.length;
+      main.title = `Open “${n.name}” — starts at ${A.lineStartLabel(n)}, ` +
+        (played
+          ? `${played} phase${played === 1 ? '' : 's'} played, now at ${S.phaseLabel(n.game)}`
+          : 'nothing resolved in it yet');
     }
     main.innerHTML = bits.join(' ');
     main.onclick = () => (isFolder ? selectNode(n.id) : openNode(n.id));
@@ -2336,9 +2355,9 @@ function renderAnalysisTree() {
       if (!dragNodeId || dragNodeId === n.id) return;
       e.preventDefault();
       clearMarks();
-      row.classList.add(isFolder ? 'drop-into' : 'drop-before');
+      row.classList.add('drop-' + dropZone(e, row));
     };
-    row.ondragleave = () => row.classList.remove('drop-into', 'drop-before');
+    row.ondragleave = () => row.classList.remove('drop-into', 'drop-before', 'drop-after');
     row.ondrop = (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -2346,8 +2365,15 @@ function renderAnalysisTree() {
       // dropped on itself — the host's dragover let the event through, so this
       // is the one place that has to say "nothing happened"
       if (!id || id === n.id) return clearMarks();
-      if (isFolder) applyMove(id, n.id, null);
-      else applyMove(id, n.parent || null, n.id);
+      const zone = dropZone(e, row);
+      if (zone === 'into') return applyMove(id, n.id, null);
+      // …otherwise it joins this row's own level. "After" is expressed as
+      // "before the next one along", since that is the one thing moveNode
+      // takes — and as an append when there is no next one.
+      const sibs = A.childrenOf(t, n.parent || null).filter((s) => s.id !== id);
+      const at = sibs.findIndex((s) => s.id === n.id);
+      const next = zone === 'after' ? sibs[at + 1] : sibs[at];
+      applyMove(id, n.parent || null, next ? next.id : null);
     };
     host.appendChild(row);
   };

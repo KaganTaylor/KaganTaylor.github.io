@@ -13,7 +13,7 @@
 import test from 'node:test';
 import assert from 'node:assert';
 import * as A from '../js/analysis.js';
-import { newGame, resolvePhase, undoLastPhase, gameSettings } from '../js/state.js';
+import { newGame, resolvePhase, undoLastPhase, gameSettings, phaseLabel } from '../js/state.js';
 import { parseOrders } from '../js/parser.js';
 
 const live = () => newGame('Live');
@@ -263,6 +263,32 @@ test('renaming a line renames its game too', () => {
   assert.equal(A.getNode(t, id).game.name, 'Munich gambit');
 });
 
+// What the tree labels a row with: where the line begins, not where it has got
+// to. Resolving inside a line must not rewrite its row.
+test('a line is labelled by the phase it starts at, however far it has run', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
+  const start = A.lineStartLabel(main);
+  assert.equal(start, 'Spring 1901 — Movement');
+  play(main.game, 'FRANCE\nA Par - Bur');
+  play(main.game, 'FRANCE\nA Bur - Mun');
+  assert.equal(A.lineStartLabel(main), start, 'two phases on, the label has not moved');
+  assert.notEqual(phaseLabel(main.game), start, 'though the line itself has');
+});
+
+test('a branch is labelled by the phase it was cut at', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
+  play(main.game, 'FRANCE\nA Par - Bur');
+  const child = A.branchFrom(t, main.id, 1, gameSettings(g));
+  assert.equal(A.lineStartLabel(child), child.from.label);
+  assert.notEqual(A.lineStartLabel(child), A.lineStartLabel(main));
+  play(child.game, 'FRANCE\nA Bur - Mun');
+  assert.equal(A.lineStartLabel(child), child.from.label, 'still, after resolving in it');
+});
+
 test('positionAt and ordersAt read a line at any phase it has played', () => {
   const g = live();
   const t = A.newTree(g);
@@ -298,6 +324,43 @@ test('a folder keeps the children of what it swallowed', () => {
   const f = A.groupSiblings(t, main.id);
   assert.equal(A.getNode(t, child.id).parent, main.id, 'the nesting is unchanged');
   assert.equal(A.descendantIds(t, f.id).size, 2);
+});
+
+// A row dragged out of a nesting has to be able to go back into one, and into
+// a LINE, not only into a folder — the first cut could only insert before.
+test('drag and drop nests a line under another line, and back out', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
+  const b = A.branchFrom(t, main.id, 0, gameSettings(g));
+  assert.equal(b.parent, null, 'a sibling, to start with');
+  assert.equal(A.moveNode(t, b.id, main.id, null), true);
+  assert.deepEqual(A.childrenOf(t, main.id).map((n) => n.id), [b.id], 'nested by hand');
+  assert.equal(A.moveNode(t, b.id, null, null), true);
+  assert.deepEqual(A.childrenOf(t, null).map((n) => n.id), [main.id, b.id], 'and out again');
+});
+
+test('a line dragged under another keeps saying what it was really cut from', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
+  const b = A.branchFrom(t, main.id, 0, gameSettings(g));
+  A.moveNode(t, b.id, main.id, null);
+  assert.equal(b.from.index, 0, 'placement moved; origin did not');
+  assert.equal(A.isStale(t, b), false);
+  play(main.game, 'FRANCE\nA Par - Bur');
+  assert.equal(A.isStale(t, b), false, 'and resolving its new parent does not stale it');
+});
+
+test('dropping after the last row appends to that level', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
+  const b = A.branchFrom(t, main.id, 0, gameSettings(g));
+  const c = A.branchFrom(t, main.id, 0, gameSettings(g));
+  // "after the last" is expressed as an append (app.js passes beforeId null)
+  assert.equal(A.moveNode(t, b.id, null, null), true);
+  assert.deepEqual(A.childrenOf(t, null).map((n) => n.id), [main.id, c.id, b.id]);
 });
 
 test('drag and drop files a line into a folder and back out', () => {

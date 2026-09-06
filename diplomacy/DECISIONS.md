@@ -224,10 +224,10 @@ That leaves the tree to record only what a tree is for: **the places you decided
 ```
 🌿 Spring 1901 — Movement   (the live position)
 📁 Plan A
-├─ 🔀 Main line            Fall 1902 — Movement    ← five phases played inside it
-│   ├─ 🔀 Austria bounces me     ← branched at Fall 1901, so it nests
-│   └─ 🔀 Austria folds          ← branched at the same phase, so it is parallel
-└─ 🔀 North first          Spring 1901 — Movement  ← branched at the start, so it is a sibling
+├─ 🔀 Main line            from Spring 1901   ← five phases played inside it
+│   ├─ 🔀 Austria bounces me   from Fall 1901     ← branched at Fall 1901, so it nests
+│   └─ 🔀 Austria folds        from Fall 1901     ← same phase again, so it is parallel
+└─ 🔀 North first          from Spring 1901   ← branched at the start, so it is a sibling
 ```
 
 ⑂ **Branch** takes one input, the phase you are looking at:
@@ -242,9 +242,21 @@ A branch opens on a **copy of the orders at that phase**, so exploring "what els
 
 ### Folders are organisation and nothing else
 
-📁 **Folder** wraps the selected row's whole level — the row and everything parallel to it — and takes the position they were in. A folder that started empty would be a folder that started by doing nothing; grouping the siblings is what *"these parallel ideas are one plan"* actually means, and dragging back out is the cheap direction. Rows drag onto a folder to file them, onto another row to reorder, and onto the space below the tree to come back out to the top level (`moveNode`, which refuses to put a folder inside its own subtree).
+📁 **Folder** wraps the selected row's whole level — the row and everything parallel to it — and takes the position they were in. A folder that started empty would be a folder that started by doing nothing; grouping the siblings is what *"these parallel ideas are one plan"* actually means, and dragging back out is the cheap direction.
 
 Folders hold no orders, no position and no rules. That is the point. The earlier design gave the folder level a *meaning* — one power's orders, shared downward — which made "how do I just group these?" unanswerable and "why did editing my orders change six other lines?" a question that had to be explained in the panel.
+
+### Dragging can build any shape, not just the ones ⑂ Branch makes
+
+Every row is a drop target with **three zones** (`dropZone()` in app.js): the top edge inserts before it, the bottom edge after it, and the whole middle drops the dragged row **inside** it — under a line as readily as into a folder. The space below the tree brings a row back out to the top level. The first cut only offered "before" for lines, which meant a row dragged out of a nesting could never be put back into one; the middle zone is the fix, and it is what makes nesting reachable by hand at all.
+
+The zones are **fixed pixel edges**, not fractions of the row. Rows are about 26px, so a percentage band would be three or four pixels and the middle would swallow every drop on a touchscreen.
+
+Dragging is deliberately **not** restricted to the placements ⑂ Branch produces. Organising by hand is the reason it exists, and it cannot lie about anything, because `from` — what a line was really cut from, and therefore whether it is stale — is stored separately from `parent`. A line dragged three levels down still says *from Spring 1901* on its own row.
+
+### A row is named by where its line begins
+
+The meta on each line row is `lineStartLabel()`: the phase the line **starts** at, read off `history[0]` so it holds for the first line (which branched from nothing) and for a line whose parent has since moved. It was the line's *current* phase to begin with, which made the tree restless — every resolve rewrote a row — and answered a question the board and the topbar were already answering. Where a line branches off is the fixed fact about it, and the one that tells two rows apart. How far it has run is in the row's tooltip, where it does not move.
 
 ### A branch knows what it was cut from
 

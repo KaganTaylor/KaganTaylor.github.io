@@ -270,9 +270,12 @@ details.panel:not([open]) summary { margin-bottom: 0; }
 .an-row .an-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .an-row .an-meta { flex: none; color: #7f8896; font-size: 0.85em; }
 .an-row .an-meta.warn { color: #ffc46b; }
-/* where a dragged row would land: inside this folder, or in front of this row */
+/* Where a dragged row would land. Three zones per row (app.js dropZone): the
+   middle drops it INSIDE this row — under a line as readily as into a folder —
+   and the two edges place it at this row's own level, before or after. */
 .an-row.drop-into { background: #33294a; border-color: #9b6fd6; }
-.an-row.drop-before { border-top-color: #9b6fd6; box-shadow: inset 0 2px 0 #9b6fd6; }
+.an-row.drop-before { box-shadow: inset 0 2px 0 #9b6fd6; }
+.an-row.drop-after { box-shadow: inset 0 -2px 0 #9b6fd6; }
 .analysis-locked {
   margin: 0 0 8px; padding: 6px 9px; border-radius: 6px; font-size: 0.85em;
   background: #3a2f18; border-left: 3px solid #8a6a2f; color: #ffc46b;

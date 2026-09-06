@@ -111,6 +111,18 @@ export function positionAt(g, i) {
   });
 }
 
+// The phase a line BEGINS at — what the tree names it by. Its current phase
+// changes every time you resolve inside it, so labelling rows with that made
+// the tree restless and answered a question the board already answers; where a
+// line branches off is the fixed thing about it, and what tells two rows apart.
+// Read off history[0] rather than off `from`, so it holds for the first line
+// (which branched from nothing) and for a line whose parent has since moved.
+export function lineStartLabel(node) {
+  const g = node && node.game;
+  if (!g) return '';
+  return g.history.length ? g.history[0].label : phaseLabel(g);
+}
+
 // The orders written at that phase — so a branch opens on a copy of what was
 // tried, and exploring "what else?" is tweak-one-order rather than retype-all.
 export function ordersAt(g, i) {
@@ -275,9 +287,15 @@ export function groupSiblings(tree, id, name = null) {
 }
 
 // Drag-and-drop, and the only thing that changes a node's placement after it is
-// created. `beforeId` names a sibling to insert in front of; null appends.
-// Moving a node into its own subtree would orphan the whole branch, so it is
-// refused rather than silently repaired.
+// created. `parentId` may be a folder, a LINE, or null for the top level —
+// dragging is deliberately not restricted to the placements ⑂ Branch produces,
+// because organising by hand is the whole reason it exists, and `from` (what a
+// line was cut from, and so whether it is stale) is stored separately from
+// `parent` precisely so moving a row cannot lie about its origin.
+//
+// `beforeId` names a sibling to insert in front of; null appends. Moving a node
+// into its own subtree would orphan the whole branch, so it is refused rather
+// than silently repaired.
 export function moveNode(tree, id, parentId, beforeId = null) {
   const n = getNode(tree, id);
   if (!n || id === parentId) return false;

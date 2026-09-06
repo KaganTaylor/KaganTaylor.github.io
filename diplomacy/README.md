@@ -118,18 +118,18 @@ A published game (a public GitHub gist) can collect each player's orders directl
 
 So: plan five phases ahead in the Main line, branch at Fall 1901 to try a different reply (it nests), then look at Fall 1901 again in that new line and branch a second time (it comes out parallel to the first).
 
-**📁 Folder** groups the row you have selected and everything parallel to it — that's your "Plan A". Folders hold nothing but other rows: collapse them, rename them, and drag any row onto a folder to file it, onto another row to reorder, or onto the space below the tree to move it back out.
+**📁 Folder** groups the row you have selected and everything parallel to it — that's your "Plan A". Folders hold nothing but other rows: collapse them, rename them, and drag rows freely. Drop a row on the **middle** of another to nest it inside (a line or a folder, either way), on a row's **top or bottom edge** to place it above or below at that level, or on the **space below the tree** to bring it out to the top.
 
 ```
 🌿 Spring 1901 — Movement   (the live position)
 📁 Plan A
-├─ 🔀 Main line            Fall 1902 — Movement
-│   ├─ 🔀 Austria bounces me
-│   └─ 🔀 Austria folds
-└─ 🔀 North first          Spring 1901 — Movement
+├─ 🔀 Main line            from Spring 1901 — Movement
+│   ├─ 🔀 Austria bounces me   from Fall 1901 — Movement
+│   └─ 🔀 Austria folds        from Fall 1901 — Movement
+└─ 🔀 North first          from Spring 1901 — Movement
 ```
 
-✏ Edit board works inside a line too, and a line whose parent has since been undone or re-resolved is flagged rather than deleted — the work in it is still yours.
+Each row says the phase its line **starts** at, and that does not move as you resolve inside it — the board and the topbar already say where the line has got to. ✏ Edit board works inside a line too, and a line whose parent has since been undone or re-resolved is flagged rather than deleted — the work in it is still yours.
 
 **Lines are temporary, on purpose.** The tree is rooted at one position. While the table has a phase waiting for you, 🌿 is greyed out and says so — resolve it with ▶ Resolve new orders! and analysis reopens from the new board. Once the live position actually moves, the tree is cleared and you start again from where the game now is. Nothing to keep in step by hand, and no chance of planning against a board nobody else can see.
 
