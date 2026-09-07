@@ -2054,9 +2054,6 @@ function enterAnalysis() {
   // The live game's draft is parked, not thrown away: for an assigned player
   // it is the one thing on this screen worth more than the position.
   liveDraft = fullOrdersText();
-  // A player's box is collapsed by default (openGame) because their orders
-  // are a second thing to check; in a line the orders ARE the thing.
-  $('orders-box').open = true;
   openNode(A.ensureEntry(liveGame.analysis, S.gameSettings(liveGame)));
   toast('🌿 Analysis — resolve as far ahead as you like; nothing here reaches the live game', 'info');
 }
@@ -2421,7 +2418,6 @@ function useLineOrdersLive() {
   const name = (A.getNode(tree(), game.nodeId) || {}).name || 'this line';
   exitAnalysis();
   replacePowerBlock(power, mine);
-  $('orders-box').open = true;
   toast(`${cap(power)}'s orders from “${name}” are in the live order box — nothing is submitted yet`, 'info');
 }
 
