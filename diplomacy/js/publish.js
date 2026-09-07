@@ -4,6 +4,7 @@
 // browser's localStorage) can update it.
 
 import { seal, unseal, aadFor, newSealKey } from './seal.js';
+import { HISTORY_FORMAT, packHistory, unpackHistory } from './history-codec.js';
 
 // The wire format itself — markers, payload, which comment counts — lives in
 // its own module because tools/publish-moves.js reads the same comments with
@@ -61,6 +62,20 @@ export function stripForPublish(game) {
     ...rest
   } = game;
   return rest;
+}
+
+// The wire payload built by both writers below. Packs history at the wire
+// boundary only — the in-memory game object's history shape never changes.
+// boardOverride (from state.js boardSnapshot()) carries a raw, unpacked
+// history, so packing must happen after the merge, not inside stripForPublish.
+export function wirePayload(game, boardOverride) {
+  const base = boardOverride ? { ...stripForPublish(game), ...boardOverride } : stripForPublish(game);
+  return {
+    ...base,
+    historyFormat: HISTORY_FORMAT,
+    history: packHistory(base.history || []),
+    redoStack: packHistory(base.redoStack || [], { chain: false }),
+  };
 }
 
 // GitHub stamps every response with a `Date` header from its own servers —
@@ -138,7 +153,7 @@ export async function publishGame(game) {
     body: JSON.stringify({
       description: `Diplomacy Simulator — ${game.name}`,
       public: true,
-      files: { 'game.json': { content: JSON.stringify(stripForPublish(game), null, 1) } },
+      files: { 'game.json': { content: JSON.stringify(wirePayload(game)) } },
     }),
   });
   return { id: json.id, url: json.html_url };
@@ -151,12 +166,12 @@ export async function publishGame(game) {
 export async function updatePublished(game, boardOverride) {
   const token = getToken();
   if (!token) throw new Error('no GitHub token set');
-  const payload = boardOverride ? { ...stripForPublish(game), ...boardOverride } : stripForPublish(game);
+  const payload = wirePayload(game, boardOverride);
   await ghFetch(`${API}/gists/${game.gistId}`, {
     method: 'PATCH',
     headers: { Authorization: `token ${token}`, Accept: 'application/vnd.github+json' },
     body: JSON.stringify({
-      files: { 'game.json': { content: JSON.stringify(payload, null, 1) } },
+      files: { 'game.json': { content: JSON.stringify(payload) } },
     }),
   });
 }
@@ -170,7 +185,13 @@ export async function fetchPublished(gistId) {
   const file = json.files && json.files['game.json'];
   if (!file) throw new Error('gist has no game.json file');
   const content = file.truncated ? await (await fetch(file.raw_url)).text() : file.content;
-  return { game: JSON.parse(content), ownerLogin: json.owner && json.owner.login };
+  const parsed = JSON.parse(content);
+  if (parsed.historyFormat === HISTORY_FORMAT) {
+    parsed.history = unpackHistory(parsed.history || []);
+    parsed.redoStack = unpackHistory(parsed.redoStack || [], { chain: false });
+  }
+  delete parsed.historyFormat;
+  return { game: parsed, ownerLogin: json.owner && json.owner.login };
 }
 
 // Resolves the GitHub login a token belongs to, so it can be compared

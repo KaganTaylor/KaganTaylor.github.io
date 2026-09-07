@@ -15,7 +15,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { stripForPublish } from '../js/publish.js';
+import { stripForPublish, wirePayload } from '../js/publish.js';
 import { newGame, boardSnapshot } from '../js/state.js';
 import { newTree, addLine, renameNode } from '../js/analysis.js';
 
@@ -88,4 +88,18 @@ test('the analysis tree never reaches the gist, in any form', () => {
 test('a game with none of the private fields set publishes unchanged', () => {
   const plain = newGame('fresh');
   assert.deepEqual(Object.keys(stripForPublish(plain)), Object.keys(plain));
+});
+
+// wirePayload adds historyFormat on top of stripForPublish's key set — the
+// privacy tripwire above still needs to cover what actually reaches the gist.
+test('wirePayload is stripForPublish plus historyFormat, and nothing else', () => {
+  const keys = Object.keys(wirePayload(fullyLoadedGame())).sort();
+  assert.deepEqual(keys, [...PUBLISHED_KEYS, 'historyFormat'].sort());
+});
+
+test('no private key survives wirePayload', () => {
+  const payload = wirePayload(fullyLoadedGame());
+  for (const k of PRIVATE_KEYS) {
+    assert.equal(k in payload, false, `${k} must never reach the gist`);
+  }
 });
