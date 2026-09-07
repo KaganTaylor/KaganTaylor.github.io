@@ -48,8 +48,14 @@ a { color: #7fb4ff; }
 .home-card { max-width: 900px; padding: 2rem; margin: auto; }
 .home-card h1 { margin: 0 0 0.4rem; }
 .subtitle { color: #aab3c0; margin-top: 0; }
-.home-actions { display: flex; gap: 2rem; margin: 1.5rem 0; flex-wrap: wrap; }
+/* Left: your games (the thing you came here to open). Right: a stacked
+   column — start a sandbox above setting the token to publish one, since
+   starting one is the more common next step. */
+.home-actions { display: flex; gap: 2rem; margin: 1.5rem 0; flex-wrap: wrap; align-items: flex-start; }
 .home-group { flex: 1; min-width: 240px; display: flex; flex-direction: column; gap: 8px; }
+.home-group-games { flex: 2 1 320px; }
+.home-side { flex: 1 1 260px; display: flex; flex-direction: column; gap: 2rem; min-width: 240px; }
+.home-side .home-group { flex: none; }
 .home-group h2 { font-size: 1rem; margin: 0; color: #aab3c0; }
 #game-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 #game-list li { display: flex; gap: 6px; align-items: center; }
@@ -146,16 +152,14 @@ a { color: #7fb4ff; }
 #game-screen[data-mode="spectator"] #topbar { border-top-color: #5b6472; }
 #game-screen[data-mode="analysis"] #topbar { border-top-color: #9b6fd6; }
 
+/* Sandbox only — there is no ☁/🌿 switch to sit beside for a sandbox, so
+   this is the whole indicator: a plain, non-interactive label. */
 .mode-chip {
   flex: none; display: inline-flex; align-items: center; gap: 5px;
   font-size: 0.8em; padding: 3px 9px; border-radius: 10px; white-space: nowrap;
   border: 1px solid transparent; cursor: default;
 }
 #game-screen[data-mode="sandbox"] .mode-chip { background: #2b2010; color: #e0b070; border-color: #8f6a3f; }
-#game-screen[data-mode="gm"] .mode-chip { background: #24314a; color: #a8c8f5; border-color: #4f7ec0; }
-#game-screen[data-mode="player"] .mode-chip { background: #1f2b40; color: #8fb4ea; border-color: #3f5c8f; }
-#game-screen[data-mode="spectator"] .mode-chip { background: #262b33; color: #9aa4b2; border-color: #4a5361; }
-#game-screen[data-mode="analysis"] .mode-chip { background: #2c2340; color: #cbb0f5; border-color: #7d5cb8; }
 
 /* ☁ Live | 🌿 Analysis. Both halves always visible: the lit one is where you
    are, the other is one tap away, so the switch is the indicator too. */
@@ -202,6 +206,10 @@ a { color: #7fb4ff; }
 .panel h3 { margin: 12px 0 6px; font-size: 0.85rem; color: #aab3c0; text-transform: uppercase; letter-spacing: .03em; }
 details.panel summary { cursor: pointer; margin-bottom: 8px; }
 details.panel summary h2 { margin: 0; display: inline; }
+/* A heading that also carries a (?) button — 🌿 Analysis, the Orders/Builds
+   title — needs the flex layout .setting-field gives it, which the plain
+   `display: inline` above would otherwise win on specificity. */
+details.panel summary h2.setting-field { display: inline-flex; }
 details.panel summary::marker { color: #8892a0; }
 details.panel:not([open]) summary { margin-bottom: 0; }
 .catch-up-btn { display: block; width: 100%; margin: 8px 0; font-weight: 600; }
@@ -409,7 +417,6 @@ dialog.modal h2 { margin: 0 0 14px; font-size: 1.1rem; }
   background: #21252d; border: 1px solid #333a45;
 }
 #panel-deadline .settings-toggle-row:hover { background: #262b34; }
-#deadline-mode-note { margin: 0 0 8px; }
 #deadline-auto-status { margin: 8px 0 0; }
 #deadline-auto-status.past { color: #e0a4a4; }
 
@@ -461,20 +468,25 @@ dialog.modal h2 { margin: 0 0 14px; font-size: 1.1rem; }
   button, .filebtn, select { min-height: 44px; }
 
   #topbar { gap: 6px; padding: 8px; flex-wrap: nowrap; }
-  #hover-info { display: none; }
+  /* The one thing on this screen two people in the same room actually need:
+     which province someone is pointing at. Everything else in the bar is
+     flex: none and yields to it before it yields to them — see #game-name
+     and #phase-label below. */
+  #hover-info { max-width: 30vw; }
   /* The countdown's DD:HH:MM:SS must stay whole (that's the whole point of
      the format), so it's never truncated. */
   #deadline-countdown { font-size: 0.75em; padding: 2px 4px; flex: none; white-space: nowrap; }
   .settings-label { display: none; } /* icon-only ⚙ button on mobile */
 
-  /* The state indicators keep their colour but drop their words — the icon
-     and the ● dot carry it, and the game's name is worth more room than the
-     label. The topbar stripe and the board ring are unaffected. */
-  .mode-chip .mc-text, .sync-pill .sp-text, #mode-switch .ms-label { display: none; }
-  /* …except the side you are actually on, because in analysis that label is
-     the open line's name — the one thing a phone screen must not drop. */
+  /* The state indicators keep their colour but drop their words — the ● dot
+     carries it for the sync pill, and the game's name is worth more room
+     than the label. The topbar stripe and the board ring are unaffected. */
+  .sync-pill .sp-text, #mode-switch .ms-label { display: none; }
+  /* …except the side you are actually on: Live names your role, Analysis
+     the open line's name — the one thing a phone screen must not drop, now
+     that there is no separate chip carrying it. */
   #mode-switch .ms-btn.on .ms-label {
-    display: inline-block; max-width: 9ch; overflow: hidden;
+    display: inline-block; max-width: 13ch; overflow: hidden;
     text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom;
   }
   .mode-chip, .sync-pill { padding: 2px 6px; font-size: 0.75em; min-height: 0; }

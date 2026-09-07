@@ -405,10 +405,10 @@ function openGame(g) {
   showScreen('game-screen');
   mobileSheet = null;
   setEditMode(isSandbox() && game.units.length === 0);
-  // A real player's order box is a second thing to check, not the reason
-  // they opened the game — collapsed by default so the panel opens onto the
-  // history/catch-up controls instead. Everyone else still wants it open.
-  $('orders-box').open = gameMode() !== 'player';
+  // Typing into the order box is a niche path — dragging on the map is the
+  // normal one — so it starts collapsed for everyone; the per-power tally in
+  // #phase-info is what stays visible instead. See renderPhaseInfo().
+  $('orders-box').open = false;
   refreshAll();
   if (game.published && game.gistId) refreshOnlineStatus();
 }
@@ -538,34 +538,37 @@ function refreshAll() {
 // ---------------------------------------------------------------------------
 // game-state identity: which game am I in, and can I break it?
 // ---------------------------------------------------------------------------
-const MODE_CHIP = {
-  sandbox: ['🧪', 'Sandbox',
-    'Private to this browser. Edit the board, resolve turns and copy it freely — nothing here is published.'],
-  gm: ['☁', 'Live · 👑 Game master',
-    'You run this published game. What you resolve here becomes the official position the moment you ☁ Publish changes.'],
-  spectator: ['☁', 'Live · 👁 Watching',
+// Text for the ☁ Live side of the mode switch — what used to live in a
+// separate chip beside it. Keyed by R.gameMode(liveGame), which is never
+// 'analysis' (a line is never the live game itself).
+const LIVE_MODE_LABEL = {
+  gm: ['Live · 👑 GM',
+    "You run this published game. What you resolve here becomes the official position the moment you ☁ Publish changes."],
+  spectator: ['Live · 👁 Watching',
     'A live view of a published game. Nothing you type, drag or resolve here can change it.'],
 };
 
+// A sandbox has no ☁/🌿 switch (there is nothing to publish and nowhere for
+// a line to hang off), so it gets a plain, non-interactive label instead —
+// the same spot the switch occupies for an online game.
 function renderModeChip() {
-  const el = $('mode-chip');
-  const mode = gameMode();
-  let icon, text, title;
-  // 'analysis' deliberately has no chip. The ☁/🌿 switch beside it is already
-  // a mode indicator, and it names the open line on its own button (see
-  // renderAnalysisUI) — a chip repeating that was the same fact twice, in two
-  // places, with a breadcrumb long enough to push the phase off a phone.
-  if (mode === 'player') {
-    const power = assignedPower();
-    [icon, text, title] = ['☁', `Live · ${POWER_FLAGS[power] || ''} ${cap(power)}`,
-      `You are playing ${cap(power)} in a published game. Orders here are a private draft until you 📤 Submit them; the board itself is the game master's to move.`];
-  } else {
-    [icon, text, title] = MODE_CHIP[mode] || ['', '', ''];
+  const label = $('sandbox-label');
+  label.hidden = !isSandbox();
+  if (isSandbox()) {
+    label.title = 'Private to this browser. Edit the board, resolve turns and copy it freely — nothing here is published.';
+    return;
   }
-  el.hidden = !text;
-  el.title = title;
-  el.querySelector('.mc-icon').textContent = icon;
-  el.querySelector('.mc-text').textContent = text;
+  const liveMode = R.gameMode(liveGame);
+  const liveLabel = $('ms-live').querySelector('.ms-label');
+  if (liveMode === 'player') {
+    const power = assignedPower();
+    liveLabel.textContent = `Live · ${POWER_FLAGS[power] || ''} ${cap(power)}`;
+    $('ms-live').title = `You are playing ${cap(power)} in a published game. Orders here are a private draft until you 📤 Submit them; the board itself is the game master's to move.`;
+  } else {
+    const [text, title] = LIVE_MODE_LABEL[liveMode] || ['Live', 'The live game — the real position, orders and deadline'];
+    liveLabel.textContent = text;
+    $('ms-live').title = title;
+  }
 }
 
 // boardDirty() already knows the game master's position has moved on from the
@@ -601,14 +604,7 @@ function renderBranchNote() {
 function renderDraftNote() {
   const el = $('draft-note');
   const mode = gameMode();
-  if (mode === 'analysis') {
-    const active = A.getNode(tree(), game.nodeId);
-    el.hidden = false;
-    el.textContent = `🌿 Orders for “${active ? active.name : 'this line'}” — write everyone's, resolve, and keep going. ` +
-      'Nothing here reaches the live game.';
-    return;
-  }
-  if (mode === 'sandbox' || mode === 'player') {
+  if (mode === 'analysis' || mode === 'sandbox' || mode === 'player') {
     el.hidden = true;
     return;
   }
@@ -641,35 +637,22 @@ const defaultOrdersText = () => T.defaultOrdersText(game);
 // preserve=false (a real phase change / game load) everything resets.
 function prefillOrders(preserve = false) {
   const ta = $('orders-text');
-  const info = $('phase-info');
   const myC = myCountry();
   // the current phase is already shown in the topbar, so the heading itself
   // stays a plain, constant label
   const title = (base) => base;
   if (game.step === 'movement') {
     $('orders-title').textContent = title('Orders');
-    info.textContent = myC
-      ? gameMode() === 'player'
-        ? `Write ${cap(myC)}'s orders (type or drag units), then 📤 Submit orders.`
-        : `Write ${cap(myC)}'s orders (type or drag units). 👁 Preview result tries them out safely; 🌿 Branch keeps the ideas.`
-      : 'Type orders or drag units on the map. Unordered units hold.';
   } else if (game.step === 'retreat') {
     $('orders-title').textContent = title('Retreats');
-    info.textContent = 'Drag a dislodged unit to retreat it, or click it to disband. Unordered units disband.';
+    $('phase-info').textContent = 'Drag a dislodged unit to retreat it, or click it to disband. Unordered units disband.';
   } else {
     $('orders-title').textContent = title('Builds');
-    const counts = S.adjustmentCounts(game);
-    const infoLines = [];
-    for (const [p, c] of Object.entries(counts)) {
-      if (c > 0) {
-        const free = freeHomeCenters(p);
-        infoLines.push(`${cap(p)}: ${c} build${c > 1 ? 's' : ''} — click a free home center (${free.join(', ') || 'none free'})`);
-      } else if (c < 0) {
-        infoLines.push(`${cap(p)}: must disband ${-c} — click units to remove`);
-      }
-    }
-    info.textContent = infoLines.join('\n') || 'No builds or disbands required.';
   }
+  // Movement and adjustment get their per-power tally from renderPhaseInfo(),
+  // called by the onOrdersChanged() every caller of prefillOrders() runs right
+  // after it — see that function for why setting it here would just be
+  // overwritten a moment later.
 
   // A line's box starts from the draft stored on the line's own game rather
   // than from a blank template — reopening a line must show the moves that
@@ -729,10 +712,12 @@ function onOrdersChanged() {
       warnings.map((w) => '⚠ ' + escapeText(w)).join('\n') + '</span>');
   }
   if (!parts.length) {
-    parts.push(`<span class="ok">${own.orders.length} order${own.orders.length === 1 ? '' : 's'} ✓ (everyone else holds)</span>`);
+    const myC = myCountry();
+    const total = myC ? game.units.filter((u) => u.power === myC).length : game.units.length;
+    parts.push(`<span class="ok">${own.orders.length}/${total} order${total === 1 ? '' : 's'} ✓</span>`);
   }
   el.innerHTML = parts.join('\n');
-  if (game && game.step === 'adjustment' && !playback) updateAdjustmentInfo();
+  if (game && game.step !== 'retreat' && !playback) renderPhaseInfo();
   // "submitted" vs "submitted, then edited" has to track the box keystroke by
   // keystroke, or it is reporting the state from the last network refresh
   if (game && !inAnalysis() && assignedPower()) renderSubmitStatus();
@@ -746,29 +731,32 @@ function onOrdersChanged() {
   return { orders: own.orders, errors: own.errors };
 }
 
-// The home centres a power may actually build in: owned by them, and empty.
-function freeHomeCenters(power) {
-  const occupied = new Set(game.units.map((u) => prov(u.loc)));
-  return (S.HOME_CENTERS[power] || []).filter(
-    (h) => game.scOwners[h] === power && !occupied.has(h)
-  );
-}
-
-// Live build/disband tally for the winter phase — "France: 1/2 builds" — kept
-// in step with the order box so it updates as orders are clicked or typed.
-function updateAdjustmentInfo() {
-  const counts = S.adjustmentCounts(game);
-  const lines = [];
-  for (const [p, c] of Object.entries(counts)) {
-    const used = adjustmentUsed(p);
-    if (c > 0) {
-      const free = freeHomeCenters(p);
-      lines.push(`${cap(p)}: ${used.builds}/${c} build${c > 1 ? 's' : ''} — click a free home center (${free.join(', ') || 'none free'})`);
-    } else if (c < 0) {
-      lines.push(`${cap(p)}: ${used.removes}/${-c} disband${-c > 1 ? 's' : ''} — click units to remove`);
+// The order box collapses by default — typing orders is the niche path — so
+// this is what stays on screen: a per-power tally of what's left to write,
+// short enough to read at a glance ("Austria: 1/1 build"). Movement and
+// adjustment both live-update as orders are clicked or typed; retreat's
+// instruction line is set once in prefillOrders() and never changes.
+function renderPhaseInfo() {
+  const info = $('phase-info');
+  if (game.step === 'movement') {
+    const lines = [];
+    for (const p of POWERS) {
+      const total = game.units.filter((u) => u.power === p).length;
+      if (!total) continue;
+      const used = lastParsed.orders.filter((o) => o.power === p).length;
+      lines.push(`${cap(p)}: ${used}/${total} order${total === 1 ? '' : 's'}`);
     }
+    info.textContent = lines.join('\n') || 'No units to order.';
+  } else if (game.step === 'adjustment') {
+    const counts = S.adjustmentCounts(game);
+    const lines = [];
+    for (const [p, c] of Object.entries(counts)) {
+      const used = adjustmentUsed(p);
+      if (c > 0) lines.push(`${cap(p)}: ${used.builds}/${c} build${c > 1 ? 's' : ''}`);
+      else if (c < 0) lines.push(`${cap(p)}: ${used.removes}/${-c} disband${-c > 1 ? 's' : ''}`);
+    }
+    info.textContent = lines.join('\n') || 'No builds or disbands required.';
   }
-  $('phase-info').textContent = lines.join('\n') || 'No builds or disbands required.';
 }
 
 // Dry-run the current orders through the real engine so problems that will
@@ -2186,7 +2174,9 @@ function renderAnalysisUI() {
     ? `${A.lineLabel(t, active.id)} — a private line off ${liveGame.name}, rooted at ${t.rootLabel}. ` +
       'Nothing here reaches the live game, and the whole tree is cleared when the live position moves on.'
     : 'Open a private tree of lines off this position');
-  $('mtab-analysis').hidden = !available;
+  // Only present on the mobile tab bar while a line is actually open — the
+  // rest of the time it would be a tab into an empty panel.
+  $('mtab-analysis').hidden = !an;
   // Cleared on the way out as well as set on the way in: setGated leaves an
   // aria-disabled attribute behind, and a Resolve left gated by a stale line
   // would refuse to resolve the real game.
@@ -2206,7 +2196,7 @@ function renderAnalysisUI() {
     return id !== game.nodeId ? openNode(id) : exitAnalysis();
   }
   $('analysis-root').textContent =
-    `Rooted at ${t.rootLabel} of “${liveGame.name}”. The whole tree is cleared when the live game moves past it.`;
+    `Rooted at ${t.rootLabel}. All analyses are cleared when the live game moves forward.`;
   // The live game moved on while we were in here. The board keeps showing what
   // it was showing — yanking it out mid-thought is worse than saying so — but
   // the line can no longer be resolved or extended, and going back to ☁ Live
@@ -2226,11 +2216,11 @@ function renderAnalysisUI() {
   const at = S.phaseLabel(A.positionAt(active.game, i));
   const nested = i > 0;
   $('an-branch').textContent = nested ? '⑂ Branch here' : '⑂ Branch';
-  $('analysis-branch-note').textContent = nested
+  const branchNote = nested
     ? `⑂ Branch starts a line at ${at}, nested under “${active.name}” — that phase only exists because this line produced it.`
     : `⑂ Branch starts a line at ${at}, beside “${active.name}” — a different idea from the same position. Resolve or step forward first to nest one instead.`;
   const full = A.canBranch(t) ? null : `That is ${A.MAX_LINES} lines — delete one before branching again`;
-  setGated($('an-branch'), locked || full, $('analysis-branch-note').textContent);
+  setGated($('an-branch'), locked || full, branchNote);
 
   const sel = selectedNode();
   setGated($('an-new-folder'), sel ? null : 'Pick a line or folder first',
@@ -2697,12 +2687,12 @@ function renderDeadlinePanel() {
   const auto = publishMode() === 'auto';
   const stoodDown = auto && autoPublishIdleFor === S.phaseLabel(liveGame);
 
-  $('deadline-mode-note').textContent = auto
-    ? '⚡ Auto-Publish is on: this browser resolves and publishes the phase the moment the deadline passes. Nothing publishes while the tab is closed.'
-    : '⏸ Auto-Publish is off: nothing publishes on its own. Once the deadline passes, ⬇ Load orders, resolve, then 📣 Publish results.';
-
   const status = $('deadline-auto-status');
-  status.hidden = !auto;
+  // Manual mode gets the one line worth surfacing outside auto-publish too:
+  // once a deadline is set and hasn't passed, there is genuinely nothing to
+  // do but wait for it.
+  const manualWaiting = !auto && !!liveGame.deadline && !deadlinePassed();
+  status.hidden = !(auto || manualWaiting);
   status.classList.toggle('past', stoodDown);
   if (auto) {
     status.textContent = stoodDown
@@ -2713,7 +2703,9 @@ function renderDeadlinePanel() {
           ? '⏳ No deadline set — nothing publishes until you confirm one.'
           : deadlinePassed()
             ? '⏳ Deadline passed — publishing on the next check, within a minute.'
-            : '⏳ Waiting for the deadline — it publishes itself when the clock runs out.';
+            : '⏳ Waiting for the deadline.';
+  } else if (manualWaiting) {
+    status.textContent = '⏳ Waiting for the deadline.';
   }
 
   $('deadline-manual-row').hidden = auto && !stoodDown;
@@ -3771,6 +3763,40 @@ async function init() {
   // and the board pane's inset has to follow it
   new ResizeObserver(updateSheetInset).observe($('sidebar'));
   addEventListener('resize', updateSheetInset);
+
+  // On a phone the Orders sheet opens onto three collapsible panels at once
+  // (History, Edit board, Builds/Orders) — closed by default so the sheet
+  // isn't a wall of headings the first time it's opened. This runs once, at
+  // load: a <details> keeps its own open/closed state after that exactly as
+  // it always has, so an option the user has expanded stays expanded.
+  if (matchMedia('(max-width: 820px)').matches) {
+    for (const id of ['panel-history', 'edit-board-section', 'panel-orders']) {
+      $(id).open = false;
+    }
+  }
+
+  // (?) buttons: click reveals the paragraph beside them, click again hides
+  // it. Both sit inside a <summary> — without preventDefault the click would
+  // also toggle the panel itself open/closed, since that is <summary>'s own
+  // default action for any click landing inside it.
+  $('an-help').onclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    $('analysis-help').hidden = !$('analysis-help').hidden;
+  };
+  $('orders-help').onclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    $('orders-help-text').hidden = !$('orders-help-text').hidden;
+  };
+  // autopublish-help sits inside the <label> that toggles ⚡ Auto-Publish
+  // itself — without stopPropagation a click here would also flip the switch,
+  // since the browser forwards an unhandled click on any control inside a
+  // <label> to the label's own associated input.
+  $('autopublish-help').onclick = (e) => {
+    e.stopPropagation();
+    $('autopublish-explain').hidden = !$('autopublish-explain').hidden;
+  };
   // A gated button (setGated) is deliberately still clickable so it can explain
   // itself. Capture phase, so the button's own onclick never runs.
   document.addEventListener('click', (e) => {

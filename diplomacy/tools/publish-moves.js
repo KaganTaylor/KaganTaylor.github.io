@@ -51,7 +51,11 @@ const DRY_RUN = !!process.env.DRY_RUN;
 const IGNORE_DEADLINE = !!process.env.IGNORE_DEADLINE;
 
 const API = 'https://api.github.com';
-const DESCRIPTION_PREFIX = 'Diplomacy Simulator — ';
+const DESCRIPTION_PREFIX = 'Diplomacy Online — ';
+// Games published before the app was renamed still carry the old prefix —
+// keep recognizing it so an existing published game doesn't silently drop
+// out of the auto-publish Action.
+const LEGACY_DESCRIPTION_PREFIX = 'Diplomacy Simulator — ';
 
 async function gh(path, opts = {}) {
   const res = await fetch(API + path, {
@@ -209,7 +213,8 @@ async function main() {
   const gists = await paged('/gists');
   const games = gists.filter(
     (g) =>
-      (g.description || '').startsWith(DESCRIPTION_PREFIX) &&
+      ((g.description || '').startsWith(DESCRIPTION_PREFIX) ||
+        (g.description || '').startsWith(LEGACY_DESCRIPTION_PREFIX)) &&
       g.files && g.files['game.json'] &&
       (!ONLY_GIST || g.id === ONLY_GIST)
   );

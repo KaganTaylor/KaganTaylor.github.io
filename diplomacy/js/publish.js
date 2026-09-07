@@ -151,7 +151,7 @@ export async function publishGame(game) {
     method: 'POST',
     headers: { Authorization: `token ${token}`, Accept: 'application/vnd.github+json' },
     body: JSON.stringify({
-      description: `Diplomacy Simulator — ${game.name}`,
+      description: `Diplomacy Online — ${game.name}`,
       public: true,
       files: { 'game.json': { content: JSON.stringify(wirePayload(game)) } },
     }),

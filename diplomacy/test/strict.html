@@ -8,17 +8,49 @@
   .pass { color: #6fce7f; }
   .fail { color: #ff7676; }
   h1 { font-size: 1.2rem; }
+  h2 { font-size: 1rem; margin: 1.5rem 0 0.5rem; color: #aab3c0; }
   pre { white-space: pre-wrap; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { padding: 2px 0; }
+  li .id::before { display: inline-block; width: 1.4em; }
+  li.pass .id::before { content: "✓"; color: #6fce7f; }
+  li.fail .id::before { content: "✕"; color: #ff7676; }
+  li.fail .notes { color: #ff9e9e; margin-left: 1.4em; }
 </style>
 </head>
 <body>
 <h1 id="headline">Running…</h1>
-<pre id="out"></pre>
+<div id="lists"></div>
 <script type="module">
 import { runStrictTests } from './strict-support.js';
 import { runStrictConvoyTests } from './strict-convoy.js';
 const headline = document.getElementById('headline');
-const out = document.getElementById('out');
+const lists = document.getElementById('lists');
+
+function renderList(title, result) {
+  const failuresById = new Map(result.failures.map((f) => [f.id, f.notes]));
+  const h2 = document.createElement('h2');
+  h2.textContent = `${title} — ${result.pass}/${result.total} passed`;
+  const ul = document.createElement('ul');
+  for (const t of result.all) {
+    const li = document.createElement('li');
+    li.className = t.pass ? 'pass' : 'fail';
+    const id = document.createElement('span');
+    id.className = 'id';
+    id.textContent = t.id;
+    li.appendChild(id);
+    const notes = failuresById.get(t.id);
+    if (notes) {
+      const n = document.createElement('div');
+      n.className = 'notes';
+      n.textContent = notes.join('\n');
+      li.appendChild(n);
+    }
+    ul.appendChild(li);
+  }
+  lists.append(h2, ul);
+}
+
 try {
   const s = runStrictTests();
   const c = runStrictConvoyTests();
@@ -28,13 +60,15 @@ try {
     `Strict house-rules: ${pass}/${total} passed ` +
     `(support ${s.pass}/${s.total}, convoy ${c.pass}/${c.total})`;
   headline.className = pass === total ? 'pass' : 'fail';
-  const failures = [...s.failures, ...c.failures];
-  out.textContent = failures.map((f) => `FAIL ${f.id}\n   ${f.notes.join('\n   ')}`).join('\n');
+  renderList('Support house-rule', s);
+  renderList('Convoy house-rule', c);
   document.title = `Strict ${pass}/${total}`;
 } catch (e) {
   headline.textContent = 'RUNNER ERROR';
   headline.className = 'fail';
-  out.textContent = e.stack || String(e);
+  const pre = document.createElement('pre');
+  pre.textContent = e.stack || String(e);
+  lists.appendChild(pre);
 }
 document.body.dataset.done = '1';
 </script>

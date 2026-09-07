@@ -174,12 +174,14 @@ const CASES = [
 
 export function runStrictTests() {
   const failures = [];
+  const all = [];
   let total = 0;
   for (const c of CASES) {
     const units = c.units.map(parseUnit);
     const orders = parseOrders(c.orders);
     for (const mode of ['standard', 'strict']) {
       total++;
+      const id = `${c.id} [${mode}]`;
       const out = adjudicateMovement(units, orders, { strictSupportHold: mode === 'strict' });
       const survivors = out.unitsAfter.map(key);
       const dislodged = out.dislodged.map((d) => key(d.unit));
@@ -197,10 +199,11 @@ export function runStrictTests() {
         const got = r ? r.verdict : '(no such support)';
         if (got !== want) notes.push(`support@${loc} verdict: got ${got} want ${want}`);
       }
-      if (notes.length) failures.push({ id: `${c.id} [${mode}]`, notes });
+      all.push({ id, pass: !notes.length });
+      if (notes.length) failures.push({ id, notes });
     }
   }
-  return { total, pass: total - failures.length, failures };
+  return { total, pass: total - failures.length, failures, all };
 }
 
 // Node entry point

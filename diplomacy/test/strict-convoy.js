@@ -86,11 +86,13 @@ const CASES = [
 // picker only ever offers seas that hold a fleet).
 function runRouteLogicTests() {
   const failures = [];
+  const all = [];
   let total = 0;
   const check = (id, got, want) => {
     total++;
-    if (JSON.stringify(got) !== JSON.stringify(want))
-      failures.push({ id, notes: [`got ${JSON.stringify(got)} want ${JSON.stringify(want)}`] });
+    const pass = JSON.stringify(got) === JSON.stringify(want);
+    all.push({ id, pass });
+    if (!pass) failures.push({ id, notes: [`got ${JSON.stringify(got)} want ${JSON.stringify(want)}`] });
   };
   const A = { power: 'england', type: 'A', loc: 'edi' };
   const Fnth = { power: 'england', type: 'F', loc: 'nth' };
@@ -112,29 +114,33 @@ function runRouteLogicTests() {
   const hops = convoyRouteHops('edi', 'nwy', [], fleetWaters([A, Fnth]));
   check('candidates exclude fleetless seas', hops, ['nth']);
 
-  return { total, pass: total - failures.length, failures };
+  return { total, pass: total - failures.length, failures, all };
 }
 
 export function runStrictConvoyTests() {
   const route = runRouteLogicTests();
   const failures = [...route.failures];
+  const all = [...route.all];
   let total = route.total;
   for (const c of CASES) {
     const units = c.units.map(parseUnit);
     const orders = parseOrders(c.orders);
     for (const mode of ['standard', 'strict']) {
       total++;
+      const id = `${c.id} [${mode}]`;
       const out = adjudicateMovement(units, orders, { strictConvoy: mode === 'strict' });
       const survivors = out.unitsAfter.map(key);
       const exp = c[mode];
-      if (!setEq(survivors, exp.survivors))
+      const pass = setEq(survivors, exp.survivors);
+      all.push({ id, pass });
+      if (!pass)
         failures.push({
-          id: `${c.id} [${mode}]`,
+          id,
           notes: [`survivors: got [${survivors.sort()}] want [${[...exp.survivors].sort()}]`],
         });
     }
   }
-  return { total, pass: total - failures.length, failures };
+  return { total, pass: total - failures.length, failures, all };
 }
 
 if (typeof process !== 'undefined' && process.argv && process.argv[1] && process.argv[1].endsWith('strict-convoy.js')) {
