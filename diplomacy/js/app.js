@@ -424,6 +424,7 @@ function refreshAll() {
   // The topbar always names the REAL game, whichever line is open; which line
   // that is belongs to the mode chip, not to the game's identity.
   $('game-name').textContent = liveGame ? liveGame.name : '';
+  fitTopbar();
   $('phase-label').textContent = S.phaseLabel(game);
   board.setPhaseText(S.phaseLabel(game));
   board.setInfluence(game.scOwners);
@@ -867,6 +868,27 @@ function selectOrderLine(unitProv) {
 // ---------------------------------------------------------------------------
 // board interaction
 // ---------------------------------------------------------------------------
+// On a narrow screen the topbar can't fit everything at once: the hovered
+// location's name, the game's name, and ⚙ Settings all compete for the same
+// row, and ⚙ Settings must never be the one that loses — it would be pushed
+// off-screen and become unreachable. So when space is short, give things up
+// in priority order: the extra location detail (coast/star/occupant) goes
+// first, then the game's name entirely, while the location's base name and
+// ⚙ Settings itself are never touched.
+function fitTopbar() {
+  const topbar = $('topbar');
+  const gameName = $('game-name');
+  const extra = $('hover-info-extra');
+  if (!topbar || !gameName || !extra) return;
+  gameName.hidden = false;
+  extra.hidden = false;
+  if (!matchMedia('(max-width: 820px)').matches) return;
+  if (topbar.scrollWidth <= topbar.clientWidth) return;
+  extra.hidden = true;
+  if (topbar.scrollWidth <= topbar.clientWidth) return;
+  gameName.hidden = true;
+}
+
 function attachBoardHandlers() {
   board.handlers = {
     canDrag(p, ev) {
@@ -905,7 +927,9 @@ function attachBoardHandlers() {
     },
     onHover(p) {
       if (!p || !game || !PROVINCES[prov(p)]) {
-        $('hover-info').textContent = '';
+        $('hover-info-base').textContent = '';
+        $('hover-info-extra').textContent = '';
+        fitTopbar();
         return;
       }
       const base = prov(p);
@@ -913,12 +937,13 @@ function attachBoardHandlers() {
       const owner = game.scOwners[base];
       const coastSuffix = p.includes('/') ? p.split('/')[1] : null;
       const tail = u ? ` - ${u.type === 'A' ? 'Army' : 'Fleet'} ${cap(u.power)}` : (owner ? ` - ${cap(owner)}` : '');
-      $('hover-info').textContent =
-        provName(p) +
+      $('hover-info-base').textContent = provName(p);
+      $('hover-info-extra').textContent =
         (coastSuffix ? ` (${COAST_NAMES[coastSuffix] || coastSuffix})` : '') +
         (coastSuffix ? ` "${p}"` : '') +
         (PROVINCES[base].sc ? ' ⭐' : '') +
         tail;
+      fitTopbar();
     },
     onDragStart(p) {
       drawLive(prov(p)); // hide this unit's old arrow while dragging
@@ -3761,8 +3786,9 @@ async function init() {
   // the phone's font size and on whether the phase label wraps
   const topbarH = () =>
     document.documentElement.style.setProperty('--topbar-h', $('topbar').offsetHeight + 'px');
-  new ResizeObserver(topbarH).observe($('topbar'));
+  new ResizeObserver(() => { topbarH(); fitTopbar(); }).observe($('topbar'));
   topbarH();
+  fitTopbar();
 
   for (const b of document.querySelectorAll('#mobile-tabbar .mtab')) {
     b.onclick = () => selectMobileSheet(b.dataset.sheet);

@@ -471,7 +471,11 @@ dialog.modal h2 { margin: 0 0 14px; font-size: 1.1rem; }
   /* The one thing on this screen two people in the same room actually need:
      which province someone is pointing at. Everything else in the bar is
      flex: none and yields to it before it yields to them — see #game-name
-     and #phase-label below. */
+     and #phase-label below. #hover-info-base (the province name itself) is
+     never hidden; fitTopbar() in app.js hides #hover-info-extra (coast/star/
+     occupant) and then #game-name, in that order, only once measurement
+     shows the bar doesn't fit — that's also what stops ⚙ Settings from ever
+     being pushed off-screen. */
   #hover-info { max-width: 30vw; }
   /* The countdown's DD:HH:MM:SS must stay whole (that's the whole point of
      the format), so it's never truncated. */
@@ -497,7 +501,7 @@ dialog.modal h2 { margin: 0 0 14px; font-size: 1.1rem; }
      it is the only thing allowed to: everything else in the bar is flex: none
      and would otherwise push ⚙ Settings off the right-hand edge between them. */
   #game-name {
-    flex: 1 1 auto; min-width: 2.5em;
+    flex: 1 1 auto; min-width: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   /* …and even that is not enough room once the state chip and the ● pill are
