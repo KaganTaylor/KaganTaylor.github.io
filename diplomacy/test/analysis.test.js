@@ -192,7 +192,23 @@ test('a child goes stale when the line above it is undone', () => {
   assert.equal(A.isStale(t, child), false);
   undoLastPhase(main.game);
   assert.equal(A.isStale(t, child), true, 'the phase it was cut from is gone');
-  assert.equal(child.game.history.length, 0, 'but the child itself is untouched');
+  assert.equal(child.game.history.length, 1, 'the child keeps its own inherited history');
+  assert.equal(main.game.history.length, 0, 'but the parent it copied from is untouched by the child');
+});
+
+test('a branch inherits the source line history up to the cut point, independently', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
+  play(main.game, 'FRANCE\nA Par - Bur');
+  play(main.game, 'FRANCE\nA Bur - Mar');
+  const child = A.branchFrom(t, main.id, 1, gameSettings(g));
+  assert.equal(child.game.history.length, 1, 'the phase before the cut, so History/Undo work right away');
+  assert.equal(child.game.history[0].ordersText, 'FRANCE\nA Par - Bur');
+  play(child.game, 'FRANCE\nA Bur - Gas');
+  assert.equal(main.game.history.length, 2, 'undoing/resolving the child never touches the source line');
+  assert.equal(A.ownPhaseCount(child), 1, 'own count excludes the inherited phase');
+  assert.equal(A.ownPhaseCount(main), 2);
 });
 
 test('re-resolving the parent identically un-stales the child', () => {

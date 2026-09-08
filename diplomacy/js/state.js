@@ -62,7 +62,12 @@ export function newGame(name) {
 // A sandbox copy of some position — the one and only "branch". `src` may be
 // the live game or the throwaway clone a preview resolved into, so this takes
 // the position fields only and never the source's published identity.
-export function branchGame(src, name, branchedFrom = null) {
+// `history` (when given) seeds the branch's own history — the phases that led
+// to `src`'s position — so the History dropdown and Undo have something to
+// work with immediately instead of only after the branch resolves its first
+// phase. Copied rather than shared, since the branch's history is its own
+// from the moment it exists (an undo inside it must never touch the source).
+export function branchGame(src, name, branchedFrom = null, history = null) {
   const g = newGame(name);
   g.season = src.season;
   g.year = src.year;
@@ -71,7 +76,7 @@ export function branchGame(src, name, branchedFrom = null) {
   g.scOwners = structuredClone(src.scOwners);
   g.pending = structuredClone(src.pending) || null;
   g.settings = { ...gameSettings(src) }; // house rules carry into the branch
-  g.history = [];
+  g.history = history ? structuredClone(history) : [];
   g.redoStack = [];
   if (branchedFrom) g.branchedFrom = branchedFrom;
   return g;

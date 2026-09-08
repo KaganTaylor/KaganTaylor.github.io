@@ -2244,7 +2244,7 @@ function renderAnalysisUI() {
   const power = assignedPower() || R.myCountry(liveGame);
   setGated($('an-use-orders'),
     !power ? 'Pick a country to play as first — there are no orders of your own to take across'
-      : active.game.history.length
+      : A.ownPhaseCount(active)
         ? `This line has moved on to ${S.phaseLabel(active.game)} — the live game is still at ${t.rootLabel}. ⤺ Undo back to the start of the line to take its orders across.`
         : null,
     power ? `Copy ${cap(power)}'s orders from this line into the live game's order box` : '');
@@ -2333,7 +2333,7 @@ function renderAnalysisTree() {
       // and the topbar are already saying that.
       if (A.isStale(t, n)) bits.push('<span class="an-meta warn">⚠ the line it came from changed</span>');
       else bits.push(`<span class="an-meta">from ${escapeText(A.lineStartLabel(n))}</span>`);
-      const played = n.game.history.length;
+      const played = A.ownPhaseCount(n);
       main.title = `Open “${n.name}” — starts at ${A.lineStartLabel(n)}, ` +
         (played
           ? `${played} phase${played === 1 ? '' : 's'} played, now at ${S.phaseLabel(n.game)}`
@@ -2422,11 +2422,12 @@ function deleteSelected() {
 function useLineOrdersLive() {
   const power = assignedPower() || R.myCountry(liveGame);
   if (!power) return;
-  if (game.history.length) return toast('Step this line back to its first phase first — ⤺ Undo');
+  const node = A.getNode(tree(), game.nodeId);
+  if (A.ownPhaseCount(node)) return toast('Step this line back to its first phase first — ⤺ Undo');
   persistLineOrders();
   const mine = powerBlockText(power);
   if (!mine.trim()) return toast(`No ${cap(power)} orders in this line yet`);
-  const name = (A.getNode(tree(), game.nodeId) || {}).name || 'this line';
+  const name = (node || {}).name || 'this line';
   exitAnalysis();
   replacePowerBlock(power, mine);
   toast(`${cap(power)}'s orders from “${name}” are in the live order box — nothing is submitted yet`, 'info');

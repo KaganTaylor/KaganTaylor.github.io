@@ -40,7 +40,12 @@ import { branchGame, gameSettings, phaseLabel } from './state.js';
 // localStorage holds every saved game in one JSON blob that is rewritten on
 // each save, so a tree is capped rather than allowed to grow without limit.
 // A line carries a full game object, so it costs more than the old two-position
-// variation did — a few KB, plus a few more for each phase resolved in it.
+// variation did — a few KB, plus a few more for each phase resolved in it, plus
+// (since branchFrom copies the source's history up to the cut point, so a
+// branch's own History dropdown and Undo work from the moment it exists) the
+// history it inherited — a chain of branches-of-branches duplicates that
+// history at every link, so a deep chain costs more than a wide tree of the
+// same line count.
 export const MAX_LINES = 30;
 
 // The SHAPE of the tree, not the position it hangs off. A tree is saved inside
@@ -115,12 +120,27 @@ export function positionAt(g, i) {
 // changes every time you resolve inside it, so labelling rows with that made
 // the tree restless and answered a question the board already answers; where a
 // line branches off is the fixed thing about it, and what tells two rows apart.
-// Read off history[0] rather than off `from`, so it holds for the first line
-// (which branched from nothing) and for a line whose parent has since moved.
+// A branched line carries its source's history (branchFrom), so history[0] is
+// no longer necessarily this line's own start — `from.label` names that
+// directly when the line has one. The first line (branched from nothing) has
+// no `from`, so it falls back to its own history[0]/current phase.
 export function lineStartLabel(node) {
   const g = node && node.game;
   if (!g) return '';
+  if (node.from) return node.from.label;
   return g.history.length ? g.history[0].label : phaseLabel(g);
+}
+
+// How many phases a line has resolved ITSELF, as opposed to inherited from
+// the line it was cut from (branchFrom copies history up to the cut point so
+// the History dropdown and Undo have it). g.history.length alone would count
+// those inherited phases too, which is wrong for "has this line moved on from
+// its own start" and "how many phases has this line played" — both mean
+// phases since the cut, not since the root.
+export function ownPhaseCount(node) {
+  const g = node && node.game;
+  if (!g) return 0;
+  return g.history.length - (node.from ? node.from.index : 0);
 }
 
 // The orders written at that phase — so a branch opens on a copy of what was
@@ -235,12 +255,15 @@ export function defaultFolderName(tree) {
 // `from` how it relates to the line it was cut from (null for the first line):
 // {lineId, index, key, label}. `from.lineId` is the ORIGIN, which is not always
 // the tree parent — a sibling branch shares its origin's parent — so staleness
-// and placement stay independent facts.
+// and placement stay independent facts. `history` (optional) is the source
+// line's own history up to the cut point, carried into the new line so its
+// History dropdown and Undo see the phases that led here, not just the phases
+// it resolves itself — see branchFrom.
 export function addLine(tree, opts = {}) {
   const seq = ++tree.seq;
   const id = `l${seq}`;
   const name = opts.name || defaultLineName(tree);
-  const g = branchGame(opts.position || tree.root, name);
+  const g = branchGame(opts.position || tree.root, name, null, opts.history || null);
   if (opts.settings) g.settings = { ...opts.settings };
   g.orders = opts.orders || '';
   tree.nodes[id] = {
@@ -347,7 +370,11 @@ export function branchParent(tree, srcId, index) {
   return index > 0 ? src.id : (src.parent || null);
 }
 
-// Cut a new line off `srcId` at the phase `index` phases into it.
+// Cut a new line off `srcId` at the phase `index` phases into it. The new
+// line inherits src's history up to that point — it is where the new idea
+// actually came from — so its own History dropdown and Undo see those phases
+// from the moment it exists, rather than showing nothing until it resolves a
+// phase of its own.
 export function branchFrom(tree, srcId, index, settings) {
   const src = getNode(tree, srcId);
   if (!src || src.kind !== 'line') return null;
@@ -358,6 +385,7 @@ export function branchFrom(tree, srcId, index, settings) {
     position,
     orders: ordersAt(src.game, i),
     settings,
+    history: src.game.history.slice(0, i),
     from: {
       lineId: src.id,
       index: i,
