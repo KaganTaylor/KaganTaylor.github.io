@@ -713,7 +713,18 @@ function onOrdersChanged() {
   }
   if (!parts.length) {
     const myC = myCountry();
-    const total = myC ? game.units.filter((u) => u.power === myC).length : game.units.length;
+    let total;
+    if (game.step === 'retreat') {
+      const dislodged = game.pending ? game.pending.dislodged : [];
+      total = myC ? dislodged.filter((d) => d.unit.power === myC).length : dislodged.length;
+    } else if (game.step === 'adjustment') {
+      const counts = S.adjustmentCounts(game);
+      total = myC
+        ? Math.abs(counts[myC] || 0)
+        : Object.values(counts).reduce((sum, c) => sum + Math.abs(c), 0);
+    } else {
+      total = myC ? game.units.filter((u) => u.power === myC).length : game.units.length;
+    }
     parts.push(`<span class="ok">${own.orders.length}/${total} order${total === 1 ? '' : 's'} ✓</span>`);
   }
   el.innerHTML = parts.join('\n');
