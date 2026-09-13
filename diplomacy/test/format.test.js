@@ -59,6 +59,13 @@ test('fmtOrder marks a convoyed move with an anchor', () => {
   const plain = { kind: 'move', unitType: 'A', loc: 'lon', dest: 'bre' };
   assert.equal(fmtOrder(plain), 'A London → Brest');
   assert.equal(fmtOrder({ ...plain, isConvoyMove: true }), 'A London → Brest ⚓');
+  // a strict-convoy move names its route, and the playback list / 📋 Copy
+  // results must show it — the route is what the order was
+  assert.equal(
+    fmtOrder({ ...plain, isConvoyMove: true, convoyRoute: ['eng', 'mao'] }),
+    'A London → English Channel → Mid-Atlantic Ocean → Brest ⚓'
+  );
+  assert.equal(fmtOrder({ ...plain, convoyRoute: null }), 'A London → Brest', 'null route (the wire default) is no route');
 });
 
 test('fmtOrder survives an order with no unit type or location', () => {

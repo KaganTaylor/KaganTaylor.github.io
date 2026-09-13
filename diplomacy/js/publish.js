@@ -176,6 +176,24 @@ export async function updatePublished(game, boardOverride) {
   });
 }
 
+// The inverse of wirePayload: game.json text back into the in-memory shape.
+// THE ONLY place the wire format is decoded — both readers (fetchPublished on
+// load, readGameFile on every refresh) go through it, so the two can never
+// disagree about what a history entry looks like. They did once: readGameFile
+// handed refreshOnlineStatus() the still-packed history while the local copy
+// held the unpacked one, so viewerPosition() never matched, every viewer was
+// told "the game master changed the board" on their first poll, and their
+// history was overwritten with entries missing unitsBefore/dislodged.
+export function decodeGameJson(content) {
+  const parsed = JSON.parse(content);
+  if (parsed.historyFormat === HISTORY_FORMAT) {
+    parsed.history = unpackHistory(parsed.history || []);
+    parsed.redoStack = unpackHistory(parsed.redoStack || [], { chain: false });
+  }
+  delete parsed.historyFormat;
+  return parsed;
+}
+
 // Reads a published game by gist id. No auth needed — gists are public — but
 // signed when a token is around, for the rate limit (see ghRead).
 // Returns {game, ownerLogin} so callers can tell whether their own token
@@ -184,14 +202,8 @@ export async function fetchPublished(gistId) {
   const json = await ghRead(`${API}/gists/${gistId}`);
   const file = json.files && json.files['game.json'];
   if (!file) throw new Error('gist has no game.json file');
-  const content = file.truncated ? await (await fetch(file.raw_url)).text() : file.content;
-  const parsed = JSON.parse(content);
-  if (parsed.historyFormat === HISTORY_FORMAT) {
-    parsed.history = unpackHistory(parsed.history || []);
-    parsed.redoStack = unpackHistory(parsed.redoStack || [], { chain: false });
-  }
-  delete parsed.historyFormat;
-  return { game: parsed, ownerLogin: json.owner && json.owner.login };
+  const content = await gistFileContent(file);
+  return { game: decodeGameJson(content), ownerLogin: json.owner && json.owner.login };
 }
 
 // Resolves the GitHub login a token belongs to, so it can be compared
@@ -503,11 +515,12 @@ export async function readMovesFiles(gistJson) {
   return out;
 }
 
-// The (fresh) game.json out of a fetched gist, or null.
+// The (fresh) game.json out of a fetched gist, decoded exactly as
+// fetchPublished decodes it, or null.
 export async function readGameFile(gistJson) {
   try {
     const content = await gistFileContent((gistJson.files || {})['game.json']);
-    return content ? JSON.parse(content) : null;
+    return content ? decodeGameJson(content) : null;
   } catch {
     return null;
   }

@@ -34,7 +34,11 @@ export function fmtOrder(o) {
   const t = o.unitType ? o.unitType + ' ' : '';
   const u = `${t}${fmtLoc(o.loc || '')}`;
   switch (o.kind) {
-    case 'move': return `${u} → ${fmtLoc(o.dest)}${o.isConvoyMove ? ' ⚓' : ''}`;
+    case 'move': {
+      // a strict-convoy move names its sea route, and the route is the order
+      const via = (o.convoyRoute || []).map((p) => fmtLoc(p) + ' → ').join('');
+      return `${u} → ${via}${fmtLoc(o.dest)}${o.isConvoyMove ? ' ⚓' : ''}`;
+    }
     case 'retreat': return `${u} retreats → ${fmtLoc(o.dest)}`;
     case 'hold': return `${u} holds`;
     case 'disband': return `${u} disbands`;

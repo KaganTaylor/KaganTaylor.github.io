@@ -131,16 +131,26 @@ export function lineStartLabel(node) {
   return g.history.length ? g.history[0].label : phaseLabel(g);
 }
 
+// Where in a line's history the line itself begins. A branched line carries
+// its source's history up to the cut point (branchFrom), so its own first
+// phase sits at index from.index, not 0; the first line has no `from` and
+// starts at 0. Every "is this the line's own starting phase" question — the
+// sibling-or-child rule, the panel's "⑂ Branch here" wording — compares
+// against this, never against 0.
+export function lineStartIndex(node) {
+  return node && node.from ? node.from.index : 0;
+}
+
 // How many phases a line has resolved ITSELF, as opposed to inherited from
 // the line it was cut from (branchFrom copies history up to the cut point so
 // the History dropdown and Undo have it). g.history.length alone would count
-// those inherited phases too, which is wrong for "has this line moved on from
-// its own start" and "how many phases has this line played" — both mean
-// phases since the cut, not since the root.
+// those inherited phases too, which is wrong for "how many phases has this
+// line played" — that means phases since the cut, not since the root. Can go
+// negative: undo is allowed back past the cut, into the inherited phases.
 export function ownPhaseCount(node) {
   const g = node && node.game;
   if (!g) return 0;
-  return g.history.length - (node.from ? node.from.index : 0);
+  return g.history.length - lineStartIndex(node);
 }
 
 // The orders written at that phase — so a branch opens on a copy of what was
@@ -362,12 +372,19 @@ export function deleteNode(tree, id) {
 // nesting rule, in one expression, so the panel can say it out loud before the
 // click as well as act on it after (app.js renderAnalysisUI).
 //
-//   index 0  →  the line's own starting phase: a sibling
-//   index >0 →  a phase this line produced: a child of it
+//   index at or before the line's own start  →  a sibling
+//   index past it (a phase this line produced) →  a child of it
+//
+// `index` counts from the root of the line's history, inherited phases
+// included, because that is what positionAt/ordersAt and the History dropdown
+// count in. The line's own start is lineStartIndex(), not 0 — a line cut two
+// phases in begins at index 2, and branching it there is "another idea from
+// the same place", a sibling. Comparing against 0 made every branch off a
+// nested line a child of it, whatever phase it was taken at.
 export function branchParent(tree, srcId, index) {
   const src = getNode(tree, srcId);
   if (!src) return null;
-  return index > 0 ? src.id : (src.parent || null);
+  return index > lineStartIndex(src) ? src.id : (src.parent || null);
 }
 
 // Cut a new line off `srcId` at the phase `index` phases into it. The new

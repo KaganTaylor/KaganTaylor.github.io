@@ -146,10 +146,31 @@ test('two branches from the same later phase come out parallel', () => {
   const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
   play(main.game, 'FRANCE\nA Par - Bur');
   const a = A.branchFrom(t, main.id, 1, gameSettings(g));
-  // now inside `a`, at ITS starting phase — the sibling rule applies
-  const b = A.branchFrom(t, a.id, 0, gameSettings(g));
+  // now inside `a`, at ITS starting phase. `a` inherited main's first phase,
+  // so that phase is index 1 of a's history, not 0 — and the sibling rule
+  // still applies there, because it is where `a` itself begins.
+  assert.equal(A.lineStartIndex(a), 1);
+  const b = A.branchFrom(t, a.id, 1, gameSettings(g));
   assert.equal(b.parent, a.parent);
   assert.deepEqual(A.childrenOf(t, main.id).map((n) => n.id), [a.id, b.id]);
+  assert.equal(A.positionKey(b.game), A.positionKey(a.game), 'and it starts where a starts');
+  assert.equal(A.branchParent(t, a.id, 1), a.parent, 'said in advance, too');
+});
+
+test('a nested line branched past its own start nests again; before it, a sibling', () => {
+  const g = live();
+  const t = A.newTree(g);
+  const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
+  play(main.game, 'FRANCE\nA Par - Bur');
+  const a = A.branchFrom(t, main.id, 1, gameSettings(g));
+  play(a.game, 'FRANCE\nA Bur - Mun');
+  assert.equal(A.ownPhaseCount(a), 1);
+  assert.equal(A.branchParent(t, a.id, 2), a.id, 'a phase a produced: a child of a');
+  // stepped back into the inherited phase: not a's own idea, so not a child of it
+  assert.equal(A.branchParent(t, a.id, 0), a.parent);
+  const early = A.branchFrom(t, a.id, 0, gameSettings(g));
+  assert.equal(early.parent, main.id);
+  assert.equal(A.positionKey(early.game), t.rootKey, 'from the root, as index 0 says');
 });
 
 test('a branch opens on a copy of the orders it was cut from', () => {

@@ -283,20 +283,52 @@ export function bumpTarget(game, online, hours) {
 // a viewer's board against the gist
 // ---------------------------------------------------------------------------
 
+// JSON with every object's keys sorted, so two values that hold the same facts
+// compare equal however they were built. The comparisons below put a history
+// resolved in this browser (state.js resolvePhase) next to one decoded off the
+// gist (js/history-codec.js unpackHistory), and those two build their objects
+// in different key orders — a raw JSON.stringify called them different boards.
+export function stableStringify(v) {
+  if (Array.isArray(v)) return '[' + v.map(stableStringify).join(',') + ']';
+  if (v && typeof v === 'object') {
+    return '{' + Object.keys(v).sort()
+      .map((k) => JSON.stringify(k) + ':' + stableStringify(v[k])).join(',') + '}';
+  }
+  return JSON.stringify(v === undefined ? null : v);
+}
+
+// One resolved phase reduced to what makes it that phase: which orders were
+// played and the board they produced. The wire codec is free to drop, rebuild
+// and reorder everything else in an entry (the *Before snapshots, empty result
+// tails, default-valued order fields), so nothing else may take part in
+// deciding whether two histories are the same history.
+function phaseFingerprint(h) {
+  return stableStringify({
+    label: h.label,
+    year: h.year,
+    season: h.season,
+    step: h.step,
+    ordersText: h.ordersText,
+    unitsAfter: h.unitsAfter,
+    scOwnersAfter: h.scOwnersAfter,
+    pendingAfter: h.pendingAfter || null,
+  });
+}
+
 // The published position as a viewer should see it. Deliberately NOT
 // state.js's boardSnapshot(): that includes redoStack, which is the game
 // master's private undo bookkeeping. A viewer who catches up clears their own
 // (catchUpNext) while the gist may still carry the GM's, and that difference
 // is not a divergence — comparing it would reload the board on every refresh.
 export function viewerPosition(g) {
-  return JSON.stringify({
+  return stableStringify({
     year: g.year,
     season: g.season,
     step: g.step,
     units: g.units,
     scOwners: g.scOwners,
     pending: g.pending || null,
-    history: g.history || [],
+    history: (g.history || []).map(phaseFingerprint),
   });
 }
 
@@ -305,5 +337,6 @@ export function viewerPosition(g) {
 export function extendsOurHistory(g, fresh) {
   const ours = g.history || [];
   if (fresh.history.length <= ours.length) return false;
-  return JSON.stringify(fresh.history.slice(0, ours.length)) === JSON.stringify(ours);
+  return fresh.history.slice(0, ours.length).map(phaseFingerprint).join('\n')
+    === ours.map(phaseFingerprint).join('\n');
 }

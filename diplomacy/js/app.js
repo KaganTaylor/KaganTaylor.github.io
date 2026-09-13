@@ -352,7 +352,8 @@ function homeRow(g) {
 
 function uniqueName(base) {
   const games = S.listGames();
-  let name = base || 'Game';
+  base = (base || '').trim() || 'Game';
+  let name = base;
   let n = 2;
   while (games[name]) name = `${base} ${n++}`;
   return name;
@@ -1525,8 +1526,8 @@ function reconcileProvisionalPhase(g, fresh) {
   const theirs = fresh.history[idx];
   // The gist hasn't reached our provisional phase yet — nothing to reconcile.
   if (!ours || !theirs) return;
-  const same = JSON.stringify(ours.unitsAfter) === JSON.stringify(theirs.unitsAfter)
-    && JSON.stringify(ours.scOwnersAfter) === JSON.stringify(theirs.scOwnersAfter);
+  const same = O.stableStringify(ours.unitsAfter) === O.stableStringify(theirs.unitsAfter)
+    && O.stableStringify(ours.scOwnersAfter) === O.stableStringify(theirs.scOwnersAfter);
   if (same) {
     g.provisionalPhase = null;
     return;
@@ -2165,7 +2166,7 @@ function branchLine() {
   if (!node) return;
   flushLineSave();
   openNode(node.id);
-  toast(i > 0
+  toast(node.parent === src.id
     ? `⑂ ${node.name} — nested under “${src.name}”, from ${node.from.label}`
     : `⑂ ${node.name} — beside “${src.name}”, from ${node.from.label}`, 'info');
 }
@@ -2248,7 +2249,7 @@ function renderAnalysisUI() {
   // silently landed at the wrong level would be the whole feature misfiring.
   const i = viewedIndex();
   const at = S.phaseLabel(A.positionAt(active.game, i));
-  const nested = i > 0;
+  const nested = A.branchParent(t, active.id, i) === active.id;
   $('an-branch').textContent = nested ? '⑂ Branch here' : '⑂ Branch';
   const branchNote = nested
     ? `⑂ Branch starts a line at ${at}, nested under “${active.name}” — that phase only exists because this line produced it.`
@@ -2264,14 +2265,17 @@ function renderAnalysisUI() {
     A.lineCount(t) > 1 ? null : 'This is the only line in the tree — leave analysis instead',
     sel ? `Delete “${sel.name}” and everything inside it` : 'Delete the selected row');
 
-  // ↥ Use these orders live only makes sense while the line is still standing
-  // on the live game's own phase — orders written three phases into a
+  // ↥ Use these orders live only makes sense while the line is standing on
+  // the live game's own phase — orders written three phases into a
   // hypothetical are not orders for the turn the table is actually playing.
+  // That is "no phases past the root" (history.length, inherited phases
+  // included), NOT ownPhaseCount(): a line cut two phases in has played
+  // nothing itself, but its orders are still for a turn two phases away.
   const power = assignedPower() || R.myCountry(liveGame);
   setGated($('an-use-orders'),
     !power ? 'Pick a country to play as first — there are no orders of your own to take across'
-      : A.ownPhaseCount(active)
-        ? `This line has moved on to ${S.phaseLabel(active.game)} — the live game is still at ${t.rootLabel}. ⤺ Undo back to the start of the line to take its orders across.`
+      : active.game.history.length
+        ? `This line is at ${S.phaseLabel(active.game)} — the live game is still at ${t.rootLabel}. ⤺ Undo back to ${t.rootLabel} to take its orders across.`
         : null,
     power ? `Copy ${cap(power)}'s orders from this line into the live game's order box` : '');
 }
@@ -2449,7 +2453,7 @@ function useLineOrdersLive() {
   const power = assignedPower() || R.myCountry(liveGame);
   if (!power) return;
   const node = A.getNode(tree(), game.nodeId);
-  if (A.ownPhaseCount(node)) return toast('Step this line back to its first phase first — ⤺ Undo');
+  if (game.history.length) return toast(`Step this line back to ${tree().rootLabel} first — ⤺ Undo`);
   persistLineOrders();
   const mine = powerBlockText(power);
   if (!mine.trim()) return toast(`No ${cap(power)} orders in this line yet`);
@@ -3363,10 +3367,22 @@ async function doLoadPublishedMoves() {
 // passed (the normal case), or none was ever set — the deliberate escape
 // hatch that lets the GM skip the game forward on an empty box and type
 // orders in by hand. Loading never publishes anything by itself.
+//
+// Refreshes first, always — the same rule autoPublishIfDue() and a player's
+// resolveRevealedLocally() follow. Nothing polls the network on a timer, so
+// online.comments is as old as the GM's last explicit refresh, which for a GM
+// who opened the game before the deadline and left the tab open is from before
+// most players submitted (they submit in the last minutes). Loading off that
+// snapshot silently dropped their orders from the box the GM then resolved.
 async function gmLoadOrders() {
   if (ordersOpen()) return toast('Submissions are still open — wait for the deadline, or ✖ Clear it to load now and skip the phase forward');
   try {
-    if (!online.comments) await refreshOnlineStatus();
+    await refreshOnlineStatus();
+    // refreshOnlineStatus() keeps quiet about a failed fetch (it is normally a
+    // background poll), but here the answer decides what gets resolved: a box
+    // of blank templates because GitHub was unreachable looks exactly like a
+    // phase nobody submitted for.
+    if (!online.comments) return toast('Could not reach GitHub to read the submissions — check your connection and try again');
     // Every active power gets a header — submitted powers get their orders,
     // everyone else gets the blank per-phase template — so the box always
     // shows the full roster to fill in by hand, submissions or not.
@@ -3977,7 +3993,12 @@ async function init() {
   $('pbf-continue').onclick = pbContinue;
   $('pbf-back').onclick = endPlayback;
   document.addEventListener('keydown', (e) => {
-    if (playback && !$('panel-playback').hidden && document.activeElement.tagName !== 'TEXTAREA') {
+    // not while typing: the arrow keys move the caret in any text field (the
+    // deadline picker, the players modal, the settings dialog), not just the
+    // order box
+    const tag = document.activeElement ? document.activeElement.tagName : '';
+    if (tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT') return;
+    if (playback && !$('panel-playback').hidden) {
       if (e.key === 'ArrowRight') stepPlayback(1);
       if (e.key === 'ArrowLeft') stepPlayback(-1);
     }
