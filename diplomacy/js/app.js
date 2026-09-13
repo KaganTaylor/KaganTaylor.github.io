@@ -445,12 +445,7 @@ function refreshAll() {
   // point of it, and the reason branching was the escape hatch from every
   // read-only situation in the first place.
   const ro = !an && isReadOnly();
-  // An assigned player is always drafting their own power, so there is
-  // nothing to pick — the selector is only for a spectator choosing which
-  // country to sketch orders for.
   const isPlayer = gameMode() === 'player';
-  $('country-row').hidden = an || !ro || isPlayer;
-  if (ro) renderCountrySelect();
   $('orders-text').readOnly = false;
 
   // Resolving a published game you do not own must not move it, so a
@@ -607,28 +602,10 @@ function renderBranchNote() {
 function renderDraftNote() {
   const el = $('draft-note');
   const mode = gameMode();
-  if (mode === 'analysis' || mode === 'sandbox' || mode === 'player') {
-    el.hidden = true;
-    return;
-  }
-  el.hidden = false;
+  el.hidden = mode !== 'gm';
   if (mode === 'gm') {
     el.textContent = '👑 These are the official orders. Resolve them, then ☁ Publish changes so every player sees the new board.';
-  } else {
-    el.textContent = '✎ Private scratch pad. Nothing you write, drag or preview here reaches the published game.';
   }
-}
-
-// Spectator-only (an assigned player is locked to their own power without
-// any picker — see refreshOnlineStatus(), which sets game.myCountry to the
-// assignment directly — and country-row is hidden for them entirely).
-function renderCountrySelect() {
-  const sel = $('country-select');
-  sel.replaceChildren();
-  if (assignedPower()) return;
-  sel.appendChild(new Option('👁 View all countries', ''));
-  for (const p of activePowers()) sel.appendChild(new Option(`Play as ${cap(p)}`, p));
-  sel.value = liveGame.myCountry || '';
 }
 
 const defaultOrdersText = () => T.defaultOrdersText(game);
@@ -2619,16 +2596,15 @@ function renderOnlineUI() {
   // that (the Orders panel is gated on gmOrdersLoaded), so it could only show
   // them what they had already loaded — and in manual mode nothing is published
   // yet, so it could only ever say "no published moves for this phase". Two
-  // buttons for one act, disagreeing about it. It keeps both its other
-  // meanings: a player reloading their own submission, a spectator loading the
-  // table's revealed moves.
-  loadMovesBtn.hidden = isOwnerView();
+  // buttons for one act, disagreeing about it. Its one remaining meaning is a
+  // player reloading their own submission — a spectator has no submission of
+  // their own to reload, and would otherwise clobber their own theory-crafted
+  // draft with the table's moves, so they never see it either.
+  loadMovesBtn.hidden = isOwnerView() || !assignedPower();
   if (assignedPower()) {
     loadMovesBtn.title = 'Replace the box with your currently published orders, discarding local changes';
     // gated state (greyed out once the box already matches) is kept in
     // step with every keystroke by renderSubmitStatus(), not here
-  } else {
-    setGated(loadMovesBtn, null, "Fill the order box with every power's submitted moves for the current phase");
   }
   renderDeadlinePanel();
   renderSubmitStatus();
@@ -3229,7 +3205,6 @@ async function refreshOnlineStatus() {
     // the point: this is how a publish arriving mid-analysis is noticed.
     const boxIsLive = !inAnalysis();
     if (changed && boxIsLive) {
-      renderCountrySelect();
       prefillOrders(true);
       onOrdersChanged();
     }
@@ -3926,12 +3901,6 @@ async function init() {
   $('btn-revert-published').onclick = revertToPublished;
   $('btn-open-source').onclick = openBranchSource;
   $('btn-sync').onclick = doUpdatePublished;
-  $('country-select').onchange = () => {
-    liveGame.myCountry = $('country-select').value || null;
-    S.saveGame(liveGame);
-    prefillOrders(true);
-    onOrdersChanged();
-  };
   $('btn-submit-moves').onclick = doSubmitMoves;
   $('btn-load-moves').onclick = doLoadPublishedMoves;
   // btn-catch-up's onclick is set per-render by renderCatchUpButton() — it
@@ -4078,9 +4047,12 @@ async function init() {
   }, 60000);
 
   // the topbar countdown chip ticks every second on its own — far cheaper
-  // than a full renderOnlineUI(), and it's the one place a second matters
+  // than a full renderOnlineUI(), and it's the one place a second matters.
+  // Unlike the 60s tick above, this only touches the topbar chip itself, so
+  // it keeps running during a preview/replay — the deadline doesn't pause
+  // just because this browser is looking at a throwaway or historical board.
   setInterval(() => {
-    if (liveGame && liveGame.published && !playback && !inAnalysis()) updateDeadlineCountdown();
+    if (liveGame && liveGame.published && !inAnalysis()) updateDeadlineCountdown();
   }, 1000);
 
   renderHome();
