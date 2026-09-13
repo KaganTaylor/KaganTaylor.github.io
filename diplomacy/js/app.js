@@ -3003,6 +3003,15 @@ function closeSubmissionsModal() {
 // real gist comment under their own login, the same deadline rules as any
 // other player. Switching back to Game Master never touches or reverts a
 // submission; it's purely a change of which UI this browser shows.
+//
+// The one exception is an unconfirmed ▶ Resolve new orders! (game.
+// provisionalPhase, see resolveRevealedLocally()) — that advanced the real
+// liveGame object from only the on-time comments, with nobody having reviewed
+// it. Returning to Game Master rolls it back before boardDirty() ever sees
+// it: without this, the advanced board just looks like a normal GM edit
+// waiting to be pushed, and ☁ Publish changes would publish an unreviewed
+// resolution with one click, skipping gmPublishPreview() entirely (load,
+// resolve, review) and any late-resubmit grace. See DECISIONS.md.
 
 // Populates and shows/hides the Settings-menu "Play as" picker. Called from
 // refreshAll() so it stays in sync with published state and player
@@ -3020,15 +3029,31 @@ function renderPlayAsControls() {
 function setPlayAs(mode) {
   if (!liveGame) return;
   const toPlayer = mode === 'player';
+  if (!toPlayer && liveGame.provisionalPhase) {
+    S.undoLastPhase(liveGame);
+    liveGame.redoStack = [];
+    liveGame.provisionalPhase = null;
+  }
   liveGame.playAs = toPlayer ? 'player' : 'gm';
   S.saveGame(liveGame);
+  // Same power, same phase — just a different hat — so the box is worth
+  // preserving across it exactly as it is across entering/exiting a 🌿
+  // analysis line (see enterAnalysis()): park the full draft in liveDraft and
+  // let refreshAll()'s own liveDraft branch put it back once it has reset the
+  // box to the blank template. Without this, refreshAll()'s prefillOrders()
+  // wiped it on every round trip — a GM lost their loaded submissions, a
+  // player their unsent draft.
+  liveDraft = fullOrdersText();
   refreshAll();
   // Switching into playing your own power should surface your submitted
-  // orders the same way opening the game on a second device does. refreshAll()
-  // has just reset the box to the blank template, so re-arm the one-shot
-  // restore (an earlier GM-view poll never consumed it — assignedPower() was
-  // empty then) and fill the box from this phase's submission comment now,
-  // rather than leaving it blank until the next background poll.
+  // orders the same way opening the game on a second device does. The
+  // liveDraft restore above only brings back what this browser already had
+  // drafted — if that leaves the player's own block empty (nothing drafted
+  // yet this session), re-arm the one-shot restore (an earlier GM-view poll
+  // never consumed it — assignedPower() was empty then) and fill it from this
+  // phase's submission comment now, rather than leaving it blank until the
+  // next background poll. maybeRestoreSubmission() itself no-ops if the block
+  // already has real orders in it, so this never clobbers the restored draft.
   if (toPlayer) {
     online.restored = false;
     maybeRestoreSubmission();
