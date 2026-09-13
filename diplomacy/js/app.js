@@ -105,6 +105,8 @@ let autoPublishing = false;
 // The phase label autoPublishIfDue() has already told the GM it is standing
 // down on (nobody submitted anything). One notice per phase, not one a minute.
 let autoPublishIdleFor = null;
+// Guards resolveRevealedLocally() against a second click landing mid-refresh.
+let resolvingRevealedLocally = false;
 // Guards ensureMyMailbox() the same way — two refreshes close together (a load
 // followed by a 🔄, say) must not race each other into posting a second
 // mailbox comment before the first POST returns.
@@ -1500,16 +1502,38 @@ function localAutoResolveAvailable() {
 // plays it out — the player's optimistic advance ahead of the GM's real
 // publish. Marked provisional (game.provisionalPhase) so reconcileProvisional-
 // Phase() can defer to the gist once the GM's version lands. No gist writes.
-function resolveRevealedLocally() {
-  if (!localAutoResolveAvailable()) return;
-  const phase = O.currentPhase(liveGame);
-  const { text } = O.gatherPhaseBlocks(liveGame, online, 'ontime');
-  const parsed = parseOrders(text, livePhaseKind());
-  const entry = S.resolvePhase(liveGame, parsed.orders, text);
-  liveGame.provisionalPhase = phase;
-  S.saveGame(liveGame);
-  startPlayback(entry, false);
-  playback.catchUp = true;
+//
+// Refreshes online status first, always. `online.comments` in memory can
+// predate a submission that landed after this browser's last poll — a comment
+// posted seconds before the deadline is the common case, since that is when
+// most players actually submit. Resolving straight off a stale snapshot is
+// exactly the bug this guards: a power's on-time orders silently missing from
+// the board this browser computes, while the GM's real publish (which also
+// refreshes first, see autoPublishIfDue()) includes them and later overwrites
+// this browser's wrong provisional result the next time it syncs — but not
+// before the player has seen the wrong one. See DECISIONS.md.
+async function resolveRevealedLocally() {
+  if (!localAutoResolveAvailable() || resolvingRevealedLocally) return;
+  resolvingRevealedLocally = true;
+  try {
+    await refreshOnlineStatus();
+    // The refresh may have moved the goalposts: the gist could have advanced
+    // past us (catchUpTarget is now set instead), the GM could have published
+    // or changed the deadline/mode, or we may already hold a provisional phase
+    // from the render this triggered — re-check rather than trust the state
+    // from before the await.
+    if (!localAutoResolveAvailable()) return;
+    const phase = O.currentPhase(liveGame);
+    const { text } = O.gatherPhaseBlocks(liveGame, online, 'ontime');
+    const parsed = parseOrders(text, livePhaseKind());
+    const entry = S.resolvePhase(liveGame, parsed.orders, text);
+    liveGame.provisionalPhase = phase;
+    S.saveGame(liveGame);
+    startPlayback(entry, false);
+    playback.catchUp = true;
+  } finally {
+    resolvingRevealedLocally = false;
+  }
 }
 
 // Once the GM publishes the phase we optimistically resolved, defer to the
