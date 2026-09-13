@@ -3848,14 +3848,17 @@ async function init() {
   addEventListener('resize', updateSheetInset);
 
   // On a phone the Orders sheet opens onto three collapsible panels at once
-  // (History, Edit board, Builds/Orders) — closed by default so the sheet
-  // isn't a wall of headings the first time it's opened. This runs once, at
-  // load: a <details> keeps its own open/closed state after that exactly as
-  // it always has, so an option the user has expanded stays expanded.
+  // (History, Edit board, Builds/Orders) — History and Edit board start
+  // closed so the sheet isn't a wall of headings the first time it's opened,
+  // but Builds/Orders starts open since it's the reason the sheet was opened
+  // in the first place. This runs once, at load: a <details> keeps its own
+  // open/closed state after that exactly as it always has, so an option the
+  // user has (un)expanded stays that way.
   if (matchMedia('(max-width: 820px)').matches) {
-    for (const id of ['panel-history', 'edit-board-section', 'panel-orders']) {
+    for (const id of ['panel-history', 'edit-board-section']) {
       $(id).open = false;
     }
+    $('panel-orders').open = true;
   }
 
   // (?) buttons: click reveals the paragraph beside them, click again hides
