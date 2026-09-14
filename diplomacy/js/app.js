@@ -1361,9 +1361,13 @@ function previewResolve(toFinal, gmPublish = false) {
   const { orders, errors } = onOrdersChanged();
   if (errors.length) return toast('Fix the order problems first');
   const shadow = shadowGame();
-  const text = $('orders-text').value;
+  // Every power's orders, not just whatever the visible filter shows — this is
+  // what gmPublishPreview() commits verbatim, and what 🌿 Branch to analysis
+  // (pb-branch) re-resolves for real in a new line, so it must be the full set
+  // that was actually adjudicated, not the assigned player's own slice of it.
+  const text = fullOrdersText();
   const entry = S.resolvePhase(shadow, orders, text);
-  startPlayback(entry, true, shadow, gmPublish ? { orders, text } : null);
+  startPlayback(entry, true, shadow, { orders, text }, gmPublish);
   if (toFinal) continuePlayback();
 }
 
@@ -1514,6 +1518,23 @@ async function resolveRevealedLocally() {
   }
 }
 
+// The spectator equivalent of resolveRevealedLocally(): a spectator has no
+// ▶ Resolve new orders! button (renderCatchUpButton) and no submission of
+// their own riding on the outcome, so refreshOnlineStatus() just does this
+// for them the moment it's available — no click, no playback popping up
+// uninvited, straight to the position it lands on. Assumes online.comments is
+// already current (the caller just refreshed it), unlike resolveRevealedLocally.
+function resolveRevealedLocallySilently() {
+  if (!localAutoResolveAvailable()) return;
+  const phase = O.currentPhase(liveGame);
+  const { text } = O.gatherPhaseBlocks(liveGame, online, 'ontime');
+  const parsed = parseOrders(text, livePhaseKind());
+  S.resolvePhase(liveGame, parsed.orders, text);
+  liveGame.provisionalPhase = phase;
+  S.saveGame(liveGame);
+  refreshAll();
+}
+
 // Once the GM publishes the phase we optimistically resolved, defer to the
 // gist. Identical outcome → just clear the provisional flag. Divergent outcome
 // (GM used late-resubmit or amended) → roll our provisional phase back so the
@@ -1541,6 +1562,10 @@ function reconcileProvisionalPhase(g, fresh) {
 
 function renderCatchUpButton() {
   const btn = $('btn-catch-up');
+  // A spectator never sees this — syncViewerToGist() and
+  // resolveRevealedLocallySilently() keep their board current on their own,
+  // with no step for them to take. See DECISIONS.md.
+  if (R.gameMode(liveGame) === 'spectator') { btn.hidden = true; return; }
   if (catchUpTarget) {
     btn.hidden = false;
     const n = catchUpTarget.history.length - liveGame.history.length;
@@ -1558,16 +1583,19 @@ function renderCatchUpButton() {
 }
 
 // `preview` is the throwaway game the entry was resolved on (previewResolve);
-// null for a real resolution or a replay of a past turn. `gmPending`, when
-// set, marks this as the game master's real resolution-in-waiting for a
-// published game — {orders, text} it was resolved from, for gmPublishPreview()
-// to commit verbatim.
-function startPlayback(entry, readonly, preview = null, gmPending = null) {
+// null for a real resolution or a replay of a past turn. `pending`, when set,
+// is {orders, text} the preview was resolved from — kept for every preview
+// (not just a game master's) so 🌿 Branch to analysis (pb-branch) can
+// re-resolve the identical orders for real in a new line. `gmPublish` marks
+// the narrower case, the game master's real resolution-in-waiting for a
+// published game, which gmPublishPreview() commits verbatim from the same
+// pending orders.
+function startPlayback(entry, readonly, preview = null, pending = null, gmPublish = false) {
   playback = {
     entry, readonly, preview, orders: playbackOrders(entry), step: 0, animating: false,
-    gmPublish: !!gmPending,
-    pendingOrders: gmPending ? gmPending.orders : null,
-    pendingText: gmPending ? gmPending.text : null,
+    gmPublish,
+    pendingOrders: pending ? pending.orders : null,
+    pendingText: pending ? pending.text : null,
   };
   setOrderMode(null);
   // On mobile an open sheet shrinks the map to a strip (updateSheetInset), so
@@ -1581,11 +1609,13 @@ function startPlayback(entry, readonly, preview = null, gmPending = null) {
   $('panel-playback').hidden = false;
   $('panel-playback').classList.toggle('preview', !!preview);
   $('playback-title').textContent =
-    (preview ? '👁 Preview · ' : inAnalysis() ? '🌿 Analysis · ' : '') + entry.label;
-  // A preview still gets to watch the moves play out — it just lands on the
-  // final position instead of advancing the game (see continuePlayback).
-  $('pb-continue').hidden = readonly && !preview;
-  $('pb-continue').textContent = preview ? '▶ Play the moves' : 'Continue ➜';
+    (preview ? '👁 Preview · ' : readonly ? '↺ Replay · ' : inAnalysis() ? '🌿 Analysis · ' : '') + entry.label;
+  // A preview or a replay both still get to watch the moves play out — neither
+  // advances anything, they just land on the final position instead (see
+  // continuePlayback). Only a real resolve (live or catch-up) ends by moving
+  // the game forward.
+  $('pb-continue').hidden = false;
+  $('pb-continue').textContent = preview || readonly ? '▶ Play the moves' : 'Continue ➜';
   $('pb-branch').hidden = !preview;
   $('pb-back-current').hidden = !readonly;
   $('pb-back-current').textContent = preview ? '← Back to the live position' : 'Back to current turn';
@@ -1802,9 +1832,12 @@ function continuePlayback() {
   updatePlaybackFloat();
   board.animateFinal(pb.entry).then(() => {
     if (playback !== pb) return;
-    // a preview has no next phase to advance into — it stops on the position
-    // the orders would have produced, with 🌿 on hand to keep it
-    if (pb.preview) {
+    // A preview has no next phase to advance into, and a replay's phase
+    // already happened — both just stop on the final position instead of
+    // moving anything forward (a preview also gets 🌿 on hand to keep it).
+    // Only a real resolve (live, or catchUpNext/resolveRevealedLocally
+    // stepping through, both readonly:false) reaches endPlayback() here.
+    if (pb.preview || pb.readonly) {
       pb.animating = false;
       pb.step = finalStep();
       renderPlayback();
@@ -2495,6 +2528,32 @@ function copyCurrentToSandbox() {
     : S.phaseLabel(game));
 }
 
+// pb-branch, "🌿 Branch to analysis" — what previewing a turn ahead (👁 Preview
+// result) offers instead of 🧪 Keep as a sandbox, for exactly the audience a
+// preview is for: a read-only viewer (spectator or player) who cannot resolve
+// the live game for real. Analysis is the tool that already exists for trying
+// things out without committing — the disposable shadow game a preview
+// resolves onto (previewResolve/shadowGame) simply isn't needed as a second,
+// permanent copy of the same idea. Re-resolves the identical orders
+// (playback.pendingOrders/pendingText, stashed by previewResolve for every
+// preview) for real inside a brand-new line rooted at the live position, so
+// what results is an ordinary line — undo, redo, branch further, all of it —
+// rather than a one-off snapshot.
+function branchPreviewToAnalysis() {
+  if (!playback || !playback.preview) return;
+  const why = analysisUnavailableReason();
+  if (why) return toast(why);
+  const { pendingOrders: orders, pendingText: text } = playback;
+  playback = null;
+  enterAnalysis();
+  applyOrdersText(text || '');
+  const entry = S.resolvePhase(game, orders, text);
+  game.orders = '';
+  saveCurrent();
+  startPlayback(entry, false);
+  toast('🌿 Branched to analysis — the previewed orders are resolved there', 'info');
+}
+
 // ⚙ → ↩ Open source game. A sandbox copied off an online game should not
 // need a trip through the home screen to get back to the real one.
 function openBranchSource() {
@@ -3095,7 +3154,18 @@ function adoptPublishedPosition(g, fresh) {
 }
 
 // A read-only viewer's local board, reconciled against the gist on every
-// refresh. Three outcomes:
+// refresh.
+//
+// A spectator has no orders of their own riding on the position — stepping
+// them through catch-up exists to show a PLAYER how their own submission
+// turned out, and a spectator has none. So a spectator's board is simply
+// always the gist's board: whatever `fresh` says, adopted at once, silently,
+// whether that's the normal case of new phases on top of theirs or the game
+// master having undone/edited one. There is no "resolve new orders" step for
+// them to take — see DECISIONS.md.
+//
+// A player (assigned, or the game master 🎭 Playing as their own power) keeps
+// the three-way split that used to apply to every viewer:
 //   • The gist has phases we haven't seen, on top of the ones we have — the
 //     normal case. Flag it so ▶ Resolve new orders! walks the viewer through
 //     each one rather than teleporting them (see catchUpNext).
@@ -3115,6 +3185,7 @@ function syncViewerToGist(g, fresh) {
   // GM publishes; reconcileProvisionalPhase() owns that comparison.
   if (g.provisionalPhase) return;
   if (O.viewerPosition(g) === O.viewerPosition(fresh)) return;
+  if (R.gameMode(g) === 'spectator') return adoptPublishedPosition(g, fresh);
   if (O.extendsOurHistory(g, fresh)) {
     catchUpTarget = fresh;
     return;
@@ -3202,6 +3273,10 @@ async function refreshOnlineStatus() {
     // GM's real version.
     if (fresh && Array.isArray(fresh.history)) reconcileProvisionalPhase(g, fresh);
     if (fresh && isReadOnly() && Array.isArray(fresh.history)) syncViewerToGist(g, fresh);
+    // A spectator has no ▶ Resolve new orders! button for auto mode's optimistic
+    // reveal either (see resolveRevealedLocallySilently) — always up to date,
+    // no step of their own to take.
+    if (R.gameMode(g) === 'spectator') resolveRevealedLocallySilently();
     // The order box belongs to whatever is on screen, so while a line is open
     // nothing here may touch it — refilling it from the live game's phase, or
     // dropping the player's submitted orders into it, would quietly rewrite
@@ -3744,17 +3819,22 @@ async function loadPublishedGame(idOrUrl) {
       S.saveGame(local);
       return openGame(local);
     }
-    // A returning read-only viewer keeps the board they last saw — jumping
-    // straight to whatever the gist now holds would drop them onto a new
-    // position without ever showing them how it got there. Instead open the
-    // local copy as-is and let ▶ Resolve new orders! (see catchUpNext()) walk
-    // them through anything published since.
+    // A returning read-only viewer opens the local copy first — this is the
+    // one path that has a full fetched position in hand before openGame() has
+    // set up the screen at all — then reconciles it against what was just
+    // fetched exactly as refreshOnlineStatus() would (syncViewerToGist): a
+    // player is flagged for ▶ Resolve new orders! so they step through
+    // anything published since rather than being dropped on a new position
+    // unannounced; a spectator has no submission riding on the outcome and is
+    // just shown the current position directly, no step of their own to take.
+    // This used to duplicate that rule inline, and worse, with the simpler
+    // (length-only) check DECISIONS.md describes replacing in
+    // syncViewerToGist() — undone or edited history came back undetected here
+    // even after that fix landed, since this call site never went through it.
     if (!isOwner && local) {
       openGame(local);
-      if (Array.isArray(fetched.history) && fetched.history.length > local.history.length) {
-        catchUpTarget = fetched;
-        renderCatchUpButton();
-      }
+      if (Array.isArray(fetched.history)) syncViewerToGist(liveGame, fetched);
+      renderCatchUpButton();
       return;
     }
     const g = S.importGame(JSON.stringify(fetched));
@@ -3984,7 +4064,7 @@ async function init() {
   $('pb-continue').onclick = pbContinue;
   $('pb-back-current').onclick = endPlayback;
   $('pb-copy').onclick = copyResults;
-  $('pb-branch').onclick = copyCurrentToSandbox;
+  $('pb-branch').onclick = branchPreviewToAnalysis;
   // the floating on-map set drives the same playback as the sidebar's
   $('pbf-next').onclick = () => stepPlayback(1);
   $('pbf-prev').onclick = () => stepPlayback(-1);
