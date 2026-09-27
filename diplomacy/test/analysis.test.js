@@ -99,11 +99,12 @@ test('a tree of this version survives', () => {
 // 2. the branch rule
 // ---------------------------------------------------------------------------
 
-test('the first line is the Main line and starts at the root', () => {
+test('the first line is Current Position and starts at the root', () => {
   const g = live();
   const t = A.newTree(g);
   const n = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
-  assert.equal(n.name, 'Main line');
+  assert.equal(n.name, 'Current Position');
+  assert.equal(A.isRootLine(n), true);
   assert.equal(n.kind, 'line');
   assert.equal(A.positionKey(n.game), t.rootKey);
   assert.equal(n.from, null, 'nothing to be stale against');
@@ -127,6 +128,7 @@ test('branching at the start of a line makes a sibling', () => {
   assert.equal(sib.parent, main.parent, 'same level as the line it came from');
   assert.equal(A.positionKey(sib.game), t.rootKey);
   assert.deepEqual(A.childrenOf(t, null).map((n) => n.id), [main.id, sib.id]);
+  assert.equal(A.isRootLine(sib), false, 'only the entry line is the root');
 });
 
 test('branching at a later phase nests beneath that line', () => {
@@ -444,7 +446,7 @@ test('ensureEntry reopens the line left open, and rebuilds one if there is none'
   A.deleteNode(t, first);
   const fresh = A.ensureEntry(t, gameSettings(g));
   assert.notEqual(fresh, first);
-  assert.equal(A.getNode(t, fresh).name, 'Main line');
+  assert.equal(A.getNode(t, fresh).name, 'Current Position');
 });
 
 test('the entry line is the first one in display order, folders and all', () => {
@@ -463,6 +465,6 @@ test('lineLabel spells out the whole placement', () => {
   const t = A.newTree(g);
   const main = A.getNode(t, A.ensureEntry(t, gameSettings(g)));
   const f = A.groupSiblings(t, main.id, 'Plan A');
-  assert.equal(A.lineLabel(t, main.id), 'Plan A ▸ Main line');
+  assert.equal(A.lineLabel(t, main.id), 'Plan A ▸ Current Position');
   assert.equal(A.pathTo(t, main.id).map((n) => n.id).join(','), `${f.id},${main.id}`);
 });

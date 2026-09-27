@@ -195,6 +195,16 @@ export function isLine(g) {
   return !!(g && g.analysisOf);
 }
 
+// The one line with no `from` — the entry line ensureEntry creates at the
+// tree's root, "Current Position". Every other line is cut from something
+// (branchFrom always sets `from`), so lacking one is what marks this line as
+// the always-there place to branch from rather than a plan of its own. It
+// must never be resolved forward: app.js redirects a resolve on it into a
+// branch-then-resolve, so the current position stays put and re-branchable.
+export function isRootLine(node) {
+  return !!(node && node.kind === 'line' && !node.from);
+}
+
 export function getNode(tree, id) {
   const n = (tree && tree.nodes && id && tree.nodes[id]) || null;
   if (!n) return null;
@@ -253,7 +263,7 @@ export function descendantIds(tree, id) {
 
 export function defaultLineName(tree) {
   const n = lineCount(tree);
-  return n === 0 ? 'Main line' : `Variation ${n + 1}`;
+  return n === 0 ? 'Current Position' : `Variation ${n + 1}`;
 }
 
 export function defaultFolderName(tree) {
@@ -459,12 +469,13 @@ export function firstLine(tree) {
 }
 
 // The line to open when entering analysis: the one left open last time, else
-// the first in the tree, else a fresh Main line at the root. `activeId` always
-// names a LINE — a folder is organisation, never a position to put on a board.
+// the first in the tree, else a fresh 'Current Position' line at the root.
+// `activeId` always names a LINE — a folder is organisation, never a position
+// to put on a board.
 export function ensureEntry(tree, settings) {
   let n = getNode(tree, tree.activeId);
   if (!n || n.kind !== 'line') n = firstLine(tree);
-  if (!n) n = addLine(tree, { position: tree.root, name: 'Main line', settings });
+  if (!n) n = addLine(tree, { position: tree.root, name: 'Current Position', settings });
   tree.activeId = n.id;
   if (!getNode(tree, tree.selectedId)) tree.selectedId = n.id;
   return n.id;

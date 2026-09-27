@@ -227,12 +227,23 @@ The first cut modelled a phase as a node — my orders as a folder, their replie
 
 That leaves the tree to record only what a tree is for: **the places you decided differently**.
 
+### "Current Position" never resolves
+
+The entry line `ensureEntry()` creates when a tree is first opened is named **Current Position**, not the first idea in it — it is the one line guaranteed to always sit at `tree.root`, so there is always somewhere to `⑂ Branch` a fresh idea from without having to remember which of your lines, if any, never moved. It is identified structurally, not by name: `analysis.js isRootLine()` is true for exactly the one line with no `from` (every other line is cut from something, so `branchFrom` always gives it one).
+
+Because it exists to be a fixed place to branch from, it must never itself be resolved forward — a Current Position that had moved on would no longer be the current position. `app.js branchOffRootIfNeeded()` is the one choke point: every path that can resolve a line (`resolveCurrent`, `resolveAndSkip`, `branchPreviewToAnalysis`) calls it first, and on the root line it silently does what pressing `⑂ Branch` then Resolve would have done by hand — cut a line at the position on screen and switch `game` to point at that instead — before the resolve proceeds. The root line itself never gains history; its `game.orders` only ever holds a draft, carried into whatever gets branched off it next.
+
+### Saying which world you are in
+
+The `☁ Live | 🌿 Analysis` switch always reads **Analysis**, never the name of the open line. It used to carry the line's name (`🌿 Main line`, `🌿 Munich gambit`), but with a fixed **Current Position** line always present, the open line is "which one, of many" far more often than "the one idea so far" — and that is exactly the kind of detail worth a glance at the panel, not a race to fit in the topbar. The switch says which world you are in; the panel says which idea you are looking at.
+
 ### Where a branch lands is decided by the phase on screen
 
 ```
 🌿 Spring 1901 — Movement   (the live position)
+🔀 Current Position       from Spring 1901   ← the root line; never resolves, always here to branch from
 📁 Plan A
-├─ 🔀 Main line            from Spring 1901   ← five phases played inside it
+├─ 🔀 My best guess            from Spring 1901   ← five phases played inside it
 │   ├─ 🔀 Austria bounces me   from Fall 1901     ← branched at Fall 1901, so it nests
 │   └─ 🔀 Austria folds        from Fall 1901     ← same phase again, so it is parallel
 └─ 🔀 North first          from Spring 1901   ← branched at the start, so it is a sibling
@@ -283,7 +294,7 @@ That shipped once. `TREE_VERSION` is the fix: `rootMatches()` requires it, so a 
 A line is the only mode you can be in *by accident*, so it is the loudest:
 
 - the `☁ Live | 🌿 Analysis` **switch** in the topbar is a two-state segmented control, not a button — the lit half is where you are, so the switch is the indicator as well as the way out;
-- **the lit half carries the open line's name** — `🌿 Main line`, `🌿 Munich gambit` — so one control says both *which world am I in* and *which of my ideas is on the board*. There is deliberately no analysis mode chip and no breadcrumb beside it: an earlier version had the switch, a chip and a `Plan A ▸ Main line` path all saying the same thing, which is three places to keep in step and enough text to push the phase label off a phone;
+- **the lit half always reads "Analysis"**, never the open line's name (see *"Current Position" never resolves*, above) — which of your ideas is on the board is said by the panel, not the switch. There is deliberately no analysis mode chip and no breadcrumb beside it: an earlier version had the switch, a chip and a `Plan A ▸ Munich gambit` path all saying the same thing, which is three places to keep in step and enough text to push the phase label off a phone;
 - `data-mode="analysis"` turns the topbar stripe and the board ring **violet**, and the ring is thicker than the other modes';
 - every control that could reach the real game — 📤 Submit, ☁ Publish changes, the ● pill, ⏰ Deadline, 👥 Set players — is **gone**, not disabled. A line is a different place. ⤺ Undo / ⤻ Redo are the exception and are *kept*: inside a line they act on the line, and stepping a phase back is how you reach the position you want to branch from.
 

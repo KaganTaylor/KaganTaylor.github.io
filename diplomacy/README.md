@@ -107,7 +107,9 @@ A published game (a public GitHub gist) can collect each player's orders directl
 
 ## Analysis
 
-**🌿 Analysis** is a private tree of what-ifs hanging off the live game's current position — the thinking-ahead half of correspondence play, without the bookkeeping. The `☁ Live | 🌿 Analysis` switch in the topbar moves between the two: the lit half is always the one you're in, and in analysis it carries the name of the line you have open. The topbar stripe and the ring around the board turn violet with it. Everything that could touch the real game — 📤 Submit, ☁ Publish changes, ⏰ Deadline — disappears while you're in there.
+**🌿 Analysis** is a private tree of what-ifs hanging off the live game's current position — the thinking-ahead half of correspondence play, without the bookkeeping. The `☁ Live | 🌿 Analysis` switch in the topbar moves between the two: the lit half is always the one you're in, and always just reads "Analysis" — which line you have open is said by the panel below it, not the switch. The topbar stripe and the ring around the board turn violet with it. Everything that could touch the real game — 📤 Submit, ☁ Publish changes, ⏰ Deadline — disappears while you're in there.
+
+**"Current Position" is always there, and never moves.** The tree opens on a line named exactly that — the live position, kept that way on purpose so there is always somewhere to branch a fresh idea from. It cannot be resolved forward: pressing Resolve on it branches a new line at the phase you're looking at and resolves *that* instead, leaving Current Position exactly where it was.
 
 **A line is a game of its own.** Write orders for all seven powers, press **Resolve**, watch it play out, and keep going — as many phases ahead as you like. ⤺ Undo, ⤻ Redo and the History panel work inside a line exactly as they do in a sandbox, so you can step back through what you played and look at any earlier turn. Doing all of that stays **one line**: the tree only grows where you decide something differently.
 
@@ -116,14 +118,15 @@ A published game (a public GitHub gist) can collect each player's orders directl
 - at the **start** of the line you're in → a **sibling**, beside it
 - at any **later phase** of it → **nested beneath** it
 
-So: plan five phases ahead in the Main line, branch at Fall 1901 to try a different reply (it nests), then look at Fall 1901 again in that new line and branch a second time (it comes out parallel to the first).
+So: branch off Current Position into a line of your own, plan five phases ahead in it, branch at Fall 1901 to try a different reply (it nests), then look at Fall 1901 again in that new line and branch a second time (it comes out parallel to the first).
 
 **📁 Folder** groups the row you have selected and everything parallel to it — that's your "Plan A". Folders hold nothing but other rows: collapse them, rename them, and drag rows freely. Drop a row on the **middle** of another to nest it inside (a line or a folder, either way), on a row's **top or bottom edge** to place it above or below at that level, or on the **space below the tree** to bring it out to the top.
 
 ```
 🌿 Spring 1901 — Movement   (the live position)
+🔀 Current Position       from Spring 1901 — Movement   (never resolves — always here to branch from)
 📁 Plan A
-├─ 🔀 Main line            from Spring 1901 — Movement
+├─ 🔀 My best guess            from Spring 1901 — Movement
 │   ├─ 🔀 Austria bounces me   from Fall 1901 — Movement
 │   └─ 🔀 Austria folds        from Fall 1901 — Movement
 └─ 🔀 North first          from Spring 1901 — Movement

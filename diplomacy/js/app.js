@@ -461,14 +461,21 @@ function refreshAll() {
   // real action, so Resolve/Resolve to final are hidden outright for them.
   $('btn-resolve').hidden = isPlayer && !an;
   $('btn-resolve-final').hidden = isPlayer && !an;
+  // "Current Position" never resolves forward — it is the one line always
+  // guaranteed to sit at the live position, kept that way so there is always
+  // somewhere to branch a fresh idea from. Resolving on it branches first
+  // (branchOffRootIfNeeded) and resolves the new line instead.
+  const onRoot = an && A.isRootLine(A.getNode(tree(), game.nodeId));
   if (!isPlayer || an) {
-    $('btn-resolve').textContent = an ? 'Resolve this line' : ro ? '👁 Preview result' : 'Resolve';
-    $('btn-resolve').title = an
-      ? 'Play these orders out and continue the line from the position they produce'
-      : ro
-        ? 'Adjudicate the orders in the box on a throwaway copy — the published position is not touched'
-        : 'Resolve this phase and step through the results';
-    $('btn-resolve-final').textContent = ro ? '⏭ Preview to final' : '⏭ Resolve to final';
+    $('btn-resolve').textContent = onRoot ? '⑂ Branch and resolve' : an ? 'Resolve this line' : ro ? '👁 Preview result' : 'Resolve';
+    $('btn-resolve').title = onRoot
+      ? '“Current Position” always stays at the live position — this starts a new line here and resolves that instead'
+      : an
+        ? 'Play these orders out and continue the line from the position they produce'
+        : ro
+          ? 'Adjudicate the orders in the box on a throwaway copy — the published position is not touched'
+          : 'Resolve this phase and step through the results';
+    $('btn-resolve-final').textContent = ro ? '⏭ Preview to final' : onRoot ? '⑂ Branch and resolve to final' : '⏭ Resolve to final';
     $('btn-resolve').classList.toggle('primary', !ro);
   }
 
@@ -1327,6 +1334,7 @@ function resolveCurrent() {
   const { orders, errors } = onOrdersChanged();
   if (errors.length) return toast('Fix the order problems first');
   const text = $('orders-text').value;
+  if (inAnalysis() && !branchOffRootIfNeeded()) return;
   const entry = S.resolvePhase(game, orders, text);
   // A line's draft lives on its game object, so the phase it belonged to
   // taking it into history is also the moment to clear it — otherwise the next
@@ -1395,6 +1403,7 @@ async function resolveAndSkip() {
   const { orders, errors } = onOrdersChanged();
   if (errors.length) return toast('Fix the order problems first');
   const text = $('orders-text').value;
+  if (inAnalysis() && !branchOffRootIfNeeded()) return;
   const entry = S.resolvePhase(game, orders, text);
   if (inAnalysis()) game.orders = '';
   saveCurrent();
@@ -2220,6 +2229,32 @@ function branchLine() {
     : `⑂ ${node.name} — beside “${src.name}”, from ${node.from.label}`, 'info');
 }
 
+// "Current Position" (analysis.js isRootLine) never resolves forward — it is
+// the one place always guaranteed to sit at the live position, so there is
+// always somewhere to branch a new idea from. Resolving on it instead cuts a
+// new line at the current position and resolves there, leaving the root
+// exactly where it was. Returns false (having already said why) when the
+// resolve should not proceed at all.
+function branchOffRootIfNeeded(silent = false) {
+  const t = tree();
+  const active = A.getNode(t, game.nodeId);
+  if (!A.isRootLine(active)) return true;
+  if (!A.canBranch(t)) {
+    toast(`That is ${A.MAX_LINES} lines — delete one before branching again`);
+    return false;
+  }
+  persistLineOrders();
+  const i = viewedIndex();
+  const node = A.branchFrom(t, active.id, i, S.gameSettings(liveGame));
+  if (!node) return false;
+  flushLineSave();
+  openNode(node.id);
+  if (!silent) {
+    toast(`⑂ ${node.name} — “${active.name}” stays at the current position so you can branch again`, 'info');
+  }
+  return true;
+}
+
 // 📁 Folder. Takes the selected row's whole level with it (analysis.js
 // groupSiblings) — a folder that starts empty would be a folder that starts by
 // doing nothing.
@@ -2261,7 +2296,7 @@ function renderAnalysisUI() {
   $('ms-analysis').classList.toggle('on', an);
   $('ms-live').setAttribute('aria-pressed', String(!an && !gmActive));
   $('ms-analysis').setAttribute('aria-pressed', String(an));
-  $('ms-analysis').querySelector('.ms-label').textContent = active ? active.name : 'Analysis';
+  $('ms-analysis').querySelector('.ms-label').textContent = 'Analysis';
   setGated($('ms-analysis'), an ? null : why, active
     ? `${A.lineLabel(t, active.id)} — a private line off ${liveGame.name}, rooted at ${t.rootLabel}. ` +
       'Nothing here reaches the live game, and the whole tree is cleared when the live position moves on.'
@@ -2577,6 +2612,7 @@ function branchPreviewToAnalysis() {
   playback = null;
   enterAnalysis();
   applyOrdersText(text || '');
+  if (!branchOffRootIfNeeded(true)) return;
   const entry = S.resolvePhase(game, orders, text);
   game.orders = '';
   saveCurrent();
