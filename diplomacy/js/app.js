@@ -3097,6 +3097,12 @@ function setPlayAs(mode) {
     online.restored = false;
     maybeRestoreSubmission();
   }
+  // Switching back to GM is the one moment autoPublishIfDue() becomes
+  // eligible again (it's gated on isOwnerView()) — without kicking it here,
+  // a deadline that already passed while this browser sat in Player view
+  // would keep showing the old, un-rolled-forward state until the next 60s
+  // tick (js/app.js's setInterval) happened to land.
+  if (!toPlayer) autoPublishIfDue();
 }
 
 // "Set players" modal (⚙ Settings) — assigns the GitHub username for each
