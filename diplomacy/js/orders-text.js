@@ -120,6 +120,18 @@ export function defaultOrdersText(game) {
   return lines.join('\n');
 }
 
+// Whether this power has anything at all to order this phase — every power
+// with a unit always does in movement (holding is still an order), but
+// retreat and adjustment phases only ask something of the powers actually
+// dislodged or over/under their supply-center count. Drives whether
+// 📤 Submit orders is offered at all: submitting nothing when there was
+// nothing to submit is not a real action.
+export function powerHasOrdersDue(game, power) {
+  if (game.step === 'movement') return game.units.some((u) => u.power === power);
+  if (game.step === 'retreat') return game.pending.dislodged.some((d) => d.unit.power === power);
+  return !!adjustmentCounts(game)[power];
+}
+
 // Order text reduced to what the game actually cares about, so "have I changed
 // my orders since I submitted them?" ignores comments, spacing and case.
 export function normalizeOrders(text) {

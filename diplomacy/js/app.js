@@ -538,11 +538,10 @@ function refreshAll() {
 // game-state identity: which game am I in, and can I break it?
 // ---------------------------------------------------------------------------
 // Text for the ☁ Live side of the mode switch — what used to live in a
-// separate chip beside it. Keyed by R.gameMode(liveGame), which is never
-// 'analysis' (a line is never the live game itself).
+// separate chip beside it. Keyed by R.gameMode(liveGame); never 'gm' (that
+// state now has its own 👑 Game Master button, handled separately below) and
+// never 'analysis' (a line is never the live game itself).
 const LIVE_MODE_LABEL = {
-  gm: ['Live · 👑 GM',
-    "You run this published game. What you resolve here becomes the official position the moment you ☁ Publish changes."],
   spectator: ['Live · 👁 Watching',
     'A live view of a published game. Nothing you type, drag or resolve here can change it.'],
 };
@@ -563,6 +562,18 @@ function renderModeChip() {
     const power = assignedPower();
     liveLabel.textContent = `Live · ${POWER_FLAGS[power] || ''} ${cap(power)}`;
     $('ms-live').title = `You are playing ${cap(power)} in a published game. Orders here are a private draft until you 📤 Submit them; the board itself is the game master's to move.`;
+  } else if (liveMode === 'gm') {
+    // While running the game, ☁ Live names the country clicking it would
+    // switch into playing — the same power 👑 Game Master's own label would
+    // then take over from. No self-assignment, no country to offer.
+    const power = liveGame.assignedPower;
+    if (power) {
+      liveLabel.textContent = `Live · ${POWER_FLAGS[power] || ''} ${cap(power)}`;
+      $('ms-live').title = `Switch to playing ${cap(power)} yourself — a private draft and a real 📤 Submit, the same as any other player.`;
+    } else {
+      liveLabel.textContent = 'Live';
+      $('ms-live').title = 'Assign yourself a power in 👥 Set players to play alongside running the game';
+    }
   } else {
     const [text, title] = LIVE_MODE_LABEL[liveMode] || ['Live', 'The live game — the real position, orders and deadline'];
     liveLabel.textContent = text;
@@ -2233,15 +2244,29 @@ function renderAnalysisUI() {
   // also carries the open line's NAME, which is why there is no analysis mode
   // chip and no breadcrumb beside it: one control, saying both facts once.
   $('mode-switch').hidden = !available;
-  $('ms-live').classList.toggle('on', !an);
+  // 👑 Game Master only exists for the game's owner — a regular player or
+  // spectator gets the plain two-state ☁ Live / 🌿 Analysis switch this
+  // always was. See renderModeChip() for what ☁ Live's own label says in
+  // each of the three states.
+  const gmActive = !an && isOwnerView();
+  $('ms-gm').hidden = !(liveGame && liveGame.isOwner);
+  $('ms-gm').classList.toggle('on', gmActive);
+  $('ms-gm').setAttribute('aria-pressed', String(gmActive));
+  $('ms-live').classList.toggle('on', !an && !gmActive);
   $('ms-analysis').classList.toggle('on', an);
-  $('ms-live').setAttribute('aria-pressed', String(!an));
+  $('ms-live').setAttribute('aria-pressed', String(!an && !gmActive));
   $('ms-analysis').setAttribute('aria-pressed', String(an));
   $('ms-analysis').querySelector('.ms-label').textContent = active ? active.name : 'Analysis';
   setGated($('ms-analysis'), an ? null : why, active
     ? `${A.lineLabel(t, active.id)} — a private line off ${liveGame.name}, rooted at ${t.rootLabel}. ` +
       'Nothing here reaches the live game, and the whole tree is cleared when the live position moves on.'
     : 'Open a private tree of lines off this position');
+  // ☁ Live only does something for the game master when there is a country
+  // to switch into playing — greyed out, saying why, rather than silently
+  // doing nothing on click.
+  setGated($('ms-live'), (gmActive && !liveGame.assignedPower)
+    ? 'Assign yourself a power in 👥 Set players to play alongside running the game'
+    : null);
   // Only present on the mobile tab bar while a line is actually open — the
   // rest of the time it would be a tab into an empty panel.
   $('mtab-analysis').hidden = !an;
@@ -2649,8 +2674,13 @@ function renderOnlineUI() {
   if (document.activeElement !== $('autopublish-toggle')) {
     $('autopublish-toggle').checked = publishMode() === 'auto';
   }
-  $('btn-submit-moves').hidden = !assignedPower();
-  $('submit-status').hidden = !assignedPower();
+  // A retreat or adjustment phase only asks something of the powers actually
+  // dislodged or over/under their supply-center count — submitting nothing
+  // when there was nothing to submit is not a real action, so the button
+  // never appears for a power with no orders due this phase.
+  const ordersDue = !!assignedPower() && T.powerHasOrdersDue(liveGame, assignedPower());
+  $('btn-submit-moves').hidden = !ordersDue;
+  $('submit-status').hidden = !ordersDue;
   $('online-row').hidden = !hasPlayers;
   renderCatchUpButton();
   const loadMovesBtn = $('btn-load-moves');
@@ -3052,17 +3082,42 @@ function closeSubmissionsModal() {
 // resolution with one click, skipping gmPublishPreview() entirely (load,
 // resolve, review) and any late-resubmit grace. See DECISIONS.md.
 
-// Populates and shows/hides the Settings-menu "Play as" picker. Called from
+// Populates and shows/hides the Settings-menu country-swap picker. Visible
+// only while genuinely playing a country (a GM who has switched to their own
+// power, or any regular assigned player) AND the same GitHub login is
+// assigned to more than one country — with exactly one, the top-left ☁ Live
+// button already names it and there is nothing to choose between. Switching
+// Game Master ⇄ Live lives in the top-left switch itself now (setPlayAs(),
+// wired from ms-gm/ms-live) — this picker never touches that. Called from
 // refreshAll() so it stays in sync with published state and player
-// assignments (game.assignedPower is refreshed by refreshOnlineStatus()).
+// assignments (game.assignedPowers is refreshed by refreshOnlineStatus()).
 function renderPlayAsControls() {
   const row = $('play-as-row');
-  const canPlay = !!(liveGame && liveGame.published && liveGame.isOwner && liveGame.assignedPower);
-  row.hidden = !canPlay;
-  if (!canPlay) return;
+  const powers = (liveGame && liveGame.assignedPowers) || [];
+  const canSwap = !!(liveGame && liveGame.published && assignedPower() && powers.length > 1);
+  row.hidden = !canSwap;
+  if (!canSwap) return;
   const sel = $('play-as-select');
-  sel.options[1].textContent = `${POWER_FLAGS[liveGame.assignedPower] || ''} ${cap(liveGame.assignedPower)}`;
-  sel.value = isPlayingAsPlayer() ? 'player' : 'gm';
+  sel.innerHTML = powers
+    .map((p) => `<option value="${p}">${POWER_FLAGS[p] || ''} ${cap(p)}</option>`)
+    .join('');
+  sel.value = assignedPower();
+}
+
+// Swaps which of this login's several assigned countries is the active one —
+// updates the ☁ Live button's label and re-filters the order box, exactly
+// like setPlayAs()'s hat-switch, but never touches game.playAs: this is a
+// choice among countries, not between running the game and playing in it.
+function setActiveCountry(power) {
+  if (!liveGame || !(liveGame.assignedPowers || []).includes(power)) return;
+  if (liveGame.assignedPower === power) return;
+  liveGame.assignedPower = power;
+  liveGame.myCountry = power;
+  S.saveGame(liveGame);
+  liveDraft = fullOrdersText();
+  online.restored = false;
+  refreshAll();
+  maybeRestoreSubmission();
 }
 
 function setPlayAs(mode) {
@@ -3258,13 +3313,22 @@ async function refreshOnlineStatus() {
     }
     // Resolved for the owner too — that's what lets a GM who assigned
     // themselves a power in 👥 Set players genuinely 🎭 Play as that power.
-    let assigned = null;
+    // The same login can be assigned more than one country (👥 Set players
+    // puts no limit on it); every match is kept in assignedPowers so the
+    // Settings-menu country-swap picker (renderPlayAsControls) has the full
+    // list, while assignedPower stays the one currently active country.
+    const assignedList = [];
     if (login && g.players) {
       for (const [p, l] of Object.entries(g.players)) {
-        if (l && l.toLowerCase() === login.toLowerCase()) { assigned = p; break; }
+        if (l && l.toLowerCase() === login.toLowerCase()) assignedList.push(p);
       }
     }
+    // Keep a deliberate choice among several assigned countries if it is
+    // still valid; otherwise fall back to the first (the only real choice
+    // when there's exactly one, or none).
+    const assigned = assignedList.includes(g.assignedPower) ? g.assignedPower : (assignedList[0] || null);
     const changed = (g.assignedPower || null) !== assigned;
+    g.assignedPowers = assignedList;
     g.assignedPower = assigned;
     // snap to the assigned power on a NEW assignment only — after that the
     // player may deliberately switch to the all-countries view
@@ -4015,7 +4079,7 @@ async function init() {
   });
   $('btn-submissions').onclick = openSubmissionsModal;
   $('deadline-load-btn').onclick = gmLoadOrders;
-  $('play-as-select').onchange = (e) => setPlayAs(e.target.value);
+  $('play-as-select').onchange = (e) => setActiveCountry(e.target.value);
   $('submissions-modal-close').onclick = closeSubmissionsModal;
   $('submissions-modal').addEventListener('pointerdown', (e) => {
     if (e.target === $('submissions-modal')) closeSubmissionsModal();
@@ -4095,8 +4159,18 @@ async function init() {
   $('btn-redo').onclick = doRedoPhase;
   $('btn-copy-sandbox').onclick = copyCurrentToSandbox;
 
-  // 🌿 analysis
-  $('ms-live').onclick = exitAnalysis;
+  // ☁ Live / 👑 Game Master / 🌿 analysis — the top-left mode switch. Gating
+  // (no assigned power to switch into, or 🌿 unavailable) is enforced by
+  // setGated() in renderAnalysisUI(), which intercepts the click before it
+  // reaches these handlers, so nothing here needs to re-check that itself.
+  $('ms-gm').onclick = () => {
+    if (inAnalysis()) exitAnalysis();
+    if (isPlayingAsPlayer()) setPlayAs('gm');
+  };
+  $('ms-live').onclick = () => {
+    if (inAnalysis()) return exitAnalysis();
+    if (isOwnerView()) setPlayAs('player');
+  };
   $('ms-analysis').onclick = enterAnalysis;
   $('an-new-folder').onclick = newFolder;
   $('an-branch').onclick = branchLine;

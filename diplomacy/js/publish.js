@@ -57,7 +57,7 @@ export function stripForPublish(game) {
   // `analysis` is this browser's private 🌿 analysis tree (js/analysis.js) —
   // secret plans, and never part of the position.
   const {
-    gistId, gistUrl, published, isOwner, myCountry, assignedPower, publishedState,
+    gistId, gistUrl, published, isOwner, myCountry, assignedPower, assignedPowers, publishedState,
     branchedFrom, sandbox, provisionalPhase, playAs, analysis,
     ...rest
   } = game;

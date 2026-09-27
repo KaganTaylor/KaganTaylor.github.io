@@ -64,6 +64,8 @@
          names your role (game master / watching / the power you play),
          Analysis names the open line. -->
     <div id="mode-switch" role="group" aria-label="Live game or analysis" hidden>
+      <button id="ms-gm" class="ms-btn" aria-pressed="false" hidden
+              title="Run this published game as its master">👑 <span class="ms-label">Game Master</span></button>
       <button id="ms-live" class="ms-btn" aria-pressed="true"
               title="The live game — the real position, orders and deadline">☁ <span class="ms-label">Live</span></button>
       <button id="ms-analysis" class="ms-btn" aria-pressed="false"
@@ -102,12 +104,9 @@
         <button id="btn-export" title="Download this game as a JSON file">📤 Export</button>
         <button id="btn-set-players" hidden title="Assign each power to the GitHub username that will submit its moves">👥 Set players</button>
         <button id="btn-submissions" hidden title="See who's submitted and what's published for this phase — an edge-case check, not part of the normal flow">🔍 Submissions</button>
-        <div id="play-as-row" class="settings-toggle-row" hidden title="Switch between running the game as its master and playing your own assigned power">
-          <span>Play as</span>
-          <select id="play-as-select">
-            <option value="gm">👑 Game Master</option>
-            <option value="player">Player</option>
-          </select>
+        <div id="play-as-row" class="settings-toggle-row" hidden title="Switch which of your assigned countries you are playing — Game Master/Live is up in the top-left switch">
+          <span>Playing as</span>
+          <select id="play-as-select"></select>
         </div>
       </div>
     </div>
