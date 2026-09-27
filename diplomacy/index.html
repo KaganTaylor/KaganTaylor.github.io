@@ -67,11 +67,11 @@
       <button id="ms-gm" class="ms-btn" aria-pressed="false" hidden
               title="Run this published game as its master">👑 <span class="ms-label">Game Master</span></button>
       <button id="ms-live" class="ms-btn" aria-pressed="true"
-              title="The live game — the real position, orders and deadline"><span class="ms-label">Live</span></button>
+              title="The live game — the real position, orders and deadline"><span id="ms-live-icon" class="ms-icon"></span><span class="ms-label">Live</span></button>
       <button id="ms-analysis" class="ms-btn" aria-pressed="false"
               title="Open a private tree of lines off this position">🌿 <span class="ms-label">Analysis</span></button>
     </div>
-    <span id="game-name"></span>
+    <span id="game-name-wrap"><span id="game-cloud-icon" hidden>☁</span><span id="game-name"></span></span>
     <span id="phase-label"></span>
     <!-- the game master's local position has moved on from the shared link -->
     <button id="btn-sync" class="sync-pill" hidden><span class="sp-dot">●</span><span class="sp-text"></span></button>

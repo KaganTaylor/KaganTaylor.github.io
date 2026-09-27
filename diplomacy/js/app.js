@@ -427,10 +427,14 @@ function refreshAll() {
   // The topbar always names the REAL game, whichever line is open; which line
   // that is belongs to the mode chip, not to the game's identity. ☁ marks a
   // published game here (the mode switch itself no longer carries the icon —
-  // it just names the country/role you're looking at).
-  $('game-name').textContent = liveGame
-    ? (R.isOnline(liveGame) ? `☁ ${liveGame.name}` : liveGame.name)
-    : '';
+  // it just names the country/role you're looking at). It's a separate span
+  // from the name itself so fitTopbar() can drop it on its own — the lowest
+  // priority thing in the bar, below even the game's name.
+  // fitTopbar() decides the icon's actual on-screen visibility (it may drop
+  // it for space even when this is '1'); this dataset flag is what it resets
+  // to before measuring.
+  $('game-cloud-icon').dataset.online = (liveGame && R.isOnline(liveGame)) ? '1' : '';
+  $('game-name').textContent = liveGame ? liveGame.name : '';
   fitTopbar();
   $('phase-label').textContent = S.phaseLabel(game);
   board.setPhaseText(S.phaseLabel(game));
@@ -570,9 +574,17 @@ function renderModeChip() {
   }
   const liveMode = R.gameMode(liveGame);
   const liveLabel = $('ms-live').querySelector('.ms-label');
+  // The flag lives in its own span, outside .ms-label, so it survives the
+  // mobile rule that hides a mode-switch button's label text unless that
+  // button is the active one — see #ms-live-icon in style.css. A GM running
+  // the game still needs their own nation's flag on screen at a glance, and
+  // the flag is the one piece of this identity a cramped phone screen must
+  // never drop entirely.
+  const liveIcon = $('ms-live-icon');
   if (liveMode === 'player') {
     const power = assignedPower();
-    liveLabel.textContent = `${POWER_FLAGS[power] || ''} ${cap(power)}`;
+    liveIcon.textContent = POWER_FLAGS[power] || '';
+    liveLabel.textContent = cap(power);
     $('ms-live').title = `You are playing ${cap(power)} in a published game. Orders here are a private draft until you 📤 Submit them; the board itself is the game master's to move.`;
   } else if (liveMode === 'gm') {
     // While running the game, Live names the country clicking it would
@@ -580,14 +592,17 @@ function renderModeChip() {
     // then take over from. No self-assignment, no country to offer.
     const power = liveGame.assignedPower;
     if (power) {
-      liveLabel.textContent = `${POWER_FLAGS[power] || ''} ${cap(power)}`;
+      liveIcon.textContent = POWER_FLAGS[power] || '';
+      liveLabel.textContent = cap(power);
       $('ms-live').title = `Switch to playing ${cap(power)} yourself — a private draft and a real 📤 Submit, the same as any other player.`;
     } else {
+      liveIcon.textContent = '';
       liveLabel.textContent = 'Live';
       $('ms-live').title = 'Assign yourself a power in 👥 Set players to play alongside running the game';
     }
   } else {
     const [text, title] = LIVE_MODE_LABEL[liveMode] || ['Live', 'The live game — the real position, orders and deadline'];
+    liveIcon.textContent = '';
     liveLabel.textContent = text;
     $('ms-live').title = title;
   }
@@ -876,18 +891,23 @@ function selectOrderLine(unitProv) {
 // row, and ⚙ Settings must never be the one that loses — it would be pushed
 // off-screen and become unreachable. So when space is short, give things up
 // in priority order: the extra location detail (coast/star/occupant) goes
-// first, then the game's name entirely, while the location's base name and
-// ⚙ Settings itself are never touched.
+// first, then the ☁ published-game icon, then the game's name entirely —
+// while the location's base name, the mode-switch (and the flag on it) and
+// ⚙ Settings itself are never touched. Those are identity, not decoration.
 function fitTopbar() {
   const topbar = $('topbar');
   const gameName = $('game-name');
+  const cloud = $('game-cloud-icon');
   const extra = $('hover-info-extra');
-  if (!topbar || !gameName || !extra) return;
+  if (!topbar || !gameName || !cloud || !extra) return;
   gameName.hidden = false;
+  cloud.hidden = !cloud.dataset.online;
   extra.hidden = false;
   if (!matchMedia('(max-width: 820px)').matches) return;
   if (topbar.scrollWidth <= topbar.clientWidth) return;
   extra.hidden = true;
+  if (topbar.scrollWidth <= topbar.clientWidth) return;
+  cloud.hidden = true;
   if (topbar.scrollWidth <= topbar.clientWidth) return;
   gameName.hidden = true;
 }
@@ -2449,7 +2469,8 @@ function renderAnalysisTree() {
 
     const main = document.createElement('button');
     main.className = 'an-main';
-    const bits = [`<span class="an-icon">${isFolder ? '📁' : '🔀'}</span>`,
+    const lineIcon = isFolder ? '📁' : (A.isRootLine(n) ? '📍' : '🔀');
+    const bits = [`<span class="an-icon">${lineIcon}</span>`,
       `<span class="an-name">${escapeText(n.name)}</span>`];
     if (isFolder) {
       const inside = A.descendantIds(t, n.id).size;

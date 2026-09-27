@@ -125,6 +125,8 @@ a { color: #7fb4ff; }
   display: flex; align-items: center; gap: 14px;
   padding: 8px 12px; background: #22262e; border-bottom: 1px solid #3a4150;
 }
+#game-name-wrap { display: inline-flex; align-items: baseline; gap: 5px; min-width: 0; flex: none; }
+#game-cloud-icon { flex: none; }
 #game-name { font-weight: 600; flex: none; }
 #phase-label { color: #ffd479; font-weight: 600; flex: none; }
 #hover-info {
@@ -168,6 +170,9 @@ a { color: #7fb4ff; }
   border: none; border-radius: 0; padding: 3px 9px; font-size: 0.8em;
   min-height: 0; background: #262b33; color: #98a2b0;
 }
+/* Live's country flag, unlike 👑/🌿's static prefixes, is set dynamically and
+   can be empty — only reserve the gap when there is actually a flag in it. */
+#ms-live-icon:not(:empty) { margin-right: 4px; }
 #mode-switch .ms-btn + .ms-btn { border-left: 1px solid #454c58; }
 #mode-switch .ms-btn:hover { background: #2f353f; }
 #ms-gm.on { background: #3a2f18; color: #ffc46b; }
@@ -500,9 +505,12 @@ dialog.modal h2 { margin: 0 0 14px; font-size: 1.1rem; }
   #mode-switch .ms-btn { padding: 4px 8px; font-size: 0.9em; min-height: 0; }
   /* The game's name is the only thing here that can afford to lose room, so
      it is the only thing allowed to: everything else in the bar is flex: none
-     and would otherwise push ⚙ Settings off the right-hand edge between them. */
+     and would otherwise push ⚙ Settings off the right-hand edge between them.
+     The ☁ icon inside the wrap is lower priority still — fitTopbar() drops it
+     first, entirely, before it ever lets the name itself get cut. */
+  #game-name-wrap { flex: 1 1 auto; min-width: 0; }
   #game-name {
-    flex: 1 1 auto; min-width: 0;
+    min-width: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   /* …and even that is not enough room once the state chip and the ● pill are
