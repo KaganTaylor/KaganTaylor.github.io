@@ -425,8 +425,12 @@ function refreshAll() {
   const an = inAnalysis();
   $('game-screen').dataset.mode = gameMode();
   // The topbar always names the REAL game, whichever line is open; which line
-  // that is belongs to the mode chip, not to the game's identity.
-  $('game-name').textContent = liveGame ? liveGame.name : '';
+  // that is belongs to the mode chip, not to the game's identity. ☁ marks a
+  // published game here (the mode switch itself no longer carries the icon —
+  // it just names the country/role you're looking at).
+  $('game-name').textContent = liveGame
+    ? (R.isOnline(liveGame) ? `☁ ${liveGame.name}` : liveGame.name)
+    : '';
   fitTopbar();
   $('phase-label').textContent = S.phaseLabel(game);
   board.setPhaseText(S.phaseLabel(game));
@@ -537,12 +541,13 @@ function refreshAll() {
 // ---------------------------------------------------------------------------
 // game-state identity: which game am I in, and can I break it?
 // ---------------------------------------------------------------------------
-// Text for the ☁ Live side of the mode switch — what used to live in a
+// Text for the Live side of the mode switch — what used to live in a
 // separate chip beside it. Keyed by R.gameMode(liveGame); never 'gm' (that
 // state now has its own 👑 Game Master button, handled separately below) and
-// never 'analysis' (a line is never the live game itself).
+// never 'analysis' (a line is never the live game itself). The ☁ that used to
+// sit on this button now marks the game itself, next to its name.
 const LIVE_MODE_LABEL = {
-  spectator: ['Live · 👁 Watching',
+  spectator: ['👁 Watching',
     'A live view of a published game. Nothing you type, drag or resolve here can change it.'],
 };
 
@@ -560,15 +565,15 @@ function renderModeChip() {
   const liveLabel = $('ms-live').querySelector('.ms-label');
   if (liveMode === 'player') {
     const power = assignedPower();
-    liveLabel.textContent = `Live · ${POWER_FLAGS[power] || ''} ${cap(power)}`;
+    liveLabel.textContent = `${POWER_FLAGS[power] || ''} ${cap(power)}`;
     $('ms-live').title = `You are playing ${cap(power)} in a published game. Orders here are a private draft until you 📤 Submit them; the board itself is the game master's to move.`;
   } else if (liveMode === 'gm') {
-    // While running the game, ☁ Live names the country clicking it would
+    // While running the game, Live names the country clicking it would
     // switch into playing — the same power 👑 Game Master's own label would
     // then take over from. No self-assignment, no country to offer.
     const power = liveGame.assignedPower;
     if (power) {
-      liveLabel.textContent = `Live · ${POWER_FLAGS[power] || ''} ${cap(power)}`;
+      liveLabel.textContent = `${POWER_FLAGS[power] || ''} ${cap(power)}`;
       $('ms-live').title = `Switch to playing ${cap(power)} yourself — a private draft and a real 📤 Submit, the same as any other player.`;
     } else {
       liveLabel.textContent = 'Live';
