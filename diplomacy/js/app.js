@@ -3595,9 +3595,12 @@ async function gmLoadOrders() {
     // shows the full roster to fill in by hand, submissions or not.
     const blanks = T.splitOrdersByPower(defaultOrdersText());
     const { text, submitted } = O.gatherPhaseBlocks(liveGame, online, 'gm', blanks);
-    applyOrdersText(text);
+    // Open the box first, THEN fill it: refreshAll() resets the order box to
+    // the blank template (prefillOrders), so filling it before the refresh
+    // threw the loaded orders away while still toasting "Loaded N submissions".
     gmOrdersLoaded = true;
     refreshAll();
+    applyOrdersText(text);
     toast(
       submitted
         ? `Loaded ${submitted} submission${submitted === 1 ? '' : 's'} — resolve when ready`
