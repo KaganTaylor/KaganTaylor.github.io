@@ -1476,17 +1476,22 @@ function showInspector(p) {
   const owner = game.scOwners[base];
   const unitText = (x) => `${x.type === 'A' ? 'Army' : 'Fleet'} · ${cap(x.power)}`;
   const parts = [];
-  if (coast) parts.push(p);
   if (u) parts.push(unitText(u));
   if (d) parts.push(`dislodged: ${unitText(d.unit)}`);
   if (info.sc) parts.push(owner ? `supply centre of ${cap(owner)}` : 'neutral supply centre');
-  if (!u && !d && !info.sc) parts.push(owner ? cap(owner) : 'empty');
+  if (coast) parts.push(p);
   $('insp-title').textContent = provName(p) + (coast ? ` (${COAST_NAMES[coast] || coast})` : '') + (info.sc ? ' ★' : '');
   $('insp-sub').textContent = parts.join(' · ');
+  // The chip's fill and letter are whoever stands here; its border, on a
+  // supply centre, is whoever owns it — so an occupied enemy centre shows both
+  // powers at once. An empty owned centre is filled with its owner's colour.
   const shown = d ? d.unit : u;
+  const scOwner = info.sc ? owner : null;
   const chip = $('insp-chip');
   chip.textContent = shown ? shown.type : '';
-  chip.style.background = shown ? POWER_COLORS[shown.power] : '';
+  chip.style.background = shown ? POWER_COLORS[shown.power] : scOwner ? POWER_COLORS[scOwner] : '';
+  chip.style.borderColor = scOwner ? POWER_COLORS[scOwner] : '';
+  chip.classList.toggle('owned', !!scOwner);
   el.hidden = false;
 }
 
