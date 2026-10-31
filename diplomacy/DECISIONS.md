@@ -117,7 +117,7 @@ On a phone the topbar is a three-row grid rather than one flex row, because one 
 2. the **turn bar** — the deadline in words (open / final 24 h / closed / no deadline, which the old chip rendered identically as "Orders closed"), its closing time (previously only a `title`, unreachable by touch), the countdown, and your order count — plus **● Unpublished** beside it for the game master;
 3. the **standings strip** — supply centres per power, yours outlined.
 
-The tapped province no longer competes for any of them: it moves to `#inspector`, a card over the bottom of the map, shown only while something is tapped and never over a sheet, the board editor or a playback. Nothing else floats on the map — the old Support/Convoy toggles in its top-right corner are gone, and so is any "how to support" hint: the lit button in the bottom bar says which mode is on.
+The tapped province no longer competes for any of them: it moves to `#inspector`, a card over the bottom of the map, shown only while something is tapped and never over a sheet, the board editor or a playback. It has no ✕: tapping the selected province again clears it, except where that second tap is itself an order (a build or its cancellation, a disband, a convoy sea, a board edit) — `tapDeselects()` in app.js mirrors exactly what `onClick` acts on, and a double-tap (zoom reset) puts back a selection its first tap cleared. Nothing else floats on the map — the old Support/Convoy toggles in its top-right corner are gone, and so is any "how to support" hint: the lit button in the bottom bar says which mode is on.
 
 ---
 

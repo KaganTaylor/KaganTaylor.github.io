@@ -1066,6 +1066,29 @@ function attachBoardHandlers() {
       if (game.step === 'adjustment') return adjustmentClick(base, ev);
       if (unitAt(base)) selectOrderLine(base);
     },
+    // A second tap on the selected province clears the selection — unless
+    // that tap is an order as well, which must keep working on repeat: a
+    // convoy sea, a board edit, a disband of a dislodged unit, and a build,
+    // its cancellation or a disband in an adjustment phase. On a phone it also
+    // waits for the inspector: if a sheet or the editor hid it, the next tap
+    // brings it back rather than clearing a selection nobody can see.
+    tapDeselects(p) {
+      if (convoyPick || editMode) return false;
+      if (isMobile() && $('inspector').hidden) return false;
+      if (!game || playback) return true;
+      const base = prov(p);
+      if (game.step === 'retreat') return !dislodgedAt(base);
+      if (game.step === 'adjustment') {
+        // mirrors adjustmentClick(): a unit whose power owes disbands, or a
+        // home centre whose owner has builds to make
+        const counts = S.adjustmentCounts(game);
+        const u = unitAt(base);
+        if (u) return (counts[u.power] || 0) >= 0;
+        const owner = game.scOwners[base];
+        return !(owner && (counts[owner] || 0) > 0 && (S.HOME_CENTERS[owner] || []).includes(base));
+      }
+      return true;
+    },
     onHover(p) {
       if (!p || !game || !PROVINCES[prov(p)]) {
         $('hover-info-base').textContent = '';
@@ -1488,7 +1511,7 @@ function showInspector(p) {
   const shown = d ? d.unit : u;
   const scOwner = info.sc ? owner : null;
   const chip = $('insp-chip');
-  chip.textContent = shown ? shown.type : '';
+  chip.replaceChildren(...(shown ? [board.unitGlyph(shown.type)] : []));
   chip.style.background = shown ? POWER_COLORS[shown.power] : scOwner ? POWER_COLORS[scOwner] : '';
   chip.style.borderColor = scOwner ? POWER_COLORS[scOwner] : '';
   chip.classList.toggle('owned', !!scOwner);
@@ -4335,10 +4358,6 @@ async function init() {
   // a 🌿 line, the tree with it), the standings strip opens Standings.
   $('turn-bar').onclick = () => selectMobileSheet('orders');
   $('standings-strip').onclick = () => selectMobileSheet('standings');
-  $('insp-close').onclick = () => {
-    board.clearHover();
-    showInspector(null);
-  };
   // the sheet grows and shrinks with its contents (playback list, warnings…),
   // and the board pane's inset has to follow it
   new ResizeObserver(updateSheetInset).observe($('sidebar'));

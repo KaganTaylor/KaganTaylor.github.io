@@ -161,14 +161,13 @@
     <!-- Mobile only: the province you tapped, in full — name, coast, ★, unit
          and owner. A phone has no hover, and the topbar has no room for this,
          so it sits over the bottom of the map only while something is tapped.
-         See showInspector(). -->
+         Tapping the province again clears it. See showInspector(). -->
     <div id="inspector" hidden>
       <span id="insp-chip" aria-hidden="true"></span>
       <span id="insp-text">
         <span id="insp-title"></span>
         <span id="insp-sub"></span>
       </span>
-      <button id="insp-close" type="button" aria-label="Clear selection" title="Clear selection">✕</button>
     </div>
 
     <aside id="sidebar">

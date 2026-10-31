@@ -8,6 +8,8 @@
 //   onDrop(fromProv, toProv, event)
 //   onClick(prov, event)
 //   onHover(prov | null)
+//   tapDeselects(prov) -> bool   (may a second tap on the selected province
+//                                 clear it, or is that tap an order too?)
 // Dragging from a non-draggable province pans the (zoomed) board; the mouse
 // wheel zooms, double-click resets.
 
@@ -122,6 +124,7 @@ export class Board {
     this.layers = {};
     this.handlers = {};
     this._hovered = null;
+    this._tapped = null;
   }
 
   async load(container) {
@@ -564,6 +567,9 @@ export class Board {
       if (e.pointerType === 'touch') {
         const now = Date.now();
         if (lastTap && now - lastTap.time < 300 && ptDist(lastTap, { x: e.clientX, y: e.clientY }) < 30) {
+          // a double-tap is a zoom reset, not a deselect: if its first tap
+          // cleared the selection, put it back
+          if (lastTap.restore) this._select(lastTap.restore);
           lastTap = null;
           this.resetZoom();
           return;
@@ -660,11 +666,20 @@ export class Board {
       this._removeGhost();
       if (!d) return;
       if (!cancelled && !d.moved) {
-        // a tap/click highlights the province it landed on — on touch this is
-        // the only way to highlight one
-        this._setHover(d.from);
-        if (this.handlers.onHover) this.handlers.onHover(d.from);
-        if (d.from && this.handlers.onClick) this.handlers.onClick(d.from, e);
+        // A tap/click selects (highlights) the province it landed on — on
+        // touch the only way to highlight one. On touch, tapping the selected
+        // province again clears it instead, unless the app says that tap is an
+        // order too (a build, a disband, a convoy sea, an edit): then it stays
+        // selected and acts, exactly as before. A drag never gets here.
+        const again = e.pointerType === 'touch' && d.from &&
+          d.from === this._tapped && d.from === this._hovered;
+        if (again && (!this.handlers.tapDeselects || this.handlers.tapDeselects(d.from))) {
+          this._select(null);
+          if (lastTap) lastTap.restore = d.from;
+        } else {
+          this._select(d.from);
+          if (d.from && this.handlers.onClick) this.handlers.onClick(d.from, e);
+        }
       } else if (!cancelled && d.spec) {
         const to = this._provinceAtClient(e.clientX, e.clientY);
         if (to && this.handlers.onDrop) this.handlers.onDrop(d.from, to, e);
@@ -718,10 +733,28 @@ export class Board {
     }
   }
 
-  // Drops the highlight a tap left behind — the phone's province inspector
-  // has an ✕ for it, since on touch nothing else ever clears it.
-  clearHover() {
-    this._setHover(null);
+  // The tapped/clicked province: highlighted, and reported to the app (which
+  // shows it in the phone's inspector). `_tapped` remembers it apart from
+  // `_hovered`, which a mouse or a unit drag also moves, so that only a tap on
+  // the province actually selected counts as tapping it again.
+  _select(p) {
+    this._tapped = p;
+    this._setHover(p);
+    if (this.handlers.onHover) this.handlers.onHover(p);
+  }
+
+  // The army/fleet silhouette from the map's own unit symbol, as a standalone
+  // <svg> for use in HTML (the province inspector's chip): the black glyph
+  // only, without the symbol's rounded box — what it sits on supplies the
+  // power's colour, as the box does on the map.
+  unitGlyph(type) {
+    const s = document.createElementNS(SVGNS, 'svg');
+    s.setAttribute('viewBox', '1.5 1.5 20 10');
+    s.setAttribute('class', 'unit-glyph');
+    s.setAttribute('aria-hidden', 'true');
+    const g = this.svg && this.svg.querySelector(`#${type === 'F' ? 'Fleet' : 'Army'} > g > g`);
+    if (g) s.appendChild(g.cloneNode(true));
+    return s;
   }
 
   _setHover(p) {
