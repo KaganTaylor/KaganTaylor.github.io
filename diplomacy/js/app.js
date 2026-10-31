@@ -1,4 +1,4 @@
-import { Board, POWER_COLORS, ARROW_COLORS } from './render.js';
+import { Board, POWER_COLORS, ARROW_COLORS, UNIT_COLORS, LAND_COLOR, WATER_COLOR } from './render.js';
 import * as S from './state.js';
 import { parseOrders } from './parser.js';
 import {
@@ -21,7 +21,7 @@ import * as O from './online-rules.js';
 import * as A from './analysis.js';
 import {
   cap, provName, fmtLoc, fmtOrder, fmtCountdown, fmtCountdownDHMS, fmtWhen,
-  isoToLocalInput, COAST_NAMES, POWER_FLAGS,
+  isoToLocalInput, COAST_NAMES, POWER_FLAGS, POWER_ADJ,
 } from './format.js';
 import {
   getToken, setToken, publishGame, updatePublished, fetchPublished,
@@ -1497,23 +1497,24 @@ function showInspector(p) {
   const u = unitAt(base);
   const d = game.step === 'retreat' ? dislodgedAt(base) : null;
   const owner = game.scOwners[base];
-  const unitText = (x) => `${x.type === 'A' ? 'Army' : 'Fleet'} · ${cap(x.power)}`;
+  // "French Army · French Supply Centre" — the coast is already in the title
+  const unitText = (x) => `${POWER_ADJ[x.power]} ${x.type === 'A' ? 'Army' : 'Fleet'}`;
   const parts = [];
   if (u) parts.push(unitText(u));
-  if (d) parts.push(`dislodged: ${unitText(d.unit)}`);
-  if (info.sc) parts.push(owner ? `supply centre of ${cap(owner)}` : 'neutral supply centre');
-  if (coast) parts.push(p);
+  if (d) parts.push(`Dislodged ${unitText(d.unit)}`);
+  if (info.sc) parts.push(`${owner ? POWER_ADJ[owner] : 'Neutral'} Supply Centre`);
   $('insp-title').textContent = provName(p) + (coast ? ` (${COAST_NAMES[coast] || coast})` : '') + (info.sc ? ' ★' : '');
   $('insp-sub').textContent = parts.join(' · ');
-  // The chip's fill and letter are whoever stands here; its border, on a
-  // supply centre, is whoever owns it — so an occupied enemy centre shows both
-  // powers at once. An empty owned centre is filled with its owner's colour.
+  // The chip is the unit standing here, in the map's own unit colour; an empty
+  // province shows its terrain, sea or land. On a supply centre an outline is
+  // whoever owns it — so an occupied enemy centre shows both powers at once.
   const shown = d ? d.unit : u;
   const scOwner = info.sc ? owner : null;
   const chip = $('insp-chip');
   chip.replaceChildren(...(shown ? [board.unitGlyph(shown.type)] : []));
-  chip.style.background = shown ? POWER_COLORS[shown.power] : scOwner ? POWER_COLORS[scOwner] : '';
-  chip.style.borderColor = scOwner ? POWER_COLORS[scOwner] : '';
+  chip.style.background = shown ? UNIT_COLORS[shown.power]
+    : info.type === 'water' ? WATER_COLOR : LAND_COLOR;
+  chip.style.outlineColor = scOwner ? UNIT_COLORS[scOwner] : '';
   chip.classList.toggle('owned', !!scOwner);
   el.hidden = false;
 }

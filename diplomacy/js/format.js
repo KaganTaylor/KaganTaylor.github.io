@@ -21,6 +21,12 @@ export const POWER_FLAGS = {
   austria: '🇦🇹', russia: '🇷🇺', turkey: '🇹🇷',
 };
 
+// A power as an adjective — "French Army", "Turkish Supply Centre".
+export const POWER_ADJ = {
+  austria: 'Austrian', england: 'English', france: 'French', germany: 'German',
+  italy: 'Italian', russia: 'Russian', turkey: 'Turkish',
+};
+
 export function provName(p) {
   return PROVINCES[prov(p)] ? PROVINCES[prov(p)].name : p;
 }

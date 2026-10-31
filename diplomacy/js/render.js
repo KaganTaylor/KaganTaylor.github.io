@@ -36,10 +36,12 @@ export const POWER_COLORS = {
   turkey: '#957e00',
 };
 
-// Per-power colours used for order arrows — copied verbatim from the unit
-// fill colours in assets/standard.svg (.unit<power> rules) so an arrow reads
-// as exactly the same colour+opacity as the units it belongs to.
-export const ARROW_COLORS = {
+// Per-power unit colours — copied verbatim from the unit fill colours in
+// assets/standard.svg (.unit<power> rules). Anything that stands for a unit
+// off the map (the province inspector's chip) uses these, so it is the same
+// colour as the army/fleet box it describes. Not POWER_COLORS: those are the
+// ownership tints, a different palette.
+export const UNIT_COLORS = {
   austria: 'red',
   england: 'mediumpurple',
   france: 'deepskyblue',
@@ -48,6 +50,15 @@ export const ARROW_COLORS = {
   russia: 'white',
   turkey: 'yellow',
 };
+
+// Order arrows are drawn in the unit colours, so an arrow reads as exactly the
+// same colour+opacity as the units it belongs to.
+export const ARROW_COLORS = UNIT_COLORS;
+
+// The map's own terrain fills, from assets/standard.svg (.nopower and .water)
+// — what an empty province looks like under the ownership tint.
+export const LAND_COLOR = 'antiquewhite';
+export const WATER_COLOR = '#c5dfea';
 
 const arrowOpacity = () => 1.0;
 
