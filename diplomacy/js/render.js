@@ -789,15 +789,6 @@ export class Board {
     this._ghost = null;
   }
 
-  setPhaseText(s) {
-    const t = this.svg.querySelector('#CurrentPhase');
-    if (t) {
-      t.textContent = s;
-      t.setAttribute('x', '1810');
-      t.setAttribute('text-anchor', 'end');
-    }
-  }
-
   // ---- state rendering ----------------------------------------------------
 
   setInfluence(scOwners) {

@@ -440,7 +440,6 @@ function refreshAll() {
   // On a phone the phase sits under the name (#phase-label is hidden there).
   $('game-sub').textContent = (an ? 'Analysis · ' : '') + S.phaseLabel(game);
   $('phase-label').textContent = S.phaseLabel(game);
-  board.setPhaseText(S.phaseLabel(game));
   board.setInfluence(game.scOwners);
   board.setUnits(game.units, game.step === 'retreat' ? game.pending.dislodged : []);
   board.clearOrders();
@@ -1644,7 +1643,6 @@ async function resolveAndSkip() {
   mobileSheet = null;
   applyMobileSheetUI();
   board.clearOrders();
-  board.setPhaseText(entry.label);
   board.setInfluence(entry.scOwnersBefore);
   board.setUnits(entry.unitsBefore, entry.step === 'retreat' ? entry.dislodged : []);
   await board.animateFinal(entry);
@@ -2035,7 +2033,6 @@ function renderPlayback() {
   const { entry, step, orders } = playback;
   const isAdjustment = entry.step === 'adjustment';
   board.clearOrders();
-  board.setPhaseText(entry.label);
 
   if (step >= finalStep()) {
     board.setInfluence(entry.scOwnersAfter);

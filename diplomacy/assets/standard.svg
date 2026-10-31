@@ -402,7 +402,6 @@
         .labeltext18 {text-anchor:middle; stroke-width:0.1; stroke:black; fill:black; font-family:serif,sans-serif; font-style:italic; font-size:1.1em;}
         .currentnotetext {font-family:serif,sans-serif; font-size:1.5em; fill:black; stroke:black;}
         .currentnoterect {fill:#c5dfea;}
-        .currentphasetext {font-family:serif,sans-serif; font-size:2.5em; fill:black; stroke:black;}
 
         .labeltext24 text {cursor:default;}
 
@@ -848,9 +847,8 @@
          (IcelandBorderFix) that redrew the hidden stretch on top of it. With the box
          gone the real map geometry shows through — a continuous, even-width border
          and a fully-outlined Iceland, both picking up the normal hover highlight
-         (the patch, sitting above the hover layer, never did). Only CurrentPhase is
-         kept; the app repositions it to the bottom-right (see render.js). -->
-    <text x="1650" y="1325" class="currentphasetext" id="CurrentPhase">S1901M</text>
+         (the patch, sitting above the hover layer, never did). The CurrentPhase
+         text that remained went too: the phase is shown in the app's topbar. -->
 
     <g id="MouseLayer" class="invisibleContent" transform="translate(-195 -170)" >
         <g id="con">

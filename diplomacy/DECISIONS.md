@@ -169,7 +169,7 @@ A rule you can only discover by tripping over it is a bad rule. So the mode is o
 
 The home screen carries the same split: online games and sandboxes are separate labelled groups, each row tinted to match, each with its icon, the role you hold, the deadline countdown, and — for a copy — the game it came from. Analysis lines are deliberately absent from it; see below.
 
-On a phone the chip keeps its colour and icon and drops its words, and `#phase-label` is hidden outright. The topbar is a row of `flex: none` items and had no give left once the chip and the ● pill joined it; the phase label is the one thing in it that is already on screen twice, since `Board.setPhaseText()` prints the same string into the corner of the map. That protects the rule from the mobile-layout section: ⚙ Settings must never be what gets pushed off the edge.
+On a phone the chip keeps its colour and icon and drops its words, and `#phase-label` is hidden outright. The topbar is a row of `flex: none` items and had no give left once the chip and the ● pill joined it; the phase label is the one thing in it that is already on screen twice, since `#game-sub` prints the same string under the game name. (The map no longer carries the phase itself: jDip's `#CurrentPhase` text in the bottom-right corner was removed once the topbar showed it.) That protects the rule from the mobile-layout section: ⚙ Settings must never be what gets pushed off the edge.
 
 ---
 
