@@ -99,12 +99,15 @@ let online = { comments: null, moves: null, login: null, restored: false, server
 // ⬇ Load orders, and reset every time a load→resolve→publish cycle finishes
 // (or is abandoned by opening a different game). See gmLoadOrders().
 let gmOrdersLoaded = false;
-// Guards autoPublishIfDue() against overlapping runs from the 60s tick while
-// a previous auto-publish is still in flight.
+// Guards checkAutoDeadline()/gmResolveRevealed() against overlapping runs —
+// the 60s tick landing while a refresh or a publish is still in flight.
 let autoPublishing = false;
-// The phase label autoPublishIfDue() has already told the GM it is standing
+// The phase label checkAutoDeadline() has already told the GM it is standing
 // down on (nobody submitted anything). One notice per phase, not one a minute.
 let autoPublishIdleFor = null;
+// The phase label checkAutoDeadline() has already told the GM is ready for
+// ▶ Resolve new orders! — same one-notice-per-phase rule.
+let gmResolveNoticeFor = null;
 // Guards resolveRevealedLocally() against a second click landing mid-refresh.
 let resolvingRevealedLocally = false;
 // Guards ensureMyMailbox() the same way — two refreshes close together (a load
@@ -1517,9 +1520,10 @@ function catchUpNext() {
 // resolved this phase.
 function localAutoResolveAvailable() {
   if (!liveGame || !liveGame.published || playback || catchUpTarget) return false;
-  // owner drives the real resolution (manual publish / autoPublishIfDue) — this
-  // optimistic local advance is for read-only players/spectators only.
-  if (!isReadOnly()) return false;
+  // This optimistic local advance is for read-only players/spectators only.
+  // The game master's own browser — in either hat — gets the authoritative
+  // twin instead, gmResolveRevealed(), which publishes what it resolves.
+  if (!isReadOnly() || liveGame.isOwner) return false;
   if (publishMode() !== 'auto' || !deadlinePassed()) return false;
   if (liveGame.provisionalPhase && matchesPhase(liveGame.provisionalPhase)) return false;
   return activePowers().some((p) => revealedEntry(p));
@@ -1536,7 +1540,7 @@ function localAutoResolveAvailable() {
 // most players actually submit. Resolving straight off a stale snapshot is
 // exactly the bug this guards: a power's on-time orders silently missing from
 // the board this browser computes, while the GM's real publish (which also
-// refreshes first, see autoPublishIfDue()) includes them and later overwrites
+// refreshes first, see gmResolveRevealed()) includes them and later overwrites
 // this browser's wrong provisional result the next time it syncs — but not
 // before the player has seen the wrong one. See DECISIONS.md.
 async function resolveRevealedLocally() {
@@ -1560,6 +1564,67 @@ async function resolveRevealedLocally() {
     playback.catchUp = true;
   } finally {
     resolvingRevealedLocally = false;
+  }
+}
+
+// Auto mode, the game master's own browser: the deadline for the phase on the
+// table has passed and the on-time submissions are revealed. Rather than the
+// board jumping forward on its own, the GM gets the same ▶ Resolve new orders!
+// a player does — in 👑 Game Master view in the ⏰ Deadline panel, in 🧑 Player
+// view in its usual place in Orders — and gmResolveRevealed() steps them
+// through it. Offered in both hats on purpose: it is one authoritative path,
+// so there is no second, optimistic one left in this browser for it to collide
+// with (DECISIONS.md, "The game master resolves an auto phase by stepping
+// through it").
+//
+// `gmResolveDue()` is the phase-level test, re-checked after the refresh;
+// `gmResolveAvailable()` adds "nothing else is in the way right now".
+function gmResolveDue() {
+  if (!liveGame || !liveGame.published || !liveGame.isOwner || inAnalysis()) return false;
+  // A board advanced by an old optimistic resolve (from before this path
+  // existed) is not ours to publish; setPlayAs() rolls it back on the way in.
+  if (liveGame.provisionalPhase) return false;
+  return publishMode() === 'auto' && deadlineIsForCurrentPhase() && deadlinePassed();
+}
+
+function gmResolveAvailable() {
+  if (playback || catchUpTarget || autoPublishing || !gmResolveDue()) return false;
+  return activePowers().some((p) => revealedEntry(p));
+}
+
+// The GM's ▶ Resolve new orders!: refresh, resolve the on-time submissions for
+// real, publish, then play the phase out exactly like a player's catch-up. It
+// publishes *first* and steps through afterwards, so the gist is right the
+// moment the click lands: closing the tab mid-step-through, or switching to
+// 🧑 Player, leaves nothing half-done — the board already matches the gist, so
+// the player view has no ▶ Resolve new orders! of its own to offer.
+async function gmResolveRevealed() {
+  if (!gmResolveAvailable()) return;
+  autoPublishing = true;
+  renderOnlineUI();
+  try {
+    // Refresh first, always — a submission posted seconds before the deadline
+    // may postdate this browser's last poll (see resolveRevealedLocally()).
+    await refreshOnlineStatus();
+    if (!online.comments) return toast('Could not reach GitHub to read the submissions — check your connection and try again');
+    // The refresh re-reads deadline/deadlineFor/publishMode from the gist —
+    // re-test rather than trust the state from before the await.
+    if (playback || catchUpTarget || !gmResolveDue()) return;
+    const { text, submitted } = O.gatherPhaseBlocks(liveGame, online, 'ontime');
+    if (!submitted) return toast('No on-time orders to resolve — ⬇ Load orders in ⏰ Deadline to resolve the phase by hand');
+    const parsed = parseOrders(text, livePhaseKind());
+    const entry = await publishResolvedPhase(parsed.orders, text);
+    autoPublishIdleFor = null;
+    gmResolveNoticeFor = null;
+    startPlayback(entry, false);
+    playback.catchUp = true;
+    toast(`Published ${entry.label} — step through it, then confirm the next deadline`, 'info');
+  } catch (e) {
+    toast('Publish failed: ' + e.message);
+    if (isAuthError(e)) askToken();
+  } finally {
+    autoPublishing = false;
+    if (!playback) refreshAll();
   }
 }
 
@@ -1622,6 +1687,15 @@ function renderCatchUpButton() {
     btn.hidden = false;
     btn.textContent = '▶ Resolve new orders!';
     btn.onclick = resolveRevealedLocally;
+    return;
+  }
+  // The game master in 🧑 Player view. In 👑 Game Master view this panel is
+  // hidden, and the ⏰ Deadline panel's own copy of the button is the one on
+  // screen (renderDeadlinePanel).
+  if (gmResolveAvailable()) {
+    btn.hidden = false;
+    btn.textContent = '▶ Resolve new orders!';
+    btn.onclick = gmResolveRevealed;
     return;
   }
   btn.hidden = true;
@@ -2154,7 +2228,7 @@ function analysisUnavailableReason() {
     const n = catchUpTarget.history.length - liveGame.history.length;
     return `${n} new phase${n === 1 ? '' : 's'} to resolve first — ▶ Resolve new orders!, and analysis reopens from the new position`;
   }
-  if (localAutoResolveAvailable()) {
+  if (localAutoResolveAvailable() || gmResolveAvailable()) {
     return 'New orders are ready to resolve — ▶ Resolve new orders! first, and analysis reopens from the new position';
   }
   return null;
@@ -2859,12 +2933,13 @@ function renderSubmitStatus() {
 // game.json). When it passes, submissions close; what happens next depends
 // on publishMode() — instant reveal, or GM review first.
 // The ⏰ Deadline panel is the game master's entire publish flow, and the two
-// modes want different controls in it. In auto mode autoPublishIfDue() resolves
-// and publishes the phase on its own; leaving ⬇ Load orders on screen beside it
-// offered a second, competing way to advance the same board from the same
-// browser — the exact shape of the collision DECISIONS.md records under "A
-// deadline belongs to a phase, not to a clock". So only one of the two paths is
-// ever shown, and the panel says in words which one is live.
+// modes want different controls in it. In auto mode the way forward is
+// ▶ Resolve new orders! (gmResolveRevealed), which appears here once the
+// deadline passes; leaving ⬇ Load orders on screen beside it would offer a
+// second, competing way to advance the same board from the same browser — the
+// exact shape of the collision DECISIONS.md records under "A deadline belongs
+// to a phase, not to a clock". So only one of the two paths is ever shown, and
+// the panel says in words which one is live.
 //
 // Auto mode gets ⬇ Load orders back in the one case where auto-publish has
 // stood down and cannot pick the phase up: nobody submitted (autoPublishIdleFor).
@@ -2882,6 +2957,7 @@ function renderDeadlinePanel() {
   const manualWaiting = !auto && !!liveGame.deadline && !deadlinePassed();
   status.hidden = !(auto || manualWaiting);
   status.classList.toggle('past', stoodDown);
+  const resolveReady = auto && gmResolveAvailable();
   if (auto) {
     status.textContent = stoodDown
       ? `⚠ Nobody submitted for ${S.phaseLabel(liveGame)} — auto-publish stood down. Load the orders yourself below, or confirm a new deadline to re-open submissions.`
@@ -2889,12 +2965,17 @@ function renderDeadlinePanel() {
         ? '⚙ Publishing…'
         : !liveGame.deadline
           ? '⏳ No deadline set — nothing publishes until you confirm one.'
-          : deadlinePassed()
-            ? '⏳ Deadline passed — publishing on the next check, within a minute.'
-            : '⏳ Waiting for the deadline.';
+          : resolveReady
+            ? '✅ Deadline passed — the players can already see the results. Step through them yourself to publish:'
+            : deadlinePassed()
+              ? '⏳ Deadline passed — checking the submissions…'
+              : '⏳ Waiting for the deadline.';
   } else if (manualWaiting) {
     status.textContent = '⏳ Waiting for the deadline.';
   }
+  const resolveBtn = $('deadline-resolve-btn');
+  resolveBtn.hidden = !resolveReady;
+  resolveBtn.onclick = gmResolveRevealed;
 
   $('deadline-manual-row').hidden = auto && !stoodDown;
   const loadBtn = $('deadline-load-btn');
@@ -2936,12 +3017,11 @@ function renderDeadlineInfo() {
     // hidden behind gmGated until they ⬇ Load orders, so the isOwnerView()
     // case here only ever shows to the GM in the brief window after loading.
     // A game master sitting in 🧑 Player view sees this line and not the
-    // ⏰ Deadline panel (which is gated on isOwnerView()), so it is the only
-    // place their own suspended auto-publish can be said out loud — see
-    // autoPublishIfDue()'s known limitation.
+    // ⏰ Deadline panel (which is gated on isOwnerView()), so it is the one
+    // place to say that their ▶ Resolve new orders! publishes for real.
     el.textContent =
       isPlayingAsPlayer() && publishMode() === 'auto'
-        ? `⏰ Deadline passed (${when}) — ⚡ auto-publish is paused while you're in 🧑 Player view. Switch to 👑 Game Master (⚙ Settings → 🎭 Play as) to publish.`
+        ? `⏰ Deadline passed (${when}) — ▶ Resolve new orders! steps you through the results and publishes them.`
         : publishMode() === 'auto'
           ? `⏰ Deadline passed (${when}) — all submissions are revealed. ⬇ Load them, then Resolve to preview the result`
           : isOwnerView()
@@ -3143,6 +3223,11 @@ function closeSubmissionsModal() {
 // waiting to be pushed, and ☁ Publish changes would publish an unreviewed
 // resolution with one click, skipping gmPublishPreview() entirely (load,
 // resolve, review) and any late-resubmit grace. See DECISIONS.md.
+//
+// The GM's browser no longer makes provisional phases at all — its ▶ Resolve
+// new orders! is the authoritative gmResolveRevealed() in either hat — so this
+// only ever meets one left over from an older version. It is rolled back on
+// any switch, in either direction, since neither hat can do anything with it.
 
 // Populates and shows/hides the Settings-menu country-swap picker. Visible
 // only while genuinely playing a country (a GM who has switched to their own
@@ -3185,7 +3270,7 @@ function setActiveCountry(power) {
 function setPlayAs(mode) {
   if (!liveGame) return;
   const toPlayer = mode === 'player';
-  if (!toPlayer && liveGame.provisionalPhase) {
+  if (liveGame.provisionalPhase) {
     S.undoLastPhase(liveGame);
     liveGame.redoStack = [];
     liveGame.provisionalPhase = null;
@@ -3214,12 +3299,10 @@ function setPlayAs(mode) {
     online.restored = false;
     maybeRestoreSubmission();
   }
-  // Switching back to GM is the one moment autoPublishIfDue() becomes
-  // eligible again (it's gated on isOwnerView()) — without kicking it here,
-  // a deadline that already passed while this browser sat in Player view
-  // would keep showing the old, un-rolled-forward state until the next 60s
-  // tick (js/app.js's setInterval) happened to land.
-  if (!toPlayer) autoPublishIfDue();
+  // Either hat offers the GM's ▶ Resolve new orders! once a deadline has
+  // passed — check now rather than waiting for the next 60s tick, so the
+  // button is there the moment the switch lands.
+  checkAutoDeadline();
 }
 
 // "Set players" modal (⚙ Settings) — assigns the GitHub username for each
@@ -3575,7 +3658,7 @@ async function doLoadPublishedMoves() {
 // hatch that lets the GM skip the game forward on an empty box and type
 // orders in by hand. Loading never publishes anything by itself.
 //
-// Refreshes first, always — the same rule autoPublishIfDue() and a player's
+// Refreshes first, always — the same rule gmResolveRevealed() and a player's
 // resolveRevealedLocally() follow. Nothing polls the network on a timer, so
 // online.comments is as old as the GM's last explicit refresh, which for a GM
 // who opened the game before the deadline and left the tab open is from before
@@ -3719,65 +3802,45 @@ async function gmPublishPreview() {
   }
 }
 
-// Auto-publish mode's whole point: no GM action required. Runs off the 60s
-// online-status tick (only in the GM's own browser — only it can advance the
-// game) and, once the deadline for the phase on the table has passed, loads
-// on-time submissions, resolves and publishes exactly like gmPublishPreview()
-// would, skipping the step-through UI entirely.
+// Auto mode, the game master's own browser: notices the deadline for the phase
+// on the table passing and gets the submissions ready for ▶ Resolve new
+// orders! (gmResolveRevealed). Runs off the 60s tick and on a 🎭 Play as
+// switch. It never resolves or publishes anything itself.
 //
-// Gated on isOwnerView(), so it stands down entirely while the GM is 🎭
-// Playing as their own power. This was once the raw game.isOwner fact, on the
-// reasoning that play-as is a view change rather than a different browser and
-// auto-publish should not care — but in that mode the GM is *also* offered the
-// player-side ▶ Resolve new orders! button, and the two paths ran into each
-// other: the button advanced the board optimistically (no gist write, deadline
-// untouched, by design) and this function then published the following phase
-// off the same expired deadline, all-hold, with nobody having ordered. The two
-// cannot share a browser, so the view decides which one is live: playing your
-// power gives you the player's optimistic resolve, running the game gives you
-// auto-publish. Switch back to the GM view (⚙ Settings → 🎭 Play as) and the
-// next tick publishes as normal.
+// It used to: once the deadline passed, it loaded the on-time submissions,
+// resolved and published on its own. That made the game master the one person
+// at the table who never got to watch a phase play out — open the game after
+// a deadline and the board had already jumped. Now the GM steps through it
+// like everyone else, and the step-through is what publishes. Nothing is lost
+// by waiting for that click: every player's browser reveals and resolves the
+// phase for itself the moment the deadline passes (resolveRevealedLocally),
+// and the next phase cannot open until the GM confirms a new deadline anyway.
 //
-// KNOWN LIMITATION, deliberately accepted for now: a GM who leaves their
-// browser in 🧑 Player mode therefore never auto-publishes at all, and has to
-// change hats (or ☁ Publish changes) when a deadline falls due. Nothing is
-// lost when they don't — the deadline and its stamp stay put — but for a GM
-// playing their own power, which is the common case, this is a worse deal than
-// before. Publishing without ever entering the GM view is expected to come
-// back; the fix is NOT to re-widen this gate to raw game.isOwner (that is the
-// collision described above) but to make the authoritative publish resolve the
-// phase named by deadlineFor rather than whatever phase is on the table, or to
-// let a GM's own resolveRevealedLocally() confirm and publish what it resolved.
-// See DECISIONS.md, "A deadline belongs to a phase, not to a clock".
+// Runs in either hat. The old collision — the player-side optimistic resolve
+// advancing the board, then auto-publish publishing the next phase off the
+// same expired deadline — needed two ways to advance one board in one
+// browser. The GM's browser now has only the authoritative one
+// (localAutoResolveAvailable() excludes the owner), so there is nothing for
+// this to collide with. See DECISIONS.md.
 //
-// It also stands down while a preview is open (`playback`), so it never yanks
-// the board out from under one.
-async function autoPublishIfDue() {
-  if (!liveGame || !liveGame.published || !isOwnerView() || playback || autoPublishing) return;
-  if (publishMode() !== 'auto') return;
-  if (!deadlineIsForCurrentPhase() || !deadlinePassed()) return;
-  // The board came from an optimistic local resolve that no GM has confirmed
-  // (a play-as session earlier in this browser). Its phase is not ours to
-  // publish — belt and braces for games too old to carry a deadlineFor stamp.
-  if (liveGame.provisionalPhase) return;
+// When nobody submitted at all it stands down and says so once (an
+// unattended whole-board all-hold is never a plausible turn): ⬇ Load orders
+// comes back in ⏰ Deadline for the GM to resolve it by hand.
+async function checkAutoDeadline() {
+  if (!liveGame || !liveGame.published || !liveGame.isOwner || playback || autoPublishing) return;
+  if (!gmResolveDue()) return;
+  // Already offered for this phase — no need to keep re-reading the gist
+  // every minute while the GM is away from the screen.
+  const label = S.phaseLabel(liveGame);
+  if (gmResolveNoticeFor === label && gmResolveAvailable()) return;
   autoPublishing = true;
   try {
+    // online.comments may predate the submissions that landed in the final
+    // minutes, which is when most players actually submit.
     await refreshOnlineStatus();
-    // refreshOnlineStatus() re-reads deadline/deadlineFor/publishMode from the
-    // gist (it is authoritative for all three), so re-test before committing
-    // to a resolution — the GM may have moved the deadline from another device
-    // in the moments since the gate above.
-    if (publishMode() !== 'auto' || !deadlineIsForCurrentPhase() || !deadlinePassed()) return;
-    const { text, submitted } = O.gatherPhaseBlocks(liveGame, online, 'ontime');
-    // Not one power submitted anything readable and on time. Resolving that is
-    // a whole-board all-hold nobody asked for — never a result worth committing
-    // unattended, and the shape every "the deadline outlived its phase" bug
-    // takes. Stand down and leave it to the GM. Note this counts *submissions*,
-    // not orders: a power that deliberately submits nothing but holds has a
-    // non-empty block and counts, which is the (rare, legal) all-hold phase
-    // players actually chose.
+    if (!online.comments || !gmResolveDue()) return;
+    const { submitted } = O.gatherPhaseBlocks(liveGame, online, 'ontime');
     if (!submitted) {
-      const label = S.phaseLabel(liveGame);
       if (autoPublishIdleFor !== label) {
         autoPublishIdleFor = label;
         toast(
@@ -3787,15 +3850,16 @@ async function autoPublishIfDue() {
       }
       return;
     }
-    const parsed = parseOrders(text, livePhaseKind());
-    const entry = await publishResolvedPhase(parsed.orders, text);
     autoPublishIdleFor = null;
-    refreshAll();
-    toast(`Auto-published ${entry.label} — confirm the next deadline`, 'info');
-  } catch (e) {
-    toast('Auto-publish failed: ' + e.message);
+    if (gmResolveNoticeFor !== label) {
+      gmResolveNoticeFor = label;
+      toast(`The ${label} deadline has passed — ▶ Resolve new orders! to step through the results and publish them`, 'info');
+    }
+  } catch {
+    // offline — the next tick tries again
   } finally {
     autoPublishing = false;
+    if (!playback && !inAnalysis()) renderOnlineUI();
   }
 }
 
@@ -4273,9 +4337,9 @@ async function init() {
 
   // tick the deadline countdown while a published game sits open. Render-only
   // for everyone except the game master's own browser in Auto-Publish mode,
-  // where autoPublishIfDue() is the one place outside explicit buttons/🔄 the
-  // network gets touched — deliberately, since auto-publish means no one has
-  // to be watching for the deadline to pass.
+  // where checkAutoDeadline() is the one place outside explicit buttons/🔄 the
+  // network gets touched — so ▶ Resolve new orders! appears on its own when
+  // the deadline passes, without anyone having to press 🔄.
   // Both ticks watch the LIVE game, whichever line is on screen: a line is
   // exactly when a player is least likely to notice the deadline passing or
   // the table's next phase landing, so the poll that notices it for them must
@@ -4284,11 +4348,10 @@ async function init() {
     if (liveGame && liveGame.published && !playback) {
       if (inAnalysis()) renderAnalysisUI();
       else renderOnlineUI();
-      // Deliberately runs during analysis too: the table is waiting on this
-      // browser, and a line is a private aside. Publishing moves the live
-      // position, so validateAnalysis() then clears the tree and says so —
-      // being pulled out of a hypothetical beats a phase never publishing.
-      if (liveGame.isOwner) autoPublishIfDue();
+      // Stands down during analysis (gmResolveDue): the step-through is the
+      // GM's to start, and the ⏰ Deadline panel is waiting for them when they
+      // come back out of the line.
+      if (liveGame.isOwner) checkAutoDeadline();
     }
   }, 60000);
 

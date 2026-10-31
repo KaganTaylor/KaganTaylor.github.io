@@ -129,7 +129,7 @@
           <span class="switch"><input type="checkbox" id="autopublish-toggle"><span class="slider"></span></span>
         </label>
         <p class="hint" id="autopublish-explain" hidden>
-          <b>⚡ On:</b> this browser resolves and publishes the phase itself the moment the deadline passes. Nothing publishes while the tab is closed.<br>
+          <b>⚡ On:</b> the moment the deadline passes, every player sees the results. You get <b>▶ Resolve new orders!</b> here to step through them yourself, and that publishes the phase.<br>
           <b>⏸ Off:</b> nothing publishes on its own. Once the deadline passes, ⬇ Load orders, resolve, then 📣 Publish results.
         </p>
         <div class="btnrow">
@@ -142,10 +142,14 @@
           <input id="deadline-input" type="datetime-local" title="Pick a custom deadline (your local time)">
           <button id="deadline-set" title="Set the deadline to the picked date and time">Set</button>
         </div>
-        <!-- auto mode publishes itself; the manual row is what the game master
-             drives by hand. Only one of the two is ever on screen — see
-             renderDeadlinePanel(). -->
+        <!-- auto mode is driven by ▶ Resolve new orders!; the manual row is
+             what the game master drives by hand. Only one of the two is ever
+             on screen — see renderDeadlinePanel(). -->
         <div id="deadline-auto-status" class="hint" hidden></div>
+        <button id="deadline-resolve-btn" class="primary catch-up-btn" hidden
+                title="The deadline has passed — step through the results, and publish them to the table">
+          ▶ Resolve new orders!
+        </button>
         <div class="btnrow" id="deadline-manual-row">
           <button id="deadline-load-btn" class="primary">⬇ Load orders</button>
         </div>
