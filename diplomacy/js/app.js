@@ -1506,7 +1506,7 @@ function showInspector(p) {
   $('insp-title').textContent = provName(p) + (coast ? ` (${COAST_NAMES[coast] || coast})` : '') + (info.sc ? ' ★' : '');
   $('insp-sub').textContent = parts.join(' · ');
   // The chip is the unit standing here, in the map's own unit colour; an empty
-  // province shows its terrain, sea or land. On a supply centre an outline is
+  // province shows its terrain, sea or land. On a supply centre a ring is
   // whoever owns it — so an occupied enemy centre shows both powers at once.
   const shown = d ? d.unit : u;
   const scOwner = info.sc ? owner : null;
@@ -1514,7 +1514,7 @@ function showInspector(p) {
   chip.replaceChildren(...(shown ? [board.unitGlyph(shown.type)] : []));
   chip.style.background = shown ? UNIT_COLORS[shown.power]
     : info.type === 'water' ? WATER_COLOR : LAND_COLOR;
-  chip.style.outlineColor = scOwner ? UNIT_COLORS[scOwner] : '';
+  chip.style.borderColor = scOwner ? UNIT_COLORS[scOwner] : '';
   chip.classList.toggle('owned', !!scOwner);
   el.hidden = false;
 }
