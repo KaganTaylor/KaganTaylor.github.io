@@ -65,29 +65,72 @@
          Analysis names the open line. -->
     <div id="mode-switch" role="group" aria-label="Live game or analysis" hidden>
       <button id="ms-gm" class="ms-btn" aria-pressed="false" hidden
-              title="Run this published game as its master">👑 <span class="ms-label">Game Master</span></button>
+              title="Run this published game as its master">👑 <span class="ms-label">Game Master</span><span class="ms-short">GM</span></button>
       <button id="ms-live" class="ms-btn" aria-pressed="true"
               title="The live game — the real position, orders and deadline"><span id="ms-live-icon" class="ms-icon"></span><span class="ms-label">Live</span></button>
       <button id="ms-analysis" class="ms-btn" aria-pressed="false"
               title="Open a private tree of lines off this position">🌿 <span class="ms-label">Analysis</span></button>
     </div>
-    <span id="game-name-wrap"><span id="game-cloud-icon" hidden>☁</span><span id="game-name"></span></span>
+    <span id="game-name-wrap"><span id="game-cloud-icon" hidden>☁</span><span id="game-name"></span><span id="game-sub"></span></span>
     <span id="phase-label"></span>
+    <!-- Mobile only: the turn bar — deadline, countdown and how many orders
+         are written, and the one way into the Orders sheet (in a 🌿 line it
+         names the line, and the same sheet carries the tree). See
+         renderTurnBar(). -->
+    <button id="turn-bar" type="button" aria-expanded="false" aria-controls="sidebar">
+      <span class="tb-icon" aria-hidden="true"></span>
+      <span class="tb-main"></span>
+      <span class="tb-sub"></span>
+      <span class="tb-value"></span>
+      <span class="tb-badge"></span>
+      <span class="tb-note"></span>
+      <span class="tb-chev" aria-hidden="true">▾</span>
+    </button>
     <!-- the game master's local position has moved on from the shared link -->
-    <button id="btn-sync" class="sync-pill" hidden><span class="sp-dot">●</span><span class="sp-text"></span></button>
+    <button id="btn-sync" class="sync-pill" hidden><span class="sp-dot">●</span><span class="sp-text"></span><span class="sp-short">Unpublished</span></button>
+    <!-- Mobile only: supply centres per power, and the way into the
+         Standings sheet. Filled by renderStandings(). -->
+    <button id="standings-strip" type="button" aria-expanded="false" aria-controls="sidebar"
+            aria-label="Standings — supply centres per power"></button>
     <span id="deadline-countdown" class="badge" hidden title="Whether orders are open for submission"></span>
     <span id="hover-info"><span id="hover-info-base"></span><span id="hover-info-extra"></span></span>
     <span class="spacer"></span>
-    <!-- order-mode toggles: a tappable stand-in for ⇧-drop / Ctrl-drop, so a
-         touchscreen (no modifier keys) can order supports and convoys too -->
-    <div id="order-modes" role="group" aria-label="Order mode">
-      <button id="btn-mode-support" class="mode-btn" aria-pressed="false"
+    <!-- Order modes: what a drag or a tap on the map writes. One set per
+         phase — Move/Support/Convoy, Retreat, Build army/Build fleet/Disband —
+         and only the current phase's set is shown (updateOrderModeUI). Support
+         and Convoy are a tappable stand-in for ⇧-drop / Ctrl-drop, so a
+         touchscreen (no modifier keys) can order them too. On a phone this is
+         the bar along the bottom of the screen; on desktop the buttons sit in
+         the topbar, without Move and Retreat, which only say what the default
+         already is. -->
+    <div id="order-modes" role="radiogroup" aria-label="Order mode">
+      <button id="btn-mode-move" class="mode-btn" role="radio" aria-checked="true" data-mode="move" data-phase="movement"
+              title="Move — drag a unit to where it should go; drop it on itself to hold">
+        <span class="mode-icon">➜</span><span class="mode-label">Move</span>
+      </button>
+      <button id="btn-mode-support" class="mode-btn" role="radio" aria-checked="false" data-mode="support" data-phase="movement"
               title="Support mode — drag a unit onto the unit it should support (same as ⇧-drop)">
         <span class="mode-icon">🤝</span><span class="mode-label">Support</span>
       </button>
-      <button id="btn-mode-convoy" class="mode-btn" aria-pressed="false"
+      <button id="btn-mode-convoy" class="mode-btn" role="radio" aria-checked="false" data-mode="convoy" data-phase="movement"
               title="Convoy mode — drag a fleet at sea onto an army that already has a move order (same as Ctrl-drop)">
         <span class="mode-icon">⚓</span><span class="mode-label">Convoy</span>
+      </button>
+      <button id="btn-mode-retreat" class="mode-btn" role="radio" aria-checked="true" data-mode="retreat" data-phase="retreat"
+              title="Retreat — drag a dislodged unit to an open neighbour; tap it to disband">
+        <span class="mode-icon">↩</span><span class="mode-label">Retreat</span>
+      </button>
+      <button id="btn-mode-army" class="mode-btn" role="radio" aria-checked="false" data-mode="army" data-phase="adjustment"
+              aria-label="Build army" title="Build an army — tap a free home supply centre">
+        <svg class="mode-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="15.5" r="3.5"/><path d="M10.6 13.2L20.5 7.5M3 20.5h11"/></svg><span class="mode-label">Build</span>
+      </button>
+      <button id="btn-mode-fleet" class="mode-btn" role="radio" aria-checked="false" data-mode="fleet" data-phase="adjustment"
+              aria-label="Build fleet" title="Build a fleet — tap a free coastal home supply centre">
+        <svg class="mode-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 15h18l-3 5H6z"/><path d="M12 3v12M12 4.5l6 7.5h-6"/></svg><span class="mode-label">Build</span>
+      </button>
+      <button id="btn-mode-disband" class="mode-btn" role="radio" aria-checked="false" data-mode="disband" data-phase="adjustment"
+              title="Disband — tap one of your units to remove it">
+        <span class="mode-icon">✕</span><span class="mode-label">Disband</span>
       </button>
     </div>
     <div id="settings-wrap">
@@ -114,6 +157,19 @@
 
   <div id="main">
     <div id="board-pane"><div id="board"></div></div>
+
+    <!-- Mobile only: the province you tapped, in full — name, coast, ★, unit
+         and owner. A phone has no hover, and the topbar has no room for this,
+         so it sits over the bottom of the map only while something is tapped.
+         See showInspector(). -->
+    <div id="inspector" hidden>
+      <span id="insp-chip" aria-hidden="true"></span>
+      <span id="insp-text">
+        <span id="insp-title"></span>
+        <span id="insp-sub"></span>
+      </span>
+      <button id="insp-close" type="button" aria-label="Clear selection" title="Clear selection">✕</button>
+    </div>
 
     <aside id="sidebar">
       <!-- deadline (game master, published games only) -->
@@ -216,6 +272,8 @@
           ▶ Resolve new orders!
         </button>
         <div id="phase-info"></div>
+        <!-- mobile only: one row per unit of the power you are playing -->
+        <ul id="unit-orders" hidden></ul>
         <details id="orders-box">
           <summary>Order box</summary>
           <textarea id="orders-text" spellcheck="false" placeholder="FRANCE&#10;A Par - Bur&#10;F Bre - MAO&#10;A Mar S A Par - Bur"></textarea>
@@ -263,7 +321,7 @@
           <button id="edit-1901">1901 setup</button>
           <button id="edit-clear">Clear board</button>
         </div>
-        <p class="hint">Tap or click the map to place · drag any unit to reposition it freely · drag empty space to pan, scroll or pinch to zoom, double-click/double-tap to reset. Switch to the 📝 Orders tab when you're done.</p>
+        <p class="hint">Tap or click the map to place · drag any unit to reposition it freely · drag empty space to pan, scroll or pinch to zoom, double-click/double-tap to reset. Press ✏ Edit board again when you're done.</p>
       </div>
 
       <!-- playback (replaces the orders panel while stepping through a resolve) -->
@@ -294,17 +352,11 @@
     </aside>
   </div>
 
-  <nav id="mobile-tabbar">
-    <button class="mtab" data-sheet="orders" title="Orders &amp; history">📝<span>Orders</span></button>
-    <button class="mtab" id="mtab-analysis" data-sheet="analysis" hidden title="Analysis lines">🌿<span>Lines</span></button>
-    <button class="mtab" data-sheet="standings" title="Standings">📊<span>Standings</span></button>
-  </nav>
-
   <!-- Playback controls floated over the map (mobile only). The sidebar's copy
        of these lives in a bottom sheet that shrinks the map to a strip, which
        made the resolution — the one thing worth watching full-screen — the
        hardest thing on the page to watch. These stay on the map instead, and
-       the sheet is closed while a playback runs; the 📝 Orders tab still has
+       the sheet is closed while a playback runs; the turn bar still opens
        the full order list and the rest of the buttons. -->
   <div id="pb-float" hidden>
     <div id="pbf-label"></div>

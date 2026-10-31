@@ -718,6 +718,12 @@ export class Board {
     }
   }
 
+  // Drops the highlight a tap left behind — the phone's province inspector
+  // has an ✕ for it, since on touch nothing else ever clears it.
+  clearHover() {
+    this._setHover(null);
+  }
+
   _setHover(p) {
     if (p === this._hovered) return;
     this._hovered = p;

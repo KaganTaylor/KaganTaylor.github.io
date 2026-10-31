@@ -322,8 +322,15 @@ details.panel:not([open]) summary { margin-bottom: 0; }
    a convoy there, and they must stay reachable while the map is being used. */
 #order-modes { display: flex; gap: 6px; }
 .mode-btn { display: inline-flex; align-items: center; gap: 6px; }
-.mode-btn[aria-pressed="true"] { background: #2f4d6b; border-color: #5a90c9; color: #dcecff; }
-.mode-btn[aria-pressed="true"]:hover { background: #37597b; }
+.mode-btn svg.mode-icon { flex: none; }
+.mode-btn[aria-checked="true"] { background: #2f4d6b; border-color: #5a90c9; color: #dcecff; }
+.mode-btn[aria-checked="true"]:hover { background: #37597b; }
+/* Move and Retreat are the phase's default — on desktop, with ⇧/Ctrl-drop
+   and no bottom bar to fill, a button for them would only say what is already
+   true, so they exist on the phone's bar alone. */
+@media (min-width: 821px) {
+  #btn-mode-move, #btn-mode-retreat { display: none; }
+}
 
 #standings { width: 100%; border-collapse: collapse; font-size: 0.9em; }
 #standings td { padding: 2px 6px; }
@@ -454,18 +461,25 @@ dialog.modal h2 { margin: 0 0 14px; font-size: 1.1rem; }
 }
 .modal-card h2 { margin: 0 0 8px; }
 
-/* ---------- mobile tab bar + floating playback controls (hidden on desktop) */
+/* ---------- phone-only controls (hidden on desktop) */
 /* On desktop the sidebar is always on screen beside the board, so the floating
    copy of the playback controls would only be a second set of the same
    buttons. It exists purely for the mobile layout, where the sidebar is a
    sheet that has to be closed for the map to be worth watching. */
-#mobile-tabbar, #pb-float { display: none; }
+#pb-float { display: none; }
+/* The phone's header rows, province inspector, per-unit order list and
+   standings bars — the desktop layout keeps its own topbar and sidebar. */
+#turn-bar, #standings-strip, #game-sub, #inspector, #unit-orders,
+.sync-pill .sp-short, #standings .sc-bar, #mode-switch .ms-short { display: none; }
 
 /* ===================================================================== */
 /* ---------- mobile-centric layout (full-screen map + sheets) --------- */
 /* ===================================================================== */
 @media (max-width: 820px) {
-  :root { --tabbar-h: 56px; }
+  /* --dock-h: the order-mode bar along the bottom of the screen; 0 while it
+     is hidden (edit mode, playback), so nothing reserves room for it then. */
+  :root { --dock-h: 64px; }
+  #game-screen:has(#order-modes[hidden]) { --dock-h: 0px; }
   html, body { overscroll-behavior: none; }
 
   button, input[type="text"], input[type="number"], select, textarea {
@@ -473,132 +487,238 @@ dialog.modal h2 { margin: 0 0 14px; font-size: 1.1rem; }
   }
   button, .filebtn, select { min-height: 44px; }
 
-  #topbar { gap: 6px; padding: 8px; flex-wrap: nowrap; }
-  /* The one thing on this screen two people in the same room actually need:
-     which province someone is pointing at. Everything else in the bar is
-     flex: none and yields to it before it yields to them — see #game-name
-     and #phase-label below. #hover-info-base (the province name itself) is
-     never hidden; fitTopbar() in app.js hides #hover-info-extra (coast/star/
-     occupant) and then #game-name, in that order, only once measurement
-     shows the bar doesn't fit — that's also what stops ⚙ Settings from ever
-     being pushed off-screen. */
-  #hover-info { max-width: 30vw; }
-  /* The countdown's DD:HH:MM:SS must stay whole (that's the whole point of
-     the format), so it's never truncated. */
-  #deadline-countdown { font-size: 0.75em; padding: 2px 4px; flex: none; white-space: nowrap; }
+  /* ---- the header: three rows instead of one crowded one ----
+     The old single row made the game's name, the deadline chip and the
+     tapped province fight over ~100 px, so all three ended up unreadable.
+     Now each gets a row of its own:
+       1  role switch · game name + phase · ⚙ Settings
+       2  turn bar (deadline, countdown, orders → Orders sheet) · ● Unpublished
+       3  standings strip (supply centres → Standings sheet)
+     and the tapped province moves to #inspector over the map. Nothing here
+     can push ⚙ Settings off the edge: it owns its own grid column. */
+  #topbar {
+    display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+    column-gap: 8px; row-gap: 6px; padding: 6px 8px 8px; align-items: center;
+  }
+  #sandbox-label, #mode-switch { grid-row: 1; grid-column: 1; }
+  #game-name-wrap { grid-row: 1; grid-column: 2; }
+  #settings-wrap { grid-row: 1; grid-column: 3; }
+  #turn-bar { grid-row: 2; grid-column: 1 / 3; }
+  #topbar:has(#btn-sync[hidden]) #turn-bar { grid-column: 1 / -1; }
+  #btn-sync { grid-row: 2; grid-column: 3; }
+  #standings-strip { grid-row: 3; grid-column: 1 / -1; }
+  /* each now said elsewhere: the phase under the name, the deadline in the
+     turn bar, the tapped province in the inspector */
+  #phase-label, #deadline-countdown, #hover-info, #topbar .spacer { display: none; }
   .settings-label { display: none; } /* icon-only ⚙ button on mobile */
+  #settings-btn { width: 44px; justify-content: center; padding: 0; }
 
-  /* The state indicators keep their colour but drop their words — the ● dot
-     carries it for the sync pill, and the game's name is worth more room
-     than the label. The topbar stripe and the board ring are unaffected. */
-  .sync-pill .sp-text, #mode-switch .ms-label { display: none; }
-  /* …except the side you are actually on: Live names your role, Analysis
-     the open line's name — the one thing a phone screen must not drop, now
-     that there is no separate chip carrying it. */
+  /* Row 1. The ☁/🌿 switch keeps both halves — it is the way back out of a
+     line — but only the side you are on keeps its words. */
+  #mode-switch .ms-label { display: none; }
   #mode-switch .ms-btn.on .ms-label {
     display: inline-block; max-width: 13ch; overflow: hidden;
     text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom;
   }
-  .mode-chip, .sync-pill { padding: 2px 6px; font-size: 0.75em; min-height: 0; }
-  /* The ☁/🌿 switch keeps both halves on a phone — it is the way back out of
-     a line, so it is the one thing in this bar that may not lose a state. */
-  #mode-switch .ms-btn { padding: 4px 8px; font-size: 0.9em; min-height: 0; }
-  /* The game's name is the only thing here that can afford to lose room, so
-     it is the only thing allowed to: everything else in the bar is flex: none
-     and would otherwise push ⚙ Settings off the right-hand edge between them.
-     The ☁ icon inside the wrap is lower priority still — fitTopbar() drops it
-     first, entirely, before it ever lets the name itself get cut. */
-  #game-name-wrap { flex: 1 1 auto; min-width: 0; }
-  #game-name {
-    min-width: 0;
+  #mode-switch .ms-btn { padding: 0 10px; min-height: 40px; font-size: 0.9em; }
+  /* "Game Master" is the longest label the switch can hold, and the game's
+     name needs that room more — a phone says GM. */
+  #mode-switch #ms-gm.on .ms-label { display: none; }
+  #mode-switch #ms-gm.on .ms-short { display: inline; }
+  .mode-chip { min-height: 40px; padding: 0 10px; font-size: 14px; border-radius: 10px; }
+  #game-name-wrap {
+    display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 5px;
+    min-width: 0; line-height: 1.25;
+  }
+  #game-cloud-icon { flex: none; }
+  /* a zero basis keeps the name on the ☁'s line, shrinking, instead of
+     wrapping below it */
+  #game-name { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #game-sub {
+    display: block; flex: 1 0 100%; min-width: 0;
+    font-size: 12.5px; font-weight: 600; color: #ffd479;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  /* …and even that is not enough room once the state chip and the ● pill are
-     in the bar too, so the phase label goes: it is the one item here that is
-     already on screen twice, since Board.setPhaseText() prints the very same
-     string into the corner of the map. */
-  #phase-label { display: none; }
+  #game-screen[data-mode="analysis"] #game-sub { color: #cbb0f5; }
 
-  /* Lifted out of the topbar and parked over the map's top-right corner: big
-     thumb-sized targets that stay put while panning/zooming, sitting clear of
-     the ⋮ menu button above them. --topbar-h is measured in app.js. */
+  /* Row 2: the turn bar. Its colour is the deadline's state, in words too —
+     green open, amber final 24 h, red closed, grey none, violet a 🌿 line. */
+  #turn-bar {
+    display: flex; align-items: center; gap: 8px; min-width: 0;
+    height: 40px; min-height: 40px; padding: 0 10px; border-radius: 10px;
+    text-align: left; font-size: 14px;
+    background: #262a31; color: #c3cad4; border: 1px solid #3a4150;
+  }
+  #turn-bar[data-state="open"] { background: #1c2a22; color: #8fd6a8; border-color: #3f7a58; }
+  #turn-bar[data-state="warn"] { background: #3a2f10; color: #ffc46b; border-color: #8f6a3f; }
+  #turn-bar[data-state="danger"] { background: #402b2b; color: #ff9494; border-color: #7a4444; }
+  #turn-bar[data-state="analysis"] { background: #2c2340; color: #d6c2f7; border-color: #6b52a0; }
+  #turn-bar:hover { filter: brightness(1.12); }
+  #turn-bar[aria-expanded="true"] { box-shadow: 0 0 0 2px #ffffff55; }
+  #turn-bar .tb-icon { flex: none; font-size: 15px; }
+  #turn-bar .tb-main {
+    flex: 0 1 auto; max-width: 55%; font-weight: 700;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #turn-bar .tb-sub {
+    flex: 1 1 0; min-width: 0; opacity: .9;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #turn-bar .tb-value {
+    flex: none; font-family: Consolas, ui-monospace, monospace; font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  #turn-bar .tb-badge {
+    flex: none; font-size: 12px; font-weight: 700; padding: 1px 6px; border-radius: 7px;
+    background: rgba(255, 255, 255, .09); border: 1px solid rgba(255, 255, 255, .18);
+  }
+  #turn-bar .tb-note { flex: none; font-weight: 600; opacity: .85; }
+  #turn-bar .tb-note.action { font-weight: 700; opacity: 1; text-decoration: underline; text-underline-offset: 3px; }
+  #turn-bar .tb-chev { flex: none; opacity: .75; transition: transform .2s; }
+  #turn-bar[aria-expanded="true"] .tb-chev { transform: rotate(180deg); }
+
+  /* …and beside it, only while the game master's board is ahead of the
+     shared link, the ● Unpublished pill (tap = publish). */
+  .sync-pill {
+    min-height: 40px; height: 40px; padding: 0 11px; border-radius: 10px;
+    font-size: 14px; font-weight: 600;
+  }
+  .sync-pill .sp-text { display: none; }
+  .sync-pill .sp-short { display: inline; }
+
+  /* Row 3: standings. A header row rather than an overlay, so nothing but
+     what you tapped ever sits on top of the map. */
+  #standings-strip {
+    display: flex; align-items: center; gap: 2px;
+    height: 30px; min-height: 30px; padding: 0 2px; border-radius: 9px;
+    border: 1px solid #3a4150; background: #1a1d23;
+  }
+  #standings-strip:hover { background: #20242b; }
+  #standings-strip[aria-expanded="true"] { border-color: #8892a0; box-shadow: 0 0 0 2px #ffffff55; }
+  .ss-power {
+    flex: 1 1 0; min-width: 0; height: 24px; border-radius: 7px;
+    display: flex; align-items: center; justify-content: center; gap: 3px;
+    border: 1px solid transparent;
+  }
+  .ss-power.mine { background: rgba(168, 200, 245, .16); border-color: #4f7ec0; }
+  .ss-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 0 1px #ffffff55; }
+  .ss-code { font-size: 10.5px; color: #c3cad4; letter-spacing: .02em; }
+  .ss-power b { font-size: 12px; color: #f2f4f7; }
+
+  /* ---- the order-mode bar ----
+     Along the bottom of the screen, in the thumb zone, where the tab bar
+     used to be: Move · Support · Convoy, or Retreat, or Build (army) · Build
+     (fleet) · Disband — whichever the phase needs (updateOrderModeUI). */
   #order-modes {
-    position: fixed; z-index: 22;
-    top: calc(var(--topbar-h, 60px) + 10px); right: 10px;
-    flex-direction: column; gap: 8px;
+    position: fixed; z-index: 21; left: 0; right: 0; bottom: 0; height: var(--dock-h);
+    display: flex; gap: 6px; padding: 8px;
+    background: #22262e; border-top: 1px solid #3a4150;
   }
   .mode-btn {
-    flex-direction: column; gap: 1px;
-    width: 60px; min-height: 60px; padding: 6px 2px; border-radius: 12px;
-    background: rgba(34, 38, 46, 0.92);
-    box-shadow: 0 2px 10px rgba(0, 0, 0, .45);
+    flex: 1 1 0; min-width: 0; height: 100%; min-height: 0; padding: 0 6px;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    border-radius: 12px; background: #262b33; border: 1px solid #3a4150; color: #aab3c0;
+    font-size: 14.5px; font-weight: 600;
   }
-  .mode-btn .mode-icon { font-size: 20px; line-height: 1; }
-  .mode-btn .mode-label { font-size: 11px; color: #aab3c0; }
-  .mode-btn[aria-pressed="true"] .mode-label { color: #dcecff; }
+  .mode-btn .mode-icon { font-size: 18px; line-height: 1; }
+  .mode-btn[aria-checked="true"], .mode-btn[aria-checked="true"]:hover {
+    background: #24314a; border-color: #4f7ec0; color: #dcecff;
+  }
+  #btn-mode-support[aria-checked="true"] { background: #3a2f18; border-color: #b08a3f; color: #ffd479; }
+  #btn-mode-convoy[aria-checked="true"] { background: #17313f; border-color: #2f7fa8; color: #9fd8f5; }
+  #btn-mode-disband[aria-checked="true"] { background: #2c2226; border-color: #7a4444; color: #ff9a9a; }
 
-  /* the tab bar is fixed (out of flow), so #main has to reserve its height or
-     the board runs underneath it */
-  #main { position: relative; overflow: hidden; padding-bottom: var(--tabbar-h); }
+  /* #main reserves the bar's height, or the board runs underneath it */
+  #main { position: relative; overflow: hidden; padding-bottom: var(--dock-h); }
   /* An open sheet shrinks the board rather than covering it, so the whole map
      stays visible — and tappable — while the sheet is up (you cannot place a
-     unit on a province the Edit sheet is sitting on top of). --sheet-h is the
+     unit on a province the sheet is sitting on top of). --sheet-h is the
      measured height of the open sheet; see applyMobileSheetUI() in app.js. */
   #board-pane { height: 100%; padding-bottom: var(--sheet-h, 0px); transition: padding-bottom .25s ease; }
 
+  /* ---- the province inspector: what you tapped, in full ---- */
+  #inspector:not([hidden]) {
+    position: fixed; z-index: 19; left: 8px; right: 8px; bottom: calc(var(--dock-h) + 10px);
+    display: flex; align-items: center; gap: 10px; padding: 8px 6px 8px 10px;
+    border-radius: 14px; background: rgba(31, 35, 42, .97); border: 1px solid #454c58;
+    box-shadow: 0 6px 22px rgba(0, 0, 0, .5);
+  }
+  #insp-chip {
+    flex: none; width: 34px; height: 34px; border-radius: 9px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 15px; color: #fff; background: #3b4250; border: 1px solid #ffffff33;
+  }
+  #insp-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  #insp-title { font-weight: 650; font-size: 15.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #insp-sub { font-size: 12.5px; color: #b4bcc8; line-height: 1.3; }
+  #insp-close {
+    flex: none; width: 40px; height: 40px; min-height: 40px; padding: 0;
+    border: none; background: transparent; color: #98a2b0; font-size: 16px;
+  }
+
+  /* ---- sheets ---- */
   #sidebar {
     position: fixed;
-    left: 0; right: 0; bottom: var(--tabbar-h);
+    left: 0; right: 0; bottom: var(--dock-h);
     width: auto;
     max-height: 65vh;
     border-left: none;
     border-top: 1px solid #3a4150;
     border-radius: 14px 14px 0 0;
     box-shadow: 0 -4px 20px rgba(0,0,0,.5);
-    transform: translateY(100%);
+    transform: translateY(calc(100% + var(--dock-h)));
     transition: transform .25s ease;
     z-index: 20;
   }
   #sidebar.sheet-open { transform: translateY(0); }
 
-  /* Which panels belong to which mobile tab. Standings shows its own small
-     panel so the sheet stays short and the board behind it is still usable;
-     the 🌿 tree gets the same treatment, since picking a line and writing its
-     orders are two separate jobs and each wants the map visible. */
-  #sidebar[data-sheet="orders"] > #panel-standings,
-  #sidebar[data-sheet="orders"] > #panel-analysis { display: none; }
+  /* Which panels belong to which sheet. Orders carries everything but the
+     standings — in a 🌿 line that includes the tree, which is only on screen
+     there; Standings is its own short sheet so the board above stays usable. */
+  #sidebar[data-sheet="orders"] > #panel-standings { display: none; }
   #sidebar[data-sheet="standings"] > .panel:not(#panel-standings) { display: none; }
-  #sidebar[data-sheet="analysis"] > .panel:not(#panel-analysis) { display: none; }
 
   #orders-text { min-height: 140px; }
 
-  #mobile-tabbar {
-    display: flex;
-    position: fixed; left: 0; right: 0; bottom: 0; height: var(--tabbar-h);
-    background: #22262e; border-top: 1px solid #3a4150;
-    z-index: 21;
+  /* the Orders sheet: one row per unit of the power you play */
+  #unit-orders:not([hidden]) {
+    display: flex; flex-direction: column; gap: 6px;
+    list-style: none; margin: 0 0 8px; padding: 0;
   }
-  #mobile-tabbar .mtab {
-    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 2px; background: none; border: none; border-radius: 0;
-    color: #aab3c0; font-size: 0.75em;
+  #panel-orders:has(#unit-orders:not([hidden])) #phase-info { display: none; }
+  .unit-row {
+    display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 4px 10px;
+    border-radius: 10px; background: #262b33; border: 1px solid #3a4150;
   }
-  #mobile-tabbar .mtab span { font-size: 0.95em; }
-  #mobile-tabbar .mtab.active { color: #6fce7f; }
-  #mobile-tabbar .mtab:hover { background: #2c313a; }
-  /* .mtab sets display:flex, which outranks the [hidden] attribute on its own */
-  #mobile-tabbar .mtab[hidden] { display: none; }
+  .unit-row.empty { background: transparent; border-style: dashed; color: #aab3c0; }
+  .ur-chip {
+    flex: none; width: 26px; height: 26px; border-radius: 7px; background: #3b4250;
+    color: #fff; font-weight: 800; font-size: 13px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .ur-text { flex: 1; min-width: 0; font-size: 14.5px; }
 
-  #toast { bottom: calc(var(--tabbar-h) + 12px); }
+  /* the Standings sheet: each power's way to a solo win, as a bar */
+  #standings td { padding: 6px; vertical-align: middle; }
+  #standings tr.mine td { background: rgba(168, 200, 245, .10); }
+  #standings tr.mine td:first-child { font-weight: 700; }
+  #standings .sc-bar {
+    display: block; height: 4px; margin-top: 5px; border-radius: 2px;
+    background: #2e333c; overflow: hidden;
+  }
+  #standings .sc-bar span { display: block; height: 4px; }
 
-  /* Bottom-right of the map, above the tab bar and clear of the ⇧/⚓ toggles
-     at the top (which are hidden during a playback anyway — see
-     updateOrderModeUI). Right-aligned so the buttons sit under the thumb of a
+  #toast { bottom: calc(var(--dock-h) + 12px); }
+  /* …and above the inspector while it is up, rather than on top of it */
+  #game-screen:has(#inspector:not([hidden])) #toast { bottom: calc(var(--dock-h) + 84px); }
+
+  /* Bottom-right of the map, above the order-mode bar (which is hidden
+     during a playback anyway — see updateOrderModeUI). Right-aligned so the buttons sit under the thumb of a
      hand already holding the phone. */
   #pb-float:not([hidden]) {
     display: flex; flex-direction: column; align-items: stretch; gap: 6px;
     position: fixed; z-index: 22;
-    right: 10px; bottom: calc(var(--tabbar-h) + 10px);
+    right: 10px; bottom: calc(var(--dock-h) + 10px);
     max-width: min(300px, calc(100vw - 20px));
     padding: 8px;
     background: rgba(34, 38, 46, 0.94);

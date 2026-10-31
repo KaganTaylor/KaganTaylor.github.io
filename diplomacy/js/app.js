@@ -69,7 +69,11 @@ let lastParsed = { orders: [], errors: [], byProv: new Map() };
 // mode — { u, from, dest, route: [seaProv…] } (see startConvoyRoute)
 let convoyPick = null;
 let mobileSheet = null; // null | 'orders' | 'standings' — mobile bottom-sheet state
-let orderMode = null; // null | 'support' | 'convoy' — see setOrderMode()
+let orderMode = null; // null (move / retreat) | 'support' | 'convoy' | 'army' | 'fleet' | 'disband' — see setOrderMode()
+// What the turn bar counts: orders written against orders owed, from the
+// same parse that drives #parse-status. Set in onOrdersChanged().
+let turnCount = { done: 0, total: 0, kind: 'ordered' };
+const isMobile = () => matchMedia('(max-width: 820px)').matches;
 
 // Gist viewers drag/click units for ANY power to sketch out what opponents
 // might do, but the orders textarea only ever shows the power they're
@@ -428,17 +432,13 @@ function refreshAll() {
   const an = inAnalysis();
   $('game-screen').dataset.mode = gameMode();
   // The topbar always names the REAL game, whichever line is open; which line
-  // that is belongs to the mode chip, not to the game's identity. ☁ marks a
-  // published game here (the mode switch itself no longer carries the icon —
-  // it just names the country/role you're looking at). It's a separate span
-  // from the name itself so fitTopbar() can drop it on its own — the lowest
-  // priority thing in the bar, below even the game's name.
-  // fitTopbar() decides the icon's actual on-screen visibility (it may drop
-  // it for space even when this is '1'); this dataset flag is what it resets
-  // to before measuring.
-  $('game-cloud-icon').dataset.online = (liveGame && R.isOnline(liveGame)) ? '1' : '';
+  // that is belongs to the mode switch and the turn bar, not to the game's
+  // identity. ☁ marks a published game here (the mode switch itself no longer
+  // carries the icon — it just names the country/role you're looking at).
+  $('game-cloud-icon').hidden = !(liveGame && R.isOnline(liveGame));
   $('game-name').textContent = liveGame ? liveGame.name : '';
-  fitTopbar();
+  // On a phone the phase sits under the name (#phase-label is hidden there).
+  $('game-sub').textContent = (an ? 'Analysis · ' : '') + S.phaseLabel(game);
   $('phase-label').textContent = S.phaseLabel(game);
   board.setPhaseText(S.phaseLabel(game));
   board.setInfluence(game.scOwners);
@@ -733,23 +733,29 @@ function onOrdersChanged() {
     parts.push(`<span class="warn">` +
       warnings.map((w) => '⚠ ' + escapeText(w)).join('\n') + '</span>');
   }
+  const myC = myCountry();
+  let total;
+  let kind = 'ordered';
+  if (game.step === 'retreat') {
+    const dislodged = game.pending ? game.pending.dislodged : [];
+    total = myC ? dislodged.filter((d) => d.unit.power === myC).length : dislodged.length;
+    kind = 'retreats';
+  } else if (game.step === 'adjustment') {
+    const counts = S.adjustmentCounts(game);
+    total = myC
+      ? Math.abs(counts[myC] || 0)
+      : Object.values(counts).reduce((sum, c) => sum + Math.abs(c), 0);
+    kind = myC ? ((counts[myC] || 0) < 0 ? 'disbands' : 'builds') : 'adjustments';
+  } else {
+    total = myC ? game.units.filter((u) => u.power === myC).length : game.units.length;
+  }
   if (!parts.length) {
-    const myC = myCountry();
-    let total;
-    if (game.step === 'retreat') {
-      const dislodged = game.pending ? game.pending.dislodged : [];
-      total = myC ? dislodged.filter((d) => d.unit.power === myC).length : dislodged.length;
-    } else if (game.step === 'adjustment') {
-      const counts = S.adjustmentCounts(game);
-      total = myC
-        ? Math.abs(counts[myC] || 0)
-        : Object.values(counts).reduce((sum, c) => sum + Math.abs(c), 0);
-    } else {
-      total = myC ? game.units.filter((u) => u.power === myC).length : game.units.length;
-    }
     parts.push(`<span class="ok">${own.orders.length}/${total} order${total === 1 ? '' : 's'} ✓</span>`);
   }
   el.innerHTML = parts.join('\n');
+  turnCount = { done: Math.min(own.orders.length, total), total, kind };
+  renderTurnBar();
+  if (!playback) renderUnitOrders();
   if (game && game.step !== 'retreat' && !playback) renderPhaseInfo();
   // "submitted" vs "submitted, then edited" has to track the box keystroke by
   // keystroke, or it is reporting the state from the last network refresh
@@ -762,6 +768,142 @@ function onOrdersChanged() {
   if (game && inAnalysis() && !playback) persistLineOrders();
   drawLive();
   return { orders: own.orders, errors: own.errors };
+}
+
+// ---------------------------------------------------------------------------
+// phone turn bar
+// ---------------------------------------------------------------------------
+// The phone's second header row, and the one way into its Orders sheet: what
+// the turn is waiting on, in words — open / final 24 h / closed / no deadline,
+// when it closes, a live countdown, and how many of your orders are written.
+// In a 🌿 line it names the line instead (and the same sheet carries the
+// tree); in a sandbox it is just the order count. The deadline states read
+// the same deadlineUrgency() as the desktop chip, so the two cannot disagree.
+// Cheap: called from the 1 s deadline tick and from every order change.
+const pad2 = (n) => String(n).padStart(2, '0');
+function fmtCountdownShort(ms) {
+  const t = Math.max(0, Math.floor(ms / 1000));
+  const d = Math.floor(t / 86400);
+  const hms = `${pad2(Math.floor((t % 86400) / 3600))}:${pad2(Math.floor((t % 3600) / 60))}:${pad2(t % 60)}`;
+  return d ? `${d}d ${hms}` : hms;
+}
+function fmtCloses(d) {
+  const sameDay = d.toDateString() === new Date(trustedNow()).toDateString();
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return sameDay ? `today ${time}` : `${d.toLocaleDateString([], { weekday: 'short' })} ${time}`;
+}
+
+function renderTurnBar() {
+  const bar = $('turn-bar');
+  if (!bar || !game || !liveGame) return;
+  const count = turnCount.total ? `${turnCount.done}/${turnCount.total}` : '';
+  let state = 'neutral', icon = '📋', main = 'Orders', value = '', badge = '', note = '';
+  let sub = turnCount.total ? `${turnCount.done} of ${turnCount.total} ${turnCount.kind}` : 'nothing to order';
+  let title = 'Orders';
+  const d = deadlineDate();
+  if (inAnalysis()) {
+    const t = tree();
+    const node = t ? A.getNode(t, game.nodeId) : null;
+    state = 'analysis';
+    icon = '🌿';
+    main = node ? A.lineLabel(t, node.id) : 'Analysis';
+    sub = count ? `${count} ${turnCount.kind}` : '';
+    if (d && deadlineUrgency() === 'warn') note = `live ${fmtCountdown(d - trustedNow())}`;
+    title = 'Analysis lines and this line’s orders';
+  } else if (R.isOnline(liveGame) && hasAssignedPlayers()) {
+    const urgency = deadlineUrgency();
+    const gm = isOwnerView();
+    if (urgency === 'none') {
+      icon = '⏳';
+      main = 'No deadline';
+      sub = gm ? 'orders closed' : 'waiting for the game master';
+      note = gm ? 'Set' : '';
+      title = gm ? 'No deadline — submissions stay closed until you set one' : "Your game master hasn't set a deadline yet";
+    } else if (urgency === 'warn') {
+      const left = d.getTime() - trustedNow();
+      state = left < 86400000 ? 'warn' : 'open';
+      icon = '⏰';
+      main = 'Open';
+      sub = `closes ${fmtCloses(d)}`;
+      value = fmtCountdownShort(left);
+      badge = myCountry() ? count : '';
+      title = `Orders open — deadline ${d.toLocaleString()}`;
+    } else {
+      state = 'danger';
+      icon = '⏰';
+      main = 'Closed';
+      sub = fmtWhen(d.getTime());
+      note = gm ? (publishMode() === 'auto' ? 'Resolve' : 'Load orders') : (publishMode() === 'auto' ? 'results out' : 'GM resolving');
+      title = `Deadline passed — ${d.toLocaleString()}`;
+    }
+  }
+  bar.dataset.state = state;
+  bar.title = title;
+  // a game master's note is the thing to do next (Set / Load orders /
+  // Resolve), so it reads as a link; anyone else's is just information
+  bar.querySelector('.tb-note').classList.toggle('action', isOwnerView() && !inAnalysis());
+  bar.querySelector('.tb-icon').textContent = icon;
+  bar.querySelector('.tb-main').textContent = main;
+  bar.querySelector('.tb-sub').textContent = sub;
+  for (const [cls, text] of [['.tb-value', value], ['.tb-badge', badge], ['.tb-note', note]]) {
+    const el = bar.querySelector(cls);
+    el.textContent = text;
+    el.hidden = !text;
+  }
+}
+
+// The Orders sheet's list on a phone: one row per unit of the power you are
+// playing, each saying what it has been ordered to do (or that it has not).
+// Readable without opening the order box, which stays collapsed. Shown only
+// when you play one power — a game master or sandbox sees every power's tally
+// in #phase-info instead.
+function renderUnitOrders() {
+  const ul = $('unit-orders');
+  const myC = myCountry();
+  ul.replaceChildren();
+  ul.hidden = !myC;
+  if (!myC) return;
+  const rows = [];
+  const text = (o) => fmtOrder(o).replace(/^[AF] /, '');
+  if (game.step === 'movement') {
+    for (const u of game.units.filter((x) => x.power === myC)) {
+      const o = lastParsed.byProv.get(prov(u.loc));
+      rows.push({ chip: u.type, text: o ? text(o) : `${fmtLoc(u.loc)} — no order, holds`, empty: !o });
+    }
+  } else if (game.step === 'retreat') {
+    for (const dl of (game.pending ? game.pending.dislodged : []).filter((x) => x.unit.power === myC)) {
+      const o = lastParsed.orders.find((x) => x.power === myC && prov(x.loc || '') === prov(dl.unit.loc));
+      rows.push({ chip: dl.unit.type, text: o ? text(o) : `${fmtLoc(dl.unit.loc)} — dislodged, no order: disbands`, empty: !o });
+    }
+  } else {
+    const c = S.adjustmentCounts(game)[myC] || 0;
+    const mine = lastParsed.orders.filter((o) => o.power === myC && ['build', 'remove', 'waive'].includes(o.kind));
+    for (const o of mine) {
+      if (o.kind === 'build') rows.push({ chip: o.unitType, text: `Build ${o.unitType === 'F' ? 'fleet' : 'army'} in ${fmtLoc(o.loc)}` });
+      else if (o.kind === 'remove') rows.push({ chip: '✕', text: `Disband ${fmtLoc(o.loc)}` });
+      else rows.push({ chip: '–', text: 'Waive a build' });
+    }
+    for (let i = mine.length; i < Math.abs(c); i++) {
+      rows.push({
+        chip: c > 0 ? '+' : '✕', empty: true,
+        text: c > 0 ? 'Build — choose army or fleet, then tap a free home centre' : 'Disband — tap ✕ Disband, then one of your units',
+      });
+    }
+  }
+  for (const r of rows) {
+    const li = document.createElement('li');
+    li.className = 'unit-row' + (r.empty ? ' empty' : '');
+    const chip = document.createElement('span');
+    chip.className = 'ur-chip';
+    chip.textContent = r.chip;
+    if (!r.empty) chip.style.background = POWER_COLORS[myC];
+    const t = document.createElement('span');
+    t.className = 'ur-text';
+    t.textContent = r.text;
+    li.append(chip, t);
+    ul.appendChild(li);
+  }
+  ul.hidden = !rows.length;
 }
 
 // The order box collapses by default — typing orders is the niche path — so
@@ -889,32 +1031,6 @@ function selectOrderLine(unitProv) {
 // ---------------------------------------------------------------------------
 // board interaction
 // ---------------------------------------------------------------------------
-// On a narrow screen the topbar can't fit everything at once: the hovered
-// location's name, the game's name, and ⚙ Settings all compete for the same
-// row, and ⚙ Settings must never be the one that loses — it would be pushed
-// off-screen and become unreachable. So when space is short, give things up
-// in priority order: the extra location detail (coast/star/occupant) goes
-// first, then the ☁ published-game icon, then the game's name entirely —
-// while the location's base name, the mode-switch (and the flag on it) and
-// ⚙ Settings itself are never touched. Those are identity, not decoration.
-function fitTopbar() {
-  const topbar = $('topbar');
-  const gameName = $('game-name');
-  const cloud = $('game-cloud-icon');
-  const extra = $('hover-info-extra');
-  if (!topbar || !gameName || !cloud || !extra) return;
-  gameName.hidden = false;
-  cloud.hidden = !cloud.dataset.online;
-  extra.hidden = false;
-  if (!matchMedia('(max-width: 820px)').matches) return;
-  if (topbar.scrollWidth <= topbar.clientWidth) return;
-  extra.hidden = true;
-  if (topbar.scrollWidth <= topbar.clientWidth) return;
-  cloud.hidden = true;
-  if (topbar.scrollWidth <= topbar.clientWidth) return;
-  gameName.hidden = true;
-}
-
 function attachBoardHandlers() {
   board.handlers = {
     canDrag(p, ev) {
@@ -955,7 +1071,7 @@ function attachBoardHandlers() {
       if (!p || !game || !PROVINCES[prov(p)]) {
         $('hover-info-base').textContent = '';
         $('hover-info-extra').textContent = '';
-        fitTopbar();
+        showInspector(null);
         return;
       }
       const base = prov(p);
@@ -969,7 +1085,7 @@ function attachBoardHandlers() {
         (coastSuffix ? ` "${p}"` : '') +
         (PROVINCES[base].sc ? ' ⭐' : '') +
         tail;
-      fitTopbar();
+      showInspector(p);
     },
     onDragStart(p) {
       drawLive(prov(p)); // hide this unit's old arrow while dragging
@@ -981,38 +1097,78 @@ function attachBoardHandlers() {
 }
 
 // ---------------------------------------------------------------------------
-// order modes (Support / Convoy)
+// order modes — what a drag or a tap on the map writes
 // ---------------------------------------------------------------------------
-// A tappable stand-in for ⇧-drop and Ctrl-drop: with a mode on, the next drag
-// is read as a support (or convoy) order instead of a move. Touchscreens have
-// no modifier keys, so on mobile this is the only way to write those orders.
-// The mode is one-shot — it switches itself off once an order is written —
-// because leaving it armed would silently turn the *next* intended move into
-// another support. A failed drop (nothing to support there, wrong unit type)
-// leaves it on so the drag can simply be retried.
+// One set of modes per phase, shown as one radio group (#order-modes; on a
+// phone, the bar along the bottom of the screen):
+//
+//   movement   — Move · Support · Convoy. Support and Convoy are a tappable
+//                stand-in for ⇧-drop and Ctrl-drop: with one on, the next drag
+//                is read as a support (or convoy) instead of a move.
+//                Touchscreens have no modifier keys, so on a phone this is the
+//                only way to write those orders. They are one-shot — the mode
+//                drops back to Move once an order is written — because leaving
+//                it armed would silently turn the *next* intended move into
+//                another support. A failed drop (nothing to support there,
+//                wrong unit type) leaves it on so the drag can simply be retried.
+//   retreat    — Retreat, alone: drag a dislodged unit, tap it to disband.
+//                There is nothing to choose, but the bar says what a drag does.
+//   adjustment — Build army · Build fleet · Disband. These replaced tapping the
+//                same centre over and over to cycle army → fleet → nothing:
+//                pick what you want, then tap where. They stay on (building
+//                two armies is two taps, not four).
+//
+// orderMode null means the phase's default — Move, or Retreat. An adjustment
+// phase always has one of its three on (see defaultOrderMode()).
+const PHASE_MODES = {
+  movement: ['support', 'convoy'],
+  retreat: [],
+  adjustment: ['army', 'fleet', 'disband'],
+};
+
 function setOrderMode(mode) {
   orderMode = mode;
   updateOrderModeUI();
 }
 
-function toggleOrderMode(mode) {
-  setOrderMode(orderMode === mode ? null : mode);
-  if (orderMode === 'support') toast('Support: drag a unit onto the one it should support', 'info');
-  if (orderMode === 'convoy') toast('Convoy: drag a fleet at sea onto a moving army', 'info');
+function chooseOrderMode(mode) {
+  // Move / Retreat are the defaults. Clicking a lit Support or Convoy again
+  // turns it back off — on desktop, where Move is not shown, that is the
+  // only way back to plain moves short of writing an order.
+  if (mode === 'move' || mode === 'retreat' || (orderMode === mode && (mode === 'support' || mode === 'convoy'))) {
+    return setOrderMode(null);
+  }
+  setOrderMode(mode);
+  // Desktop has no bottom bar saying what the mode does, so it still says it
+  // once; a phone's lit button is enough.
+  if (!isMobile()) {
+    if (orderMode === 'support') toast('Support: drag a unit onto the one it should support', 'info');
+    if (orderMode === 'convoy') toast('Convoy: drag a fleet at sea onto a moving army', 'info');
+  }
 }
 
-// The support/convoy toggles only make sense where a drag writes a movement
-// order at all — the same condition canDrag() uses — so they are hidden during
-// edit mode, playback and the retreat/build phases.
+// An adjustment phase opens on whatever the viewer owes: Disband if their own
+// power must remove units, otherwise Build army.
+function defaultOrderMode() {
+  if (!game || game.step !== 'adjustment') return null;
+  const myC = myCountry();
+  const owed = myC ? (S.adjustmentCounts(game)[myC] || 0) : 0;
+  return owed < 0 ? 'disband' : 'army';
+}
+
+// The modes only make sense where the map writes an order at all — the same
+// condition canDrag() uses — so the whole group is hidden during edit mode and
+// playback, and only the current phase's buttons are ever shown.
 function updateOrderModeUI() {
-  const live = !!game && !playback && !editMode;
-  const movement = live && game.step === 'movement';
-  if (!movement) orderMode = null;
-  $('order-modes').hidden = !movement;
-  $('btn-mode-support').hidden = !movement;
-  $('btn-mode-convoy').hidden = !movement;
-  $('btn-mode-support').setAttribute('aria-pressed', String(orderMode === 'support'));
-  $('btn-mode-convoy').setAttribute('aria-pressed', String(orderMode === 'convoy'));
+  const step = game && !playback && !editMode ? game.step : null;
+  const allowed = (step && PHASE_MODES[step]) || [];
+  if (!allowed.includes(orderMode)) orderMode = step === 'adjustment' ? defaultOrderMode() : null;
+  const current = orderMode || (step === 'movement' ? 'move' : step === 'retreat' ? 'retreat' : null);
+  $('order-modes').hidden = !step;
+  for (const b of $('order-modes').querySelectorAll('.mode-btn')) {
+    b.hidden = b.dataset.phase !== step;
+    b.setAttribute('aria-checked', String(b.dataset.mode === current));
+  }
 }
 
 function orderDrop(from, to, ev) {
@@ -1192,39 +1348,45 @@ function adjustmentUsed(power) {
   return { builds, removes };
 }
 
+// A tap in an adjustment phase does what the chosen mode says: Build army or
+// Build fleet on a free home centre (tap the same build again to cancel it),
+// Disband on a unit whose power owes removals (tap again to keep it).
 function adjustmentClick(p, ev) {
   const counts = S.adjustmentCounts(game);
+  const mode = orderMode || defaultOrderMode();
   const u = unitAt(p);
-  if (u && (counts[u.power] || 0) < 0) {
-    // toggle removal
+  if (u) {
+    const owed = -(counts[u.power] || 0);
+    if (owed <= 0) return toast(`${cap(u.power)} has no disbands to make`);
+    if (mode !== 'disband') return toast('Choose ✕ Disband to remove a unit');
     const existing = lastParsed.orders.find((o) => o.kind === 'remove' && prov(o.loc) === p);
-    const owed = -counts[u.power];
     if (!existing && adjustmentUsed(u.power).removes >= owed) {
-      return toast(`${cap(u.power)}: only ${owed} disband${owed > 1 ? 's' : ''} required — click an ordered unit to keep it instead`);
+      return toast(`${cap(u.power)}: only ${owed} disband${owed > 1 ? 's' : ''} required — tap an ordered unit to keep it instead`);
     }
-    syncOrderLine(u.power, p, existing ? null : `remove ${p}`);
-    return;
+    return syncOrderLine(u.power, p, existing ? null : `remove ${p}`);
   }
   const owner = game.scOwners[p];
-  if (owner && (counts[owner] || 0) > 0 && !u && (S.HOME_CENTERS[owner] || []).includes(p)) {
-    // cycle build: none -> A -> F -> none
-    const existing = lastParsed.orders.find((o) => o.kind === 'build' && prov(o.loc) === p);
-    if (!existing && adjustmentUsed(owner).builds >= counts[owner]) {
-      return toast(`${cap(owner)}: all ${counts[owner]} build${counts[owner] > 1 ? 's' : ''} used — remove one first`);
-    }
-    const info = PROVINCES[p];
-    if (!existing) return syncOrderLine(owner, p, `build A ${p}`);
-    if (existing.unitType === 'A' && info.type === 'coast') {
-      if (info.coasts.length) {
-        return pickCoast(ev.clientX, ev.clientY, info.coasts.map((c) => `${p}/${c}`)).then(
-          (loc) => loc && syncOrderLine(owner, p, `build F ${loc}`)
-        );
-      }
-      return syncOrderLine(owner, p, `build F ${p}`);
-    }
-    return syncOrderLine(owner, p, null);
+  if (!owner || (counts[owner] || 0) <= 0 || !(S.HOME_CENTERS[owner] || []).includes(p)) return;
+  const existing = lastParsed.orders.find((o) => o.kind === 'build' && prov(o.loc) === p);
+  if (mode === 'disband') {
+    // the one thing Disband can do to an empty centre is take a build back
+    if (existing) return syncOrderLine(owner, p, null);
+    return toast('Choose Build (army or fleet) to build here');
   }
-  if (u && (counts[u.power] || 0) >= 0) toast(`${cap(u.power)} has no disbands to make`);
+  const want = mode === 'fleet' ? 'F' : 'A';
+  if (existing && existing.unitType === want) return syncOrderLine(owner, p, null);
+  if (!existing && adjustmentUsed(owner).builds >= counts[owner]) {
+    return toast(`${cap(owner)}: all ${counts[owner]} build${counts[owner] > 1 ? 's' : ''} used — tap one to cancel it first`);
+  }
+  if (want === 'A') return syncOrderLine(owner, p, `build A ${p}`);
+  const info = PROVINCES[p];
+  if (info.type !== 'coast') return toast(`${provName(p)} is inland — only an army can be built there`);
+  if (info.coasts.length) {
+    return pickCoast(ev.clientX, ev.clientY, info.coasts.map((c) => `${p}/${c}`)).then(
+      (loc) => loc && syncOrderLine(owner, p, `build F ${loc}`)
+    );
+  }
+  return syncOrderLine(owner, p, `build F ${p}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -1234,6 +1396,7 @@ function setEditMode(on) {
   editMode = on;
   $('btn-edit').classList.toggle('active', on);
   $('panel-edit').hidden = !on;
+  if (on) showInspector(null);
   applyMobileSheetUI();
   updateOrderModeUI();
 }
@@ -1260,9 +1423,11 @@ function applyMobileSheetUI() {
   const sidebar = $('sidebar');
   sidebar.dataset.sheet = mobileSheet || '';
   sidebar.classList.toggle('sheet-open', !!mobileSheet);
-  for (const b of document.querySelectorAll('#mobile-tabbar .mtab')) {
-    b.classList.toggle('active', b.dataset.sheet === mobileSheet);
-  }
+  // each sheet's one way in says whether it is open
+  $('turn-bar').setAttribute('aria-expanded', String(mobileSheet === 'orders'));
+  $('standings-strip').setAttribute('aria-expanded', String(mobileSheet === 'standings'));
+  // the inspector sits where the sheet now is; the next tap brings it back
+  if (mobileSheet) showInspector(null);
   updateSheetInset();
   updatePlaybackFloat(); // the on-map controls stand down while a sheet is up
 }
@@ -1277,10 +1442,53 @@ function updateSheetInset() {
   $('main').style.setProperty('--sheet-h', h + 'px');
 }
 
+// Each sheet has exactly one way in — the turn bar for Orders, the standings
+// strip for Standings — and tapping it again closes it. From ✏ Edit board it
+// leaves edit mode and opens the sheet asked for, rather than toggling it shut.
 function selectMobileSheet(kind) {
-  if (editMode) toggleEditMode(); // reveals orders/standings by leaving edit mode
-  mobileSheet = mobileSheet === kind ? null : kind;
+  if (editMode) {
+    toggleEditMode();
+    mobileSheet = kind;
+  } else {
+    mobileSheet = mobileSheet === kind ? null : kind;
+  }
   applyMobileSheetUI();
+}
+
+// ---------------------------------------------------------------------------
+// phone province inspector
+// ---------------------------------------------------------------------------
+// A phone has no hover, and its topbar no room for the hovered province's
+// name, so a tapped province is described in full in a card over the bottom
+// of the map: name and coast, ★, the unit on it and who owns it. Only while
+// something is tapped, and never over an open sheet, the board editor or a
+// playback — the map is busy with something else then.
+function showInspector(p) {
+  const el = $('inspector');
+  const base = p && prov(p);
+  if (!base || !game || !PROVINCES[base] || !isMobile() || mobileSheet || playback || editMode) {
+    el.hidden = true;
+    return;
+  }
+  const info = PROVINCES[base];
+  const coast = p.includes('/') ? p.split('/')[1] : null;
+  const u = unitAt(base);
+  const d = game.step === 'retreat' ? dislodgedAt(base) : null;
+  const owner = game.scOwners[base];
+  const unitText = (x) => `${x.type === 'A' ? 'Army' : 'Fleet'} · ${cap(x.power)}`;
+  const parts = [];
+  if (coast) parts.push(p);
+  if (u) parts.push(unitText(u));
+  if (d) parts.push(`dislodged: ${unitText(d.unit)}`);
+  if (info.sc) parts.push(owner ? `supply centre of ${cap(owner)}` : 'neutral supply centre');
+  if (!u && !d && !info.sc) parts.push(owner ? cap(owner) : 'empty');
+  $('insp-title').textContent = provName(p) + (coast ? ` (${COAST_NAMES[coast] || coast})` : '') + (info.sc ? ' ★' : '');
+  $('insp-sub').textContent = parts.join(' · ');
+  const shown = d ? d.unit : u;
+  const chip = $('insp-chip');
+  chip.textContent = shown ? shown.type : '';
+  chip.style.background = shown ? POWER_COLORS[shown.power] : '';
+  el.hidden = false;
 }
 
 function editApply() {
@@ -1722,6 +1930,7 @@ function startPlayback(entry, readonly, preview = null, pending = null, gmPublis
   // Close it: the floating controls (#pb-float) drive the step-through from
   // the map itself, and the tab is one tap away for the full order list.
   mobileSheet = null;
+  showInspector(null);
   applyMobileSheetUI();
   $('panel-orders').hidden = true;
   $('panel-edit').hidden = true;
@@ -2016,12 +2225,32 @@ function renderStandings() {
   table.appendChild(head);
   const powers = POWERS.filter((p) => (sc[p] || 0) + (un[p] || 0) > 0)
     .sort((a, b) => (sc[b] || 0) - (sc[a] || 0));
+  const mine = myCountry();
+  // The bar is each power's distance to a solo win (shown on mobile only).
+  const pct = (p) => Math.min(100, Math.round(((sc[p] || 0) / s.soloWin) * 100));
   for (const p of powers) {
     const tr = document.createElement('tr');
+    tr.classList.toggle('mine', p === mine);
     tr.innerHTML =
-      `<td><span class="chip" style="background:${POWER_COLORS[p]}"></span>${cap(p)}</td>` +
+      `<td><span class="chip" style="background:${POWER_COLORS[p]}"></span>${cap(p)}` +
+      `<span class="sc-bar"><span style="width:${pct(p)}%;background:${POWER_COLORS[p]}"></span></span></td>` +
       `<td class="num">${sc[p] || 0}</td><td class="num">${un[p] || 0}</td>`;
     table.appendChild(tr);
+  }
+  // The phone's standings row: supply centres per power at a glance, in the
+  // fixed POWERS order so each power keeps its place as counts change, with
+  // the power you play outlined. Tapping it opens the full table above.
+  const strip = $('standings-strip');
+  strip.replaceChildren();
+  for (const p of POWERS) {
+    if (!((sc[p] || 0) + (un[p] || 0))) continue;
+    const cell = document.createElement('span');
+    cell.className = 'ss-power' + (p === mine ? ' mine' : '');
+    cell.title = `${cap(p)}: ${sc[p] || 0} supply centres`;
+    cell.innerHTML =
+      `<span class="ss-dot" style="background:${POWER_COLORS[p]}"></span>` +
+      `<span class="ss-code">${p.slice(0, 3).toUpperCase()}</span><b>${sc[p] || 0}</b>`;
+    strip.appendChild(cell);
   }
 }
 
@@ -2401,9 +2630,6 @@ function renderAnalysisUI() {
   setGated($('ms-live'), (gmActive && !liveGame.assignedPower)
     ? 'Assign yourself a power in 👥 Set players to play alongside running the game'
     : null);
-  // Only present on the mobile tab bar while a line is actually open — the
-  // rest of the time it would be a tab into an empty panel.
-  $('mtab-analysis').hidden = !an;
   // Cleared on the way out as well as set on the way in: setGated leaves an
   // aria-disabled attribute behind, and a Resolve left gated by a stale line
   // would refuse to resolve the real game.
@@ -3036,6 +3262,7 @@ function renderDeadlineInfo() {
 // whether orders are open, closing soon, or closed. Cheap text/class update
 // only; called from a 1s interval plus on-demand from refreshAll()/renderOnlineUI().
 function updateDeadlineCountdown() {
+  renderTurnBar();
   const chip = $('deadline-countdown');
   const panel = $('panel-deadline');
   const hasPlayers = hasAssignedPlayers();
@@ -4099,19 +4326,17 @@ async function init() {
   };
   $('btn-export').onclick = exportCurrent;
   $('btn-edit').onclick = toggleEditMode;
-  $('btn-mode-support').onclick = () => toggleOrderMode('support');
-  $('btn-mode-convoy').onclick = () => toggleOrderMode('convoy');
-  // on mobile the toggles float just below the topbar, whose height depends on
-  // the phone's font size and on whether the phase label wraps
-  const topbarH = () =>
-    document.documentElement.style.setProperty('--topbar-h', $('topbar').offsetHeight + 'px');
-  new ResizeObserver(() => { topbarH(); fitTopbar(); }).observe($('topbar'));
-  topbarH();
-  fitTopbar();
-
-  for (const b of document.querySelectorAll('#mobile-tabbar .mtab')) {
-    b.onclick = () => selectMobileSheet(b.dataset.sheet);
+  for (const b of $('order-modes').querySelectorAll('.mode-btn')) {
+    b.onclick = () => chooseOrderMode(b.dataset.mode);
   }
+  // The phone's ways into its two sheets: the turn bar opens Orders (and, in
+  // a 🌿 line, the tree with it), the standings strip opens Standings.
+  $('turn-bar').onclick = () => selectMobileSheet('orders');
+  $('standings-strip').onclick = () => selectMobileSheet('standings');
+  $('insp-close').onclick = () => {
+    board.clearHover();
+    showInspector(null);
+  };
   // the sheet grows and shrinks with its contents (playback list, warnings…),
   // and the board pane's inset has to follow it
   new ResizeObserver(updateSheetInset).observe($('sidebar'));

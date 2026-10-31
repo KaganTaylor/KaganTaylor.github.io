@@ -100,16 +100,24 @@ The rest of the touch model:
 
 ## Mobile layout: sheets shrink the board, they don't cover it
 
-The sidebar becomes a bottom sheet with an Edit / Orders / Standings tab bar. Two rules make it usable:
+The sidebar becomes a bottom sheet — Orders or Standings — and each has exactly one way in: the **turn bar** (header row 2) opens Orders, the **standings strip** (header row 3) opens Standings, and tapping the same control again closes it. There is no tab bar: an Orders tab beside a tappable deadline was two doors to one room, and the bar it freed at the bottom of the screen holds the order modes instead (see *Support and convoy without a keyboard*). In a 🌿 line the turn bar names the line and the same Orders sheet carries the tree above the orders, so the line picker has one door too — not a second one hung off the ☁/🌿 switch. Two rules make the sheets usable:
 
 - **An open sheet insets the board** rather than overlaying it. `applyMobileSheetUI()` measures the sheet and publishes its height as `--sheet-h`; the board pane reserves that much padding, so the whole map stays visible and tappable above the sheet. A `ResizeObserver` keeps the two in sync as the sheet's contents grow. Overlaying the sheet instead left the map centred *behind* it — with the Edit sheet open you could see northern Europe and nothing else, which made the board editor unusable: you cannot place a unit on a province the sheet is sitting on top of.
 - **The Edit sheet shows only the edit tools.** It used to carry the order box as well, which filled the sheet and pushed the map off screen. The Orders tab is one tap away.
 
-The tab bar is `position: fixed`, so `#main` has to reserve its height explicitly or the board runs underneath it.
+The order-mode bar is `position: fixed`, so `#main` reserves its height (`--dock-h`) explicitly or the board runs underneath it. `--dock-h` drops to 0 while the bar is hidden (edit mode, playback), via `:has()`, so no empty strip is reserved for it.
 
 The topbar's actions live behind one ⚙ Settings drop-down at every width (`#settings-wrap`, which must stay `position: relative` for the menu to anchor to the button rather than the page). They used to sit inline on desktop, with `display: contents` dissolving the wrapper; that stopped scaling once the menu held publish, view/revert published, branch, game settings, export, players, submissions and the play-as control.
 
-**⚙ Settings must never be the item pushed off the right-hand edge** — on a published game it is the only way to reach the publish actions, including switching `🎭 Play as` back to `👑 Game Master`. Everything else in the topbar is `flex: none`, so anything added there has to buy its room from something: `#game-name` is the one item allowed to shrink and ellipsise, `#deadline-countdown` drops to an icon, and `#phase-label` is hidden outright on mobile because `Board.setPhaseText()` already prints it into the corner of the map.
+**⚙ Settings must never be the item pushed off the right-hand edge** — on a published game it is the only way to reach the publish actions, including switching `🎭 Play as` back to `👑 Game Master`.
+
+On a phone the topbar is a three-row grid rather than one flex row, because one row could not hold it: measured at 390 px, the game's name was squeezed to one to three letters with the deadline chip on top of it, a tapped province got 7–47 px ("Buda…"), and the old `fitTopbar()` drop-in-priority ladder never fired — every item shrank instead of overflowing, so `scrollWidth` never exceeded `clientWidth`. The rows are:
+
+1. the ☁/🌿 switch (only the lit side keeps its words; 👑 says *GM*), the game's name with its phase under it, and ⚙ — which owns its own grid column and so can never be pushed off;
+2. the **turn bar** — the deadline in words (open / final 24 h / closed / no deadline, which the old chip rendered identically as "Orders closed"), its closing time (previously only a `title`, unreachable by touch), the countdown, and your order count — plus **● Unpublished** beside it for the game master;
+3. the **standings strip** — supply centres per power, yours outlined.
+
+The tapped province no longer competes for any of them: it moves to `#inspector`, a card over the bottom of the map, shown only while something is tapped and never over a sheet, the board editor or a playback. Nothing else floats on the map — the old Support/Convoy toggles in its top-right corner are gone, and so is any "how to support" hint: the lit button in the bottom bar says which mode is on.
 
 ---
 
@@ -119,7 +127,7 @@ The step-through is the one part of the app whose whole point is the map: arrows
 
 Three things fix it, all in service of the same rule — **while a resolution plays, the map gets the screen**:
 
-- **`startPlayback()` closes the mobile sheet.** The 📝 Orders tab is one tap away for the full order list, `📋 Copy results` and the rest; nothing is lost, and the map is full-size for the part worth seeing.
+- **`startPlayback()` closes the mobile sheet.** The turn bar opens the Orders sheet for the full order list, `📋 Copy results` and the rest; nothing is lost, and the map is full-size for the part worth seeing.
 - **`#pb-float`: the step controls float over the bottom-right of the map** (⏮ ◀ ▶ ⏭, the current step's text, and whatever the sidebar's primary action is — Continue / Publish results / ✕ back). It is a *mirror*, not a second implementation: `updatePlaybackFloat()` copies the sidebar buttons' labels, hidden and disabled state and shares their click handlers, so the two can never disagree about what stepping is currently allowed. It exists only in the mobile media query, since on desktop the sidebar is already on screen beside the board. It hides itself whenever a sheet is open, because the sidebar's own copy is then visible.
 - **The board follows the order being described** (`Board.focusOn()`, called from `renderPlayback()`). A phone is usually zoomed in far enough to read one corner of the map, so an order two provinces away would otherwise be revealed off-screen. `focusOn` eases the viewBox until every province the order touches — mover, destination, supported unit, named convoy seas — is in frame.
 
@@ -131,7 +139,7 @@ Three things fix it, all in service of the same rule — **while a resolution pl
 
 At the resolution reveal (and so through the move animation that `Continue` plays) it fits *every* ordered province instead of one, since that step is about the whole board.
 
-Note that the 🤝 Support / ⚓ Convoy toggles are already hidden throughout a playback: `updateOrderModeUI()` gates them on `!playback`, the same condition that stops a drag from writing an order at all. That leaves the map's bottom-right corner free for these controls and its top-right corner empty.
+Note that the order-mode bar is hidden throughout a playback: `updateOrderModeUI()` gates it on `!playback`, the same condition that stops a drag from writing an order at all — and so is the province inspector. That leaves the bottom of the screen free for these controls (`--dock-h` drops to 0, so they sit at the very bottom).
 
 ---
 
@@ -443,9 +451,14 @@ Note that undoing a published phase does not retract it. Gist revisions are publ
 
 ⇧-drop and Ctrl-drop are the fast way to write a support or a convoy, but a touchscreen has no modifier keys — on a phone those two orders could only be typed. So the same two orders get a pair of toggles, `🤝 Support` and `⚓ Convoy`, which arm the next drag: with one on, dropping a unit onto another writes a support (or convoy) instead of a move. The modifier keys still work and are unchanged; the toggles are an equivalent, not a replacement.
 
-Where they live differs by size, because the constraints differ. On desktop they are ordinary topbar buttons next to ✏ Edit board. On mobile the topbar has no room and, more importantly, the toggle has to be reachable *while the map is being used* — so they are lifted out of the flow and floated over the map's top-right corner as two thumb-sized targets, below the ⋮ button and clear of it (`--topbar-h`, measured in `app.js`, keeps them under a topbar whose height depends on the phone).
+Where they live differs by size, because the constraints differ. On desktop they are ordinary topbar buttons next to ✏ Edit board. On a phone they are a radio group along the bottom of the screen — **Move · Support · Convoy** — in the thumb zone, reachable *while the map is being used*, where the tab bar used to be. Move is the default made visible: with it, the three read as "what does a drag write?" rather than two odd toggles. Desktop leaves Move out, since there the toggles sit among other topbar buttons and clicking a lit one turns it off.
 
-They are **one-shot**: a mode switches itself off as soon as an order is written. Leaving it armed would silently turn the *next* intended move into another support, which is the kind of thing you only notice after resolving. A *failed* drop (nothing there to support, dropping onto a non-fleet) leaves the mode on, so the drag can just be retried. The toggles are hidden outside movement orders — during edit mode, playback, retreats, builds, and for read-only spectators — where they would mean nothing.
+Support and Convoy are **one-shot**: the mode drops back to Move as soon as an order is written. Leaving it armed would silently turn the *next* intended move into another support, which is the kind of thing you only notice after resolving. A *failed* drop (nothing there to support, dropping onto a non-fleet) leaves the mode on, so the drag can just be retried. The group is hidden during edit mode and playback, where a drag writes no order.
+
+**The bar follows the phase**, so it never disappears and the map never jumps between phases (`updateOrderModeUI()`, `PHASE_MODES`):
+
+- **Retreats: a single Retreat button.** Nothing to choose — drag a dislodged unit to retreat it, tap it to disband — but the bar still says what a drag does.
+- **Builds: Build (army) · Build (fleet) · Disband.** These replace the old tap-to-cycle (tap a centre for an army, again for a fleet, again for nothing), which was invisible and needed up to three taps to reach a fleet. Pick the mode, then tap the province; tapping the same build again takes it back. Unlike Support/Convoy they stay on, because building two armies is two taps, not four. The phase opens on Disband when the power you play owes removals and on Build (army) otherwise. These three show on desktop too, in the toggles' place — the cycle they replace is gone everywhere.
 
 ---
 
@@ -473,7 +486,7 @@ Both now live behind one shared `#submissions-modal`, reachable from **⚙ Setti
 
 ## The deadline countdown is one urgency value, read in three places
 
-`deadlineUrgency()` (`js/app.js`) is the single `'none' | 'warn' | 'danger'` classification — no deadline set, counting down, or passed — behind every place the app signals it: the topbar's always-visible `DD:HH:MM:SS` chip (ticking on its own 1 s interval, deliberately separate from the 60 s online-status tick — that tick is a re-render from cache, not a network read, the one exception being the GM's own browser in Auto-Publish mode, where it is also `checkAutoDeadline()`'s clock), the sidebar's `#panel-deadline` box (a subtle background/border tint), and the Orders panel's `#deadline-info` hint text. Three call sites reading one function, rather than three places independently comparing `Date.now()` against the deadline, is what keeps "orders are open" from ever disagreeing with itself across the page.
+`deadlineUrgency()` (`js/app.js`) is the single `'none' | 'warn' | 'danger'` classification — no deadline set, counting down, or passed — behind every place the app signals it: the topbar's always-visible `DD:HH:MM:SS` chip (ticking on its own 1 s interval, deliberately separate from the 60 s online-status tick — that tick is a re-render from cache, not a network read, the one exception being the GM's own browser in Auto-Publish mode, where it is also `checkAutoDeadline()`'s clock), the sidebar's `#panel-deadline` box (a subtle background/border tint), and the Orders panel's `#deadline-info` hint text — and, on a phone, the turn bar (`renderTurnBar()`, on the same 1 s tick), which splits `warn` into open and *final 24 h* for its colour but never decides open/closed for itself. Those call sites reading one function, rather than four places independently comparing `Date.now()` against the deadline, is what keeps "orders are open" from ever disagreeing with itself across the page.
 
 The same 1 s tick also re-gates the ⏰ Deadline panel's **+1 week / +48 h / +24 h** steps (`renderDeadlineButtons()`), for the same reason and at the same cost: whether "the previous deadline + 24 h" has slipped into the past is a per-second fact about the deadline, and it is attribute-only work on three buttons. See *A deadline chains from the last one, not from the clock*.
 
