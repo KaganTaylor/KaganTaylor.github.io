@@ -3336,6 +3336,10 @@ function clearDeadline(g) {
 }
 
 async function setDeadline(date) {
+  // Refused before anything is touched: a past deadline confirmed in auto mode
+  // reveals every order and publishes the phase on the spot.
+  const reason = date && O.deadlineRejectReason(date, online, fmtWhen);
+  if (reason) return toast(reason);
   if (!date) clearDeadline(liveGame);
   else {
     liveGame.deadline = date.toISOString();

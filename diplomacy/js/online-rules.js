@@ -82,6 +82,23 @@ export function deadlinePassed(game, online) {
   return !!d && d.getTime() <= trustedNow(online);
 }
 
+// Why a deadline the GM is about to confirm must be refused, or null when it is
+// fine. A deadline that has already passed is never a meaningful thing to set:
+// the instant it lands, every viewer reveals everyone's orders (auto mode) and
+// the GM's browser resolves and publishes the phase. That is exactly what
+// happened when a GM, fixing a deadline after the clocks went back, changed
+// only the time box to 00:00 and left the date on the day — midnight at the
+// START of that day, fifteen hours gone. Any future moment is accepted, even
+// one a minute away. Checked inside setDeadline(), so every way of setting one
+// (the date picker and the quick-set steps alike) goes through it.
+export function deadlineRejectReason(date, online, fmtWhen) {
+  const ms = date instanceof Date ? date.getTime() : Number(date);
+  if (!Number.isFinite(ms)) return 'Pick a date and time first';
+  if (ms > trustedNow(online)) return null;
+  return `${fmtWhen(ms)} has already passed — pick a deadline in the future. ` +
+    'Check the date as well as the time: 00:00 is the start of the day, not the end.';
+}
+
 // 'none' (no deadline set), 'warn' (counting down) or 'danger' (passed) — the
 // single source of truth behind every red/yellow deadline indicator: the
 // topbar countdown chip, the sidebar #panel-deadline box, and the Orders

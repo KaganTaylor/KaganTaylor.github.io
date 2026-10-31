@@ -17,7 +17,7 @@ import {
   ordersOpen, lateResubmitAllowed, isSubmitAllowed, submissionOnTime,
   phaseSubmission, mySubmission, revealedEntry, powerOnlineStatus,
   gatherPhaseBlocks, deadlineChainBase, bumpUnavailableReason, bumpTarget,
-  viewerPosition, extendsOurHistory,
+  viewerPosition, extendsOurHistory, deadlineRejectReason,
 } from '../js/online-rules.js';
 import { submissionBody } from '../js/publish.js';
 import { newGame } from '../js/state.js';
@@ -290,6 +290,29 @@ test('auto mode reveals on-time submissions the moment the deadline passes', () 
   assert.equal(powerOnlineStatus(open, o, 'france'), 'submitted');
 });
 
+test('clearing the deadline in auto mode reveals and publishes nothing', () => {
+  // Auto mode publishes only when a deadline passes on its own. ✖ Clear leaves
+  // deadline null with the old one kept as lastDeadline (the bump chain base) —
+  // that past lastDeadline must never count as "the deadline has passed", or
+  // clearing would do exactly what it is meant to stop. Every auto path in
+  // app.js (gmResolveDue, localAutoResolveAvailable, the reveal) runs through
+  // deadlinePassed / deadlineIsForCurrentPhase / revealedEntry.
+  const cleared = published({
+    deadline: null, deadlineFor: null, lastDeadline: PAST, publishMode: 'auto',
+  });
+  const o = snapshot({
+    comments: [submission('fra-player', 'france', 'A Par - Bur', {
+      updated_at: new Date(Date.parse(PAST) - HOUR).toISOString(),
+    })],
+  });
+
+  assert.equal(deadlinePassed(cleared, o), false);
+  assert.equal(deadlineIsForCurrentPhase(cleared), false, 'the GM’s auto-resolve is not due');
+  assert.equal(revealedEntry(cleared, o, 'france'), null, 'nobody sees the orders');
+  assert.equal(powerOnlineStatus(cleared, o, 'france'), 'submitted');
+  assert.equal(ordersOpen(cleared, o), false, 'and submissions are closed meanwhile');
+});
+
 test('auto mode marks a late edit void rather than revealing it', () => {
   const g = published({ deadline: PAST, publishMode: 'auto' });
   const o = snapshot({ comments: [submission('fra-player', 'france', 'A Par - Bur', { updated_at: FUTURE })] });
@@ -437,6 +460,34 @@ test('a step whose window has gone by is refused, and says both dates', () => {
     bumpUnavailableReason(published({ deadline: null }), o, 24, '+24 h', fmtWhen),
     null
   );
+});
+
+test('a deadline already in the past is refused — the clocks-went-back incident', () => {
+  // The GM fixed a 23:00 deadline after the clocks went back by changing only
+  // the time to 00:00, leaving the date on the day: midnight at the START of
+  // it, hours gone. In auto mode that revealed every order and published the
+  // phase the moment it was confirmed.
+  const fmtWhen = (ms) => new Date(ms).toISOString();
+  const o = snapshot();
+  const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+  if (startOfToday.getTime() < Date.now()) {
+    assert.match(deadlineRejectReason(startOfToday, o, fmtWhen), /already passed/);
+  }
+  assert.ok(deadlineRejectReason(new Date(Date.now() - 2 * HOUR), o, fmtWhen));
+  assert.ok(deadlineRejectReason(new Date(Date.now() - 1000), o, fmtWhen), 'a second ago is still past');
+  assert.ok(deadlineRejectReason(new Date(NaN), o, fmtWhen), 'an unparseable date is refused');
+
+  assert.equal(deadlineRejectReason(new Date(Date.now() + 60000), o, fmtWhen), null, 'a minute away is fine');
+  assert.equal(deadlineRejectReason(new Date(Date.now() + 7 * 24 * HOUR), o, fmtWhen), null);
+});
+
+test('the past-deadline check reads GitHub’s clock, not the device’s', () => {
+  const fmtWhen = (ms) => new Date(ms).toISOString();
+  // Device clock two hours slow: an hour from now on the device is already an
+  // hour ago on GitHub's clock, which is the one every viewer reveals against.
+  const slow = snapshot({ serverOffset: 2 * HOUR });
+  assert.ok(deadlineRejectReason(new Date(Date.now() + HOUR), slow, fmtWhen));
+  assert.equal(deadlineRejectReason(new Date(Date.now() + 3 * HOUR), slow, fmtWhen), null);
 });
 
 // ---------------------------------------------------------------------------
